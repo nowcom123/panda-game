@@ -1,0 +1,13 @@
+[
+    {
+        "id": "WP_1773381327",
+        "category": "Weapon",
+        "name": "양손검",
+        "phys_dmg_min": 10.0,
+        "phys_dmg_max": 15.0,
+        "mag_dmg_min": 0.0,
+        "mag_dmg_max": 0.0,
+        "crit_chance_min": 1.0,
+        "crit_chance_max": 5.0
+    }
+]
