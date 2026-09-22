@@ -15,16 +15,16 @@ from constants import (
 )
 from world_gen import find_cell_path, check_line_of_sight
 from chunk import Chunk
-from monster import CreepySpiderMonster, TallShadowMonster
+from monster import LongBlackSerpent, TallSkeletonMonster
 
 
 class LiminalInfiniteLoop(ShowBase):
     def __init__(self):
         super().__init__()
 
-        # PBR 렌더링 최적화 (가벼운 5개 조명 슬롯으로 GPU 픽셀 셰이더 부하 대폭 절감)
+        # PBR 렌더링 최적화 (손전등 + 촛불2 + 뱀오라 + 해골오라 등 6개 슬롯 지원)
         simplepbr.init(
-            max_lights=5,
+            max_lights=6,
             use_normal_maps=False,
             use_emission_maps=False,
             use_occlusion_maps=False,
@@ -53,11 +53,13 @@ class LiminalInfiniteLoop(ShowBase):
         self.chunks = {}  # (cx, cy) -> Chunk 객체
         self.chunk_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ChunkWorker")
         self.active_chunk_futures = {}  # (cx, cy) -> Future
-        self.monster_path_future = None
+        self.serpent_path_future = None
+        self.skeleton_path_future = None
+        self.killer_monster = None
         self.last_move_dir = Vec3(0, 0, 0)
         self.world_root = self.render.attachNewNode("world_root")
 
-        # 6. 플레이어 및 추격 괴물 초기 상태
+        # 6. 플레이어 및 추격 괴물 2종 초기 상태
         self.game_over = False
         self.heading = 0.0
         self.pitch = 0.0
@@ -71,9 +73,11 @@ class LiminalInfiniteLoop(ShowBase):
         self.stamina = self.max_stamina
         self.stamina_exhausted = False
 
-        # 벽을 타고 기어오는 기괴한 8족 거미 괴물 생성 (플레이어 뒤쪽 복도 28m 지점)
-        self.monster = CreepySpiderMonster(self.render, spawn_x, spawn_y - 28.0)
-        self.player_trail = [(spawn_x, spawn_y)]
+        # 적 1: 몸통이 긴 칠흑의 거대 뱀 (플레이어 뒤쪽 복도 28m 지점)
+        self.serpent = LongBlackSerpent(self.render, spawn_x, spawn_y - 28.0)
+        # 적 2: 키 크고 팔이 매우 긴 쩍 벌어진 해골 괴물 (다른 복도 34m 지점)
+        self.skeleton = TallSkeletonMonster(self.render, spawn_x + 30.0, spawn_y + 12.0)
+        self.monsters = [self.serpent, self.skeleton]
 
         # 초기 청크 전체 로드 (멀티스레드 병렬 로딩)
         self.update_chunks(force=True)
@@ -264,7 +268,7 @@ class LiminalInfiniteLoop(ShowBase):
             fg=(0.88, 0.88, 0.88, 0.95),
             shadow=(0, 0, 0, 0.85),
             align=TextNode.ACenter,
-            mayChange=False,
+            mayChange=True,
             **font_kw
         )
         self.game_over_restart = OnscreenText(
@@ -301,12 +305,14 @@ class LiminalInfiniteLoop(ShowBase):
         for fut in self.active_chunk_futures.values():
             fut.cancel()
         self.active_chunk_futures.clear()
-        self.monster_path_future = None
+        self.serpent_path_future = None
+        self.skeleton_path_future = None
+        self.killer_monster = None
         self.last_move_dir = Vec3(0, 0, 0)
 
-        # 괴물 위치 리셋 (플레이어 뒤쪽 복도 28m)
-        self.monster.reset_pos(spawn_x, spawn_y - 28.0)
-        self.player_trail = [(spawn_x, spawn_y)]
+        # 괴물 2종 위치 리셋
+        self.serpent.reset_pos(spawn_x, spawn_y - 28.0)
+        self.skeleton.reset_pos(spawn_x + 30.0, spawn_y + 12.0)
 
         # 안개 및 배경색 복구
         self.liminal_fog.setColor(FOG_COLOR)
@@ -320,24 +326,32 @@ class LiminalInfiniteLoop(ShowBase):
         self.guide_text.show()
         self.lock_mouse(True)
 
-    def trigger_game_over(self):
+    def trigger_game_over(self, killer):
         """괴물에게 잡혔을 때 게임 오버 연출"""
         self.game_over = True
+        self.killer_monster = killer
         self.keyMap = {k: 0 for k in self.keyMap}
 
-        # 카메라를 괴물의 섬뜩한 얼굴로 즉시 강제 응시 (점프스케어 앵글)
+        # 카메라를 킬러 괴물의 섬뜩한 얼굴로 즉시 강제 응시 (점프스케어 앵글)
         px, py = self.camera.getX(), self.camera.getY()
-        mx, my = self.monster.pos.x, self.monster.pos.y
-        dx = mx - px
-        dy = my - py
+        kx, ky = killer.pos.x, killer.pos.y
+        kz = getattr(killer.pos, 'z', 0.0)
+        dx = kx - px
+        dy = ky - py
         h = math.degrees(math.atan2(-dx, dy))
         dist = max(0.2, math.hypot(dx, dy))
-        mz = getattr(self.monster.pos, 'z', 0.4)
-        p = math.degrees(math.atan2(mz + 0.25 - PLAYER_EYE_HEIGHT, dist))
+        target_eye_z = kz + (3.85 if isinstance(killer, TallSkeletonMonster) else 0.45)
+        p = math.degrees(math.atan2(target_eye_z - PLAYER_EYE_HEIGHT, dist))
         self.camera.setHpr(h, p, 0)
 
-        # 괴물 공격 포즈 발동
-        self.monster.update(0.016, is_moving=False, is_attacking=True)
+        # 킬러 괴물 공격 포즈 발동
+        killer.update(0.016, is_moving=False, is_attacking=True)
+
+        # 킬러별 맞춤형 데스 메시지
+        if isinstance(killer, TallSkeletonMonster):
+            self.game_over_desc.setText("쩍 벌어진 입의 거대 해골 괴물에게 영혼을 빼앗겼습니다...")
+        else:
+            self.game_over_desc.setText("칠흑의 거대한 뱀에게 온몸을 휘감겨 삼켜졌습니다...")
 
         # 핏빛 암전 연출
         blood_fog = LColor(0.22, 0.02, 0.02, 1.0)
@@ -521,18 +535,20 @@ class LiminalInfiniteLoop(ShowBase):
         if dt > 0.1:
             dt = 0.1
 
-        # --- [게임 오버 상태] 플레이어 사망 시: 시선 강제 고정 및 괴물 공격 모션 유지 ---
+        # --- [게임 오버 상태] 플레이어 사망 시: 시선 강제 고정 및 킬러 괴물 공격 모션 유지 ---
         if self.game_over:
+            killer = self.killer_monster or self.serpent
             px, py = self.camera.getX(), self.camera.getY()
-            mx, my = self.monster.pos.x, self.monster.pos.y
-            dx = mx - px
-            dy = my - py
+            kx, ky = killer.pos.x, killer.pos.y
+            kz = getattr(killer.pos, 'z', 0.0)
+            dx = kx - px
+            dy = ky - py
             h = math.degrees(math.atan2(-dx, dy))
             dist = max(0.2, math.hypot(dx, dy))
-            mz = getattr(self.monster.pos, 'z', 0.4)
-            p = math.degrees(math.atan2(mz + 0.25 - PLAYER_EYE_HEIGHT, dist))
+            target_eye_z = kz + (3.85 if isinstance(killer, TallSkeletonMonster) else 0.45)
+            p = math.degrees(math.atan2(target_eye_z - PLAYER_EYE_HEIGHT, dist))
             self.camera.setHpr(h, p, 0)
-            self.monster.update(dt, is_moving=False, is_attacking=True)
+            killer.update(dt, is_moving=False, is_attacking=True)
             return task.cont
 
         # --- 0. 비동기 백그라운드 스레드 청크 마운트 (메인 스레드 지연 제로) ---
@@ -646,124 +662,168 @@ class LiminalInfiniteLoop(ShowBase):
         else:
             self.last_move_dir = Vec3(0, 0, 0)
 
-        # --- 괴물 지능형 추격 AI (직접 시야 돌진 + 복도/출입문 그리드 BFS 최단경로 탐색) ---
+        # --- 괴물 2종 지능형 추격 AI (검은 뱀 & 키 큰 해골 괴물) ---
         px, py = self.camera.getX(), self.camera.getY()
-        mx, my = self.monster.pos.x, self.monster.pos.y
-        dist_to_player = math.hypot(px - mx, py - my)
+        pgx = int(math.floor(px / CELL_SIZE))
+        pgy = int(math.floor(py / CELL_SIZE))
 
-        # 잡힘 판정 (1.45m 이내 도달 시 게임 오버)
-        if dist_to_player <= 1.45:
-            self.trigger_game_over()
+        dist_serpent = math.hypot(px - self.serpent.pos.x, py - self.serpent.pos.y)
+        dist_skeleton = math.hypot(px - self.skeleton.pos.x, py - self.skeleton.pos.y)
+
+        # 잡힘 판정 (뱀: 1.45m, 해골: 1.85m)
+        if dist_serpent <= 1.45:
+            self.trigger_game_over(self.serpent)
+            return task.cont
+        if dist_skeleton <= 1.85:
+            self.trigger_game_over(self.skeleton)
             return task.cont
 
-        # 1. 시야(Line-Of-Sight) 확보 검사: 벽체에 가로막히지 않은 직선 시야가 있는가?
-        has_los = False
-        if dist_to_player <= 22.0:
-            mid_x = (mx + px) * 0.5
-            mid_y = (my + py) * 0.5
-            los_dist = dist_to_player * 0.5 + 1.2
-            los_colliders = self.get_nearby_colliders(mid_x, mid_y, search_dist=los_dist)
-            has_los = check_line_of_sight(mx, my, px, py, los_colliders)
-        self.monster.has_los = has_los
+        # ====================================================================
+        # [적 1: 몸통이 긴 검은색 뱀 (LongBlackSerpent) 추격 및 벽 타기]
+        # ====================================================================
+        sx, sy = self.serpent.pos.x, self.serpent.pos.y
+        s_los = False
+        if dist_serpent <= 22.0:
+            mid_x = (sx + px) * 0.5
+            mid_y = (sy + py) * 0.5
+            los_colliders = self.get_nearby_colliders(mid_x, mid_y, search_dist=dist_serpent * 0.5 + 1.2)
+            s_los = check_line_of_sight(sx, sy, px, py, los_colliders)
+        self.serpent.has_los = s_los
 
-        # 2. 목표 지점(tx, ty) 산출
-        if has_los:
-            # 직접 시야 확보 시: 플레이어 위치로 전력 질주
-            tx, ty = px, py
-            m_speed = 10.5 if dist_to_player > 5.0 else 11.2  # 공포의 시야 내 전력 질주
+        if s_los:
+            s_tx, s_ty = px, py
+            s_speed = 10.6 if dist_serpent > 5.0 else 11.4
         else:
-            # 시야 차단 시: 비동기 백그라운드 스레드로 BFS 경로 탐색
-            mgx = int(math.floor(mx / CELL_SIZE))
-            mgy = int(math.floor(my / CELL_SIZE))
-            pgx = int(math.floor(px / CELL_SIZE))
-            pgy = int(math.floor(py / CELL_SIZE))
-
-            # 백그라운드 경로 탐색 완료 확인 (비동기 결과 즉각 반영)
-            if self.monster_path_future is not None and self.monster_path_future.done():
+            sgx = int(math.floor(sx / CELL_SIZE))
+            sgy = int(math.floor(sy / CELL_SIZE))
+            if self.serpent_path_future is not None and self.serpent_path_future.done():
                 try:
-                    new_path = self.monster_path_future.result()
+                    new_path = self.serpent_path_future.result()
                     if new_path:
-                        self.monster.path = new_path
+                        self.serpent.path = new_path
                 except Exception:
                     pass
-                self.monster_path_future = None
+                self.serpent_path_future = None
 
-            self.monster.path_timer -= dt
-            if (self.monster.path_timer <= 0.0 or not self.monster.path) and self.monster_path_future is None:
-                # 백그라운드 워커 스레드로 BFS 비동기 디스패치 (메인 루프 블로킹 0ms)
-                self.monster_path_future = self.chunk_executor.submit(
-                    find_cell_path, (mgx, mgy), (pgx, pgy), 20
-                )
-                self.monster.path_timer = 0.20
+            self.serpent.path_timer -= dt
+            if (self.serpent.path_timer <= 0.0 or not self.serpent.path) and self.serpent_path_future is None:
+                self.serpent_path_future = self.chunk_executor.submit(find_cell_path, (sgx, sgy), (pgx, pgy), 20)
+                self.serpent.path_timer = 0.20
 
-            # 경로 추적: 다음 셀 또는 문턱을 향해 전진
-            if len(self.monster.path) >= 2:
-                cur_c = self.monster.path[0]
-                nxt_c = self.monster.path[1]
+            if len(self.serpent.path) >= 2:
+                cur_c = self.serpent.path[0]
+                nxt_c = self.serpent.path[1]
+                if nxt_c[1] == cur_c[1] + 1:
+                    s_tx, s_ty = (cur_c[0] + 0.5) * CELL_SIZE, (cur_c[1] + 1.0) * CELL_SIZE
+                elif nxt_c[1] == cur_c[1] - 1:
+                    s_tx, s_ty = (cur_c[0] + 0.5) * CELL_SIZE, cur_c[1] * CELL_SIZE
+                elif nxt_c[0] == cur_c[0] + 1:
+                    s_tx, s_ty = (cur_c[0] + 1.0) * CELL_SIZE, (cur_c[1] + 0.5) * CELL_SIZE
+                else:
+                    s_tx, s_ty = cur_c[0] * CELL_SIZE, (cur_c[1] + 0.5) * CELL_SIZE
 
-                # 두 셀 사이의 문/경계 통로 중심점 계산
-                if nxt_c[1] == cur_c[1] + 1:  # 북쪽 통로
-                    tx = (cur_c[0] + 0.5) * CELL_SIZE
-                    ty = (cur_c[1] + 1.0) * CELL_SIZE
-                elif nxt_c[1] == cur_c[1] - 1:  # 남쪽 통로
-                    tx = (cur_c[0] + 0.5) * CELL_SIZE
-                    ty = cur_c[1] * CELL_SIZE
-                elif nxt_c[0] == cur_c[0] + 1:  # 동쪽 통로
-                    tx = (cur_c[0] + 1.0) * CELL_SIZE
-                    ty = (cur_c[1] + 0.5) * CELL_SIZE
-                else:  # 서쪽 통로
-                    tx = cur_c[0] * CELL_SIZE
-                    ty = (cur_c[1] + 0.5) * CELL_SIZE
-
-                # 목표 문턱/경계에 도달 시 다음 단계로 전진
-                if math.hypot(mx - tx, my - ty) < 1.2 or (mgx == nxt_c[0] and mgy == nxt_c[1]):
-                    self.monster.path.pop(0)
+                if math.hypot(sx - s_tx, sy - s_ty) < 1.2 or (sgx == nxt_c[0] and sgy == nxt_c[1]):
+                    self.serpent.path.pop(0)
             else:
-                tx, ty = px, py
+                s_tx, s_ty = px, py
 
-            m_speed = 8.6 if dist_to_player > 15.0 else 9.4  # 음산한 스토킹 속도
+            s_speed = 8.8 if dist_serpent > 15.0 else 9.6
 
-        # 3. 거미 괴물 이동 벡터 계산 및 벽 타기(Wall Crawling) 물리 판정
-        tdx, tdy = tx - mx, ty - my
-        t_dist = math.hypot(tdx, tdy)
+        # 뱀 벽면 검출 및 벽 타기(Wall Crawling) 판정
+        s_tdx, s_tdy = s_tx - sx, s_ty - sy
+        s_tdist = math.hypot(s_tdx, s_tdy)
 
-        # 주변 벽체 탐색 (촛대 제외, 너비 0.5m 이상인 실제 벽체만 필터링)
-        spider_walls = [
-            c for c in self.get_nearby_colliders(mx, my, search_dist=2.4)
+        serpent_walls = [
+            c for c in self.get_nearby_colliders(sx, sy, search_dist=2.4)
             if (c[2] - c[0]) >= 0.5 or (c[3] - c[1]) >= 0.5
         ]
-
-        closest_wall_dist = 999.0
-        wall_norm = None
-        for min_x, min_y, max_x, max_y in spider_walls:
-            cx = max(min_x, min(mx, max_x))
-            cy = max(min_y, min(my, max_y))
-            vx = mx - cx
-            vy = my - cy
+        s_closest_wall = 999.0
+        s_wall_norm = None
+        for min_x, min_y, max_x, max_y in serpent_walls:
+            cx = max(min_x, min(sx, max_x))
+            cy = max(min_y, min(sy, max_y))
+            vx, vy = sx - cx, sy - cy
             d = math.hypot(vx, vy)
-            if d < closest_wall_dist:
-                closest_wall_dist = d
+            if d < s_closest_wall:
+                s_closest_wall = d
                 if d > 0.05:
-                    wall_norm = Vec3(vx / d, vy / d, 0)
+                    s_wall_norm = Vec3(vx / d, vy / d, 0)
 
-        # 벽면 근접 시 (2.2m 이내) 13m 높은 벽면을 타고 4.8m 높이로 기어오름
-        # 단, 플레이어와 3.5m 이내 초근접 시 바닥으로 급강하하여 덮침
-        if closest_wall_dist < 2.2 and wall_norm is not None:
-            if dist_to_player > 3.5:
-                wall_climb_z = 4.8  # 높은 13m 벽면을 타고 기어오름
+        if s_closest_wall < 2.0 and s_wall_norm is not None:
+            s_climb_z = 3.6 if dist_serpent > 3.5 else 0.28
+        else:
+            s_climb_z = 0.28
+
+        if s_tdist > 0.05:
+            sndx, sndy = s_tdx / s_tdist, s_tdy / s_tdist
+            s_disp_x = sndx * s_speed * dt
+            s_disp_y = sndy * s_speed * dt
+            new_sx, new_sy = self.resolve_collision(sx, sy, s_disp_x, s_disp_y, radius=0.42)
+            self.serpent.update_pos(new_sx, new_sy, dt, sndx, sndy, wall_norm=s_wall_norm, climb_target_z=s_climb_z)
+        else:
+            self.serpent.update(dt, is_moving=False)
+
+        # ====================================================================
+        # [적 2: 키 크고 팔 긴 해골 괴물 (TallSkeletonMonster) 성큼성큼 추격]
+        # ====================================================================
+        kx, ky = self.skeleton.pos.x, self.skeleton.pos.y
+        k_los = False
+        if dist_skeleton <= 26.0:
+            mid_x = (kx + px) * 0.5
+            mid_y = (ky + py) * 0.5
+            los_colliders = self.get_nearby_colliders(mid_x, mid_y, search_dist=dist_skeleton * 0.5 + 1.2)
+            k_los = check_line_of_sight(kx, ky, px, py, los_colliders)
+        self.skeleton.has_los = k_los
+
+        if k_los:
+            k_tx, k_ty = px, py
+            k_speed = 10.8 if dist_skeleton > 6.0 else 11.6  # 긴 팔을 뻗으며 전력 질주
+        else:
+            kgx = int(math.floor(kx / CELL_SIZE))
+            kgy = int(math.floor(ky / CELL_SIZE))
+            if self.skeleton_path_future is not None and self.skeleton_path_future.done():
+                try:
+                    new_path = self.skeleton_path_future.result()
+                    if new_path:
+                        self.skeleton.path = new_path
+                except Exception:
+                    pass
+                self.skeleton_path_future = None
+
+            self.skeleton.path_timer -= dt
+            if (self.skeleton.path_timer <= 0.0 or not self.skeleton.path) and self.skeleton_path_future is None:
+                self.skeleton_path_future = self.chunk_executor.submit(find_cell_path, (kgx, kgy), (pgx, pgy), 20)
+                self.skeleton.path_timer = 0.22
+
+            if len(self.skeleton.path) >= 2:
+                cur_c = self.skeleton.path[0]
+                nxt_c = self.skeleton.path[1]
+                if nxt_c[1] == cur_c[1] + 1:
+                    k_tx, k_ty = (cur_c[0] + 0.5) * CELL_SIZE, (cur_c[1] + 1.0) * CELL_SIZE
+                elif nxt_c[1] == cur_c[1] - 1:
+                    k_tx, k_ty = (cur_c[0] + 0.5) * CELL_SIZE, cur_c[1] * CELL_SIZE
+                elif nxt_c[0] == cur_c[0] + 1:
+                    k_tx, k_ty = (cur_c[0] + 1.0) * CELL_SIZE, (cur_c[1] + 0.5) * CELL_SIZE
+                else:
+                    k_tx, k_ty = cur_c[0] * CELL_SIZE, (cur_c[1] + 0.5) * CELL_SIZE
+
+                if math.hypot(kx - k_tx, ky - k_ty) < 1.2 or (kgx == nxt_c[0] and kgy == nxt_c[1]):
+                    self.skeleton.path.pop(0)
             else:
-                wall_climb_z = 1.25 # 바닥으로 덮치기 위해 급강하
-        else:
-            wall_climb_z = 1.25
+                k_tx, k_ty = px, py
 
-        if t_dist > 0.05:
-            ndx, ndy = tdx / t_dist, tdy / t_dist
-            m_disp_x = ndx * m_speed * dt
-            m_disp_y = ndy * m_speed * dt
-            new_mx, new_my = self.resolve_collision(mx, my, m_disp_x, m_disp_y, radius=0.45)
-            self.monster.update_pos(new_mx, new_my, dt, ndx, ndy, wall_norm=wall_norm, climb_target_z=wall_climb_z)
+            k_speed = 8.5 if dist_skeleton > 16.0 else 9.5
+
+        k_tdx, k_tdy = k_tx - kx, k_ty - ky
+        k_tdist = math.hypot(k_tdx, k_tdy)
+        if k_tdist > 0.05:
+            kndx, kndy = k_tdx / k_tdist, k_tdy / k_tdist
+            k_disp_x = kndx * k_speed * dt
+            k_disp_y = kndy * k_speed * dt
+            new_kx, new_ky = self.resolve_collision(kx, ky, k_disp_x, k_disp_y, radius=0.48)
+            self.skeleton.update_pos(new_kx, new_ky, dt, kndx, kndy)
         else:
-            self.monster.update(dt, is_moving=False)
+            self.skeleton.update(dt, is_moving=False)
 
         # --- 4. 안개 가시거리 컬링 (청크 생성 또는 대폭 이동 시에만 갱신) ---
         if chunk_created or (view_changed and is_moving):
@@ -801,23 +861,22 @@ class LiminalInfiniteLoop(ShowBase):
             else:
                 cnp.setPos(0, 0, -100)
 
-        # --- 5. HUD 업데이트 (거미 괴물 위협 거리 및 벽 타기 상태 반영) ---
-        is_climbing = getattr(self.monster, 'climb_z', 1.25) > 2.2
-        climb_tag = " [벽 타는 중!]" if is_climbing else ""
-        if dist_to_player > 32.0:
-            threat = f"안전 ({dist_to_player:.0f}m){climb_tag}"
-            threat_fg = (0.35, 0.9, 0.45, 0.9)
-        elif dist_to_player > 16.0:
-            threat = f"접근 중! ({dist_to_player:.0f}m){climb_tag}"
-            threat_fg = (1.0, 0.85, 0.2, 0.95)
-        elif self.monster.has_los:
-            threat = f"추격 중! 시야에 노출됨! ({dist_to_player:.1f}m){climb_tag}"
-            threat_fg = (1.0, 0.1, 0.1, 1.0)
+        # --- 5. HUD 업데이트 (뱀 & 해골 위협 거리 및 상태 반영) ---
+        s_climbing = getattr(self.serpent, 'climb_z', 0.28) > 1.5
+        s_tag = " [벽타기]" if s_climbing else ""
+        if dist_serpent < 12.0 or self.serpent.has_los:
+            s_msg = f"위험({dist_serpent:.0f}m{s_tag})"
         else:
-            threat = f"위험! 뒤에 있음! ({dist_to_player:.1f}m){climb_tag}"
-            threat_fg = (1.0, 0.35, 0.1, 1.0)
+            s_msg = f"{dist_serpent:.0f}m{s_tag}"
 
-        new_hud = f"위치: X={px:.1f}, Y={py:.1f} | 괴물: {threat} | 활성: {self.rendered_chunk_count}/{self.total_chunk_count} 청크"
+        if dist_skeleton < 14.0 or self.skeleton.has_los:
+            k_msg = f"위험({dist_skeleton:.0f}m)"
+        else:
+            k_msg = f"{dist_skeleton:.0f}m"
+
+        threat_fg = (1.0, 0.15, 0.15, 1.0) if (self.serpent.has_los or self.skeleton.has_los or min(dist_serpent, dist_skeleton) < 12.0) else (1.0, 0.85, 0.2, 0.95)
+
+        new_hud = f"위치: X={px:.1f}, Y={py:.1f} | 뱀: {s_msg} | 해골: {k_msg} | 활성: {self.rendered_chunk_count}/{self.total_chunk_count} 청크"
         if new_hud != self.last_hud_text:
             self.hud_text.setText(new_hud)
             self.hud_text.setFg(threat_fg)
