@@ -21,7 +21,7 @@ from constants import (
     PLAYER_EYE_HEIGHT, WALK_SPEED, SPRINT_SPEED, RENDER_RADIUS, FOG_COLOR,
     MAP_MIN_CHUNK, MAP_MAX_CHUNK, WALL_THICKNESS
 )
-from world_gen import find_cell_path, check_line_of_sight
+from world_gen import find_cell_path, check_line_of_sight, cell_has_pillar
 from chunk import Chunk
 from monster import LongBlackSerpent, TallSkeletonMonster
 from geometry import make_cube_to
@@ -42,8 +42,9 @@ class LiminalInfiniteLoop(ShowBase):
             )
 
         # 1. 카메라 가시거리 및 안개 설정 (POV 확장: FOV 88도로 넓고 시원한 시야 확보)
-        self.camLens.setNearFar(0.2, 65.0)
-        self.camLens.setFov(88.0)
+        if hasattr(self, 'camLens') and self.camLens is not None:
+            self.camLens.setNearFar(0.2, 65.0)
+            self.camLens.setFov(88.0)
         self.rendered_chunk_count = 0
         self.total_chunk_count = 0
         self.last_hud_text = ""
@@ -89,6 +90,7 @@ class LiminalInfiniteLoop(ShowBase):
         self.recoil_timer = 0.0
         self.muzzle_timer = 0.0
         self.hit_marker_timer = 0.0
+        self.stage_banner_timer = 0.0
         self.bobbing_time = 0.0
         self.active_tracers = []
 
@@ -161,7 +163,11 @@ class LiminalInfiniteLoop(ShowBase):
         return (px + 30.0, py + 30.0)
 
     def setup_escape_portal(self):
-        """스폰 지점(9.0, 9.0)으로부터 최소 70m 이상 떨어진 원거리 복도에 랜덤 비상 탈출구 생성"""
+        """
+        4방향 완전 대칭형 비상탈출문 벙커 챔버
+        - 어떤 방향/각도(동, 서, 남, 북, 대각선)에서 접근하더라도 100% 동일한 외형의 중장갑 방화문이 보이도록 설계
+        - 4개 모서리 구조 기둥 + 상단 육중한 방폭 천장 슬래브 + 4개 면 각각에 동일한 방화문/3단 빗장/전자 도어록/LED 램프 배치
+        """
         min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 1
         max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 2
         candidates = []
@@ -170,11 +176,12 @@ class LiminalInfiniteLoop(ShowBase):
         for gx in range(min_cell, max_cell + 1):
             for gy in range(min_cell, max_cell + 1):
                 if gx % 3 == 1 or gy % 3 == 1:
-                    cx = (gx + 0.5) * CELL_SIZE
-                    cy = (gy + 0.5) * CELL_SIZE
-                    d = math.hypot(cx - spawn_x, cy - spawn_y)
-                    if d >= 70.0:
-                        candidates.append((cx, cy))
+                    if not cell_has_pillar(gx, gy):
+                        cx = (gx + 0.5) * CELL_SIZE
+                        cy = (gy + 0.5) * CELL_SIZE
+                        d = math.hypot(cx - spawn_x, cy - spawn_y)
+                        if d >= 70.0:
+                            candidates.append((cx, cy))
         if candidates:
             self.escape_pos = random.choice(candidates)
         else:
@@ -193,27 +200,50 @@ class LiminalInfiniteLoop(ShowBase):
         lock_reinforce_col = LColor(0.38, 0.39, 0.43, 1.0)
         hazard_dim_stripe = LColor(0.45, 0.38, 0.12, 1.0)
 
-        # 1. 육중한 강철 문틀 (너비 2.8m, 높이 3.6m)
-        make_cube_to(self.escape_portal_np, 0.28, 0.35, 3.6, dark_metal_frame, -1.35, 0, 1.8)
-        make_cube_to(self.escape_portal_np, 0.28, 0.35, 3.6, dark_metal_frame, 1.35, 0, 1.8)
-        make_cube_to(self.escape_portal_np, 2.98, 0.35, 0.30, dark_metal_frame, 0, 0, 3.6)
+        # 4개 모서리 구조 기둥 (Corner Structural Columns)
+        half_w = 1.35
+        for cx_sign in (-1, 1):
+            for cy_sign in (-1, 1):
+                make_cube_to(self.escape_portal_np, 0.30, 0.30, 3.8, dark_metal_frame, cx_sign * half_w, cy_sign * half_w, 1.9)
 
-        # 2. 비상구 철제 방화문 (색상 없음, 차가운 강철 도어 패널)
-        self.door_panel = make_cube_to(self.escape_portal_np, 2.42, 0.12, 3.42, steel_door_plate, 0, 0, 1.71)
+        # 상단 육중한 방폭 천장 캡 (Heavy Armored Blast Cap)
+        make_cube_to(self.escape_portal_np, 3.0, 3.0, 0.35, dark_metal_frame, 0, 0, 3.8)
 
-        # 3. 3단 강화 잠금 빗장 및 중앙 전자 도어록 핸들
-        make_cube_to(self.escape_portal_np, 2.1, 0.18, 0.15, lock_reinforce_col, 0, 0, 1.0)
-        make_cube_to(self.escape_portal_np, 2.1, 0.18, 0.15, lock_reinforce_col, 0, 0, 2.0)
-        make_cube_to(self.escape_portal_np, 2.1, 0.18, 0.15, lock_reinforce_col, 0, 0, 2.9)
-        make_cube_to(self.escape_portal_np, 0.14, 0.24, 0.42, lock_reinforce_col, 0.85, 0, 1.7)
+        self.door_lamps = []
+        self.door_panels = []
 
-        # 4. 하단 미세 주의 띠 (퇴색된 산업용 안전 줄무늬)
-        make_cube_to(self.escape_portal_np, 2.3, 0.14, 0.20, hazard_dim_stripe, 0, 0, 0.30)
+        # 4방향 완전 대칭 (0°=북, 90°=동, 180°=남, 270°=서)
+        for h in (0, 90, 180, 270):
+            face_np = self.escape_portal_np.attachNewNode(f"door_face_{h}")
+            face_np.setH(h)
 
-        # 5. 문 상단 소형 보안 상태 표시 램프 (평상시 희미한 황색, 홀드아웃 시 점멸, 완료 시 녹색)
-        make_cube_to(self.escape_portal_np, 0.40, 0.18, 0.16, dark_metal_frame, 0, 0, 3.9)
-        self.door_lamp = make_cube_to(self.escape_portal_np, 0.28, 0.08, 0.10, LColor(0.35, 0.25, 0.08, 1.0), 0, 0, 3.9)
-        self.door_lamp.setLightOff()
+            # 로컬 좌표계: face_np의 +Y 방향(전방 1.35m)에 도어 페이스 구성
+            # 1. 문틀 상단 인방
+            make_cube_to(face_np, 2.70, 0.28, 0.30, dark_metal_frame, 0, half_w, 3.6)
+
+            # 2. 비상구 철제 방화문 (색상 없음, 차가운 강철 도어 패널)
+            panel = make_cube_to(face_np, 2.40, 0.12, 3.40, steel_door_plate, 0, half_w, 1.70)
+            self.door_panels.append(panel)
+
+            # 3. 3단 강화 잠금 빗장 및 전자 도어록
+            make_cube_to(face_np, 2.1, 0.16, 0.15, lock_reinforce_col, 0, half_w + 0.04, 1.0)
+            make_cube_to(face_np, 2.1, 0.16, 0.15, lock_reinforce_col, 0, half_w + 0.04, 2.0)
+            make_cube_to(face_np, 2.1, 0.16, 0.15, lock_reinforce_col, 0, half_w + 0.04, 2.9)
+            make_cube_to(face_np, 0.14, 0.20, 0.40, lock_reinforce_col, 0.85, half_w + 0.06, 1.7)
+
+            # 4. 하단 미세 주의 띠 (퇴색된 산업용 안전 줄무늬)
+            make_cube_to(face_np, 2.3, 0.14, 0.20, hazard_dim_stripe, 0, half_w + 0.03, 0.30)
+
+            # 5. 문 상단 소형 보안 상태 표시 램프
+            make_cube_to(face_np, 0.40, 0.16, 0.16, dark_metal_frame, 0, half_w + 0.05, 3.9)
+            lamp = make_cube_to(face_np, 0.28, 0.08, 0.10, LColor(0.35, 0.25, 0.08, 1.0), 0, half_w + 0.08, 3.9)
+            lamp.setLightOff()
+            self.door_lamps.append(lamp)
+
+        # 레거시 호환용 단일 참조 유지
+        self.door_lamp = self.door_lamps[0]
+        self.door_panel = self.door_panels[0]
+
 
     def setup_viewmodel(self):
         """1인칭 듀얼 뷰모델: 왼손 손전등 & 오른손 12발 권총"""
@@ -987,7 +1017,7 @@ class LiminalInfiniteLoop(ShowBase):
 
         for gx in range(min_cell, max_cell + 1):
             for gy in range(min_cell, max_cell + 1):
-                if gx % 3 == 1 or gy % 3 == 1:
+                if (gx % 3 == 1 or gy % 3 == 1) and not cell_has_pillar(gx, gy):
                     cx = (gx + 0.5) * CELL_SIZE
                     cy = (gy + 0.5) * CELL_SIZE
                     d = math.hypot(cx - spawn_x, cy - spawn_y)
@@ -1084,6 +1114,11 @@ class LiminalInfiniteLoop(ShowBase):
         # 스테이지 2 이상부터 탄약 상자 드랍 생성
         self.setup_ammo_drops()
 
+        # 스테이지 전환 보상: 탄약 지급 (탄창 완충 12발 + 예비 탄약 24발 추가)
+        self.ammo = self.max_ammo
+        self.reserve_ammo += 24
+        self.update_ammo_ui()
+
         # 안개 복구
         self.liminal_fog.setColor(FOG_COLOR)
         self.setBackgroundColor(FOG_COLOR)
@@ -1091,7 +1126,12 @@ class LiminalInfiniteLoop(ShowBase):
 
         self.door_status_text.setText("")
         self.door_status_text.hide()
-        self.update_ammo_ui()
+
+        # 스테이지 클리어 축하 및 보급 알림 배너 (3.5초 표시)
+        if hasattr(self, 'stage_clear_banner') and self.stage_clear_banner:
+            self.stage_clear_banner.setText(f"[ STAGE {self.current_stage} START! ]\n보급 지급 완료: 탄약 완충(12발) & 예비탄 +24발!")
+            self.stage_clear_banner.show()
+            self.stage_banner_timer = 3.5
 
         # 스테이지 클리어 및 진입 알림
         speed_bonus = int((self.current_stage - 1) * 18)
@@ -1822,6 +1862,12 @@ class LiminalInfiniteLoop(ShowBase):
             if self.hit_marker_timer <= 0.0:
                 self.hit_marker_text.setText("")
 
+        # 스테이지 시작/클리어 배너 타이머
+        if self.stage_banner_timer > 0.0:
+            self.stage_banner_timer -= dt
+            if self.stage_banner_timer <= 0.0 and hasattr(self, 'stage_clear_banner') and self.stage_clear_banner:
+                self.stage_clear_banner.hide()
+
         # 스테이지 2+ 탄약 상자 수거 판정 (플레이어 1.8m 이내 접근 시 예비 탄약 12발 획득)
         if getattr(self, 'ammo_drops', None):
             for drop in self.ammo_drops[:]:
@@ -1868,21 +1914,34 @@ class LiminalInfiniteLoop(ShowBase):
             self.door_status_text.setFg((1.0, 0.85, 0.2, 1.0))
             self.door_status_text.show()
 
-            # 도어 상단 램프 점멸 연출
-            if hasattr(self, 'door_lamp') and self.door_lamp:
-                blink = (int(globalClock.getFrameTime() * 8) % 2 == 0)
-                self.door_lamp.setColor(LColor(0.9, 0.15, 0.15, 1.0) if blink else LColor(0.3, 0.05, 0.05, 1.0))
+            # 도어 상단 램프 점멸 연출 (4방향 모든 램프 동시 점멸)
+            blink = (int(globalClock.getFrameTime() * 8) % 2 == 0)
+            blink_col = LColor(0.9, 0.15, 0.15, 1.0) if blink else LColor(0.3, 0.05, 0.05, 1.0)
+            if hasattr(self, 'door_lamps') and self.door_lamps:
+                for lamp in self.door_lamps:
+                    lamp.setColor(blink_col)
+            elif hasattr(self, 'door_lamp') and self.door_lamp:
+                self.door_lamp.setColor(blink_col)
 
             if self.door_hold_timer <= 0.0:
                 self.door_status_text.setText("[ 비상문 개방 완료! 다음 스테이지로 진입합니다! ]")
                 self.door_status_text.setFg((0.2, 1.0, 0.4, 1.0))
-                if hasattr(self, 'door_lamp') and self.door_lamp:
+                if hasattr(self, 'door_lamps') and self.door_lamps:
+                    for lamp in self.door_lamps:
+                        lamp.setColor(LColor(0.2, 1.0, 0.4, 1.0))
+                elif hasattr(self, 'door_lamp') and self.door_lamp:
                     self.door_lamp.setColor(LColor(0.2, 1.0, 0.4, 1.0))
                 self.advance_to_next_stage()
                 return task.cont
         else:
             if self.door_hold_timer < 5.0:
                 self.door_hold_timer = 5.0
+                idle_col = LColor(0.35, 0.25, 0.08, 1.0)
+                if hasattr(self, 'door_lamps') and self.door_lamps:
+                    for lamp in self.door_lamps:
+                        lamp.setColor(idle_col)
+                elif hasattr(self, 'door_lamp') and self.door_lamp:
+                    self.door_lamp.setColor(idle_col)
                 self.door_status_text.setText("[ 비상문 개방 중단! 탈출구 앞(2.8m)을 사수하세요! ]")
                 self.door_status_text.setFg((1.0, 0.3, 0.3, 1.0))
                 self.door_status_text.show()

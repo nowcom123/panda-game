@@ -7,81 +7,142 @@ def zone_hash(mx, my):
     return ((mx * 73856093) ^ (my * 19349663) ^ 0x5bd1e995) & 0x7FFFFFFF
 
 
-@functools.lru_cache(maxsize=4096)
+def get_zone_type(mx, my):
+    """
+    3x3 매크로 구역의 건축 유형 결정:
+    - 0: 클래식 백룸 미로 복도 및 1x1 독립 오피스 룸 (스폰 구역 (0,0) 기본 보장)
+    - 1: 18m x 18m 초대형 백룸 오픈 홀 (내부 벽 전무, 13m 천장 지지 중앙 콘크리트 기둥)
+    - 2: 12m x 18m 와이드 백룸 룸 (2x3 개방 공간 + 동쪽 연결 복도)
+    - 3: 18m x 12m 가로형 와이드 백룸 룸 (3x2 개방 공간 + 북쪽 연결 복도)
+    """
+    if mx == 0 and my == 0:
+        return 0  # 스폰 지점은 항상 안전하고 명확한 십자 복도
+    h = zone_hash(mx, my)
+    return (h >> 4) % 4
+
+
+def cell_has_pillar(gx, gy):
+    """대형 방 내부의 상징적인 백룸 콘크리트 지지 기둥 배치 판정"""
+    if gx == 1 and gy == 1:
+        return False  # 플레이어 초기 스폰 위치 기둥 배제
+    mx, my = gx // 3, gy // 3
+    lx, ly = gx % 3, gy % 3
+    zt = get_zone_type(mx, my)
+    if zt == 1 and lx == 1 and ly == 1:
+        return True  # 18m x 18m 대형 홀 정중앙 지지 기둥
+    if zt == 2 and lx == 0 and ly == 1:
+        return True  # 12m x 18m 와이드 룸 중앙 기둥
+    if zt == 3 and lx == 1 and ly == 0:
+        return True  # 18m x 12m 와이드 룸 중앙 기둥
+    return False
+
+
+@functools.lru_cache(maxsize=8192)
 def get_edge_types(gx, gy):
     """
     셀 (gx, gy)의 북쪽 경계(h_edge) 및 동쪽 경계(v_edge) 타입 판정
     반환값: 0 = 완전 개방, 1 = 솔리드 2단 벽, 2 = 출입문 (1단 인방 + 2단 상단벽)
     
-    [완전 닫힌 방 & 무한 복도 규칙]:
-    1. 벽으로 방을 형성할 경우 사방이 벽체로 100% 둘러싸인 '완전한 닫힌 공간'을 형성하며,
-       복도를 향해 정확히 1개의 출입문(2)을 둡니다. (고립벽/불완전 벽 0%)
-    2. 중심 십자 복도(lx=1, ly=1)는 항상 사통팔달로 영구 개방됩니다.
+    [백룸 대형 홀 & 와이드 룸 & 무한 복도 규칙]:
+    1. 대형 홀 및 와이드 룸은 내부 벽을 완전 제거(0)하여 광활한 리미널 개방 공간을 형성합니다.
+    2. 모든 구역은 중앙 연결 통로 및 출입문을 통해 100% 끊김 없이 사통팔달로 상호 연결됩니다.
     """
     mx, my = gx // 3, gy // 3
     lx, ly = gx % 3, gy % 3
+    zt = get_zone_type(mx, my)
     h = zone_hash(mx, my)
 
-    # 코너별 방 구성 패턴 (0, 1, 3: 4개 코너 모두 닫힌 방, 2: 2개 닫힌 방 + 2개 개방)
-    pattern = h % 4
-    room_sw = True if pattern in (0, 1, 3) else False
-    room_se = True if pattern in (0, 2, 3) else False
-    room_nw = True if pattern in (0, 2, 3) else False
-    room_ne = True if pattern in (0, 1, 3) else False
+    # 기본값
+    h_edge = 1
+    v_edge = 1
 
-    # 문 위치 결정 (각 닫힌 방마다 복도 쪽 면 중 정확히 1개 면에 출입문 배치)
-    door_sw = (h >> 2) & 1
-    door_se = (h >> 3) & 1
-    door_nw = (h >> 4) & 1
-    door_ne = (h >> 5) & 1
+    if zt == 0:
+        # [타입 0] 클래식 코너 방 & 십자 복도
+        pattern = h % 4
+        room_sw = True if pattern in (0, 1, 3) else False
+        room_se = True if pattern in (0, 2, 3) else False
+        room_nw = True if pattern in (0, 2, 3) else False
+        room_ne = True if pattern in (0, 1, 3) else False
 
-    # 1. 북쪽 수평 경계 (Horizontal Edge: y = (gy + 1) * CELL_SIZE)
-    h_edge = 0
-    if ly == 2:
-        # 매크로 구역 간 북쪽 경계: 중심 통로(lx=1)만 개방, 코너 방 상단은 솔리드 외벽
-        h_edge = 0 if lx == 1 else 1
-    elif ly == 0:
-        if lx == 1:
-            h_edge = 0  # 남북 메인 복도는 항상 개방
-        elif lx == 0:
-            # SW 코너 방 북쪽면 (문 또는 솔리드 벽)
-            h_edge = (2 if door_sw == 0 else 1) if room_sw else 0
-        elif lx == 2:
-            # SE 코너 방 북쪽면
-            h_edge = (2 if door_se == 0 else 1) if room_se else 0
-    elif ly == 1:
-        if lx == 1:
-            h_edge = 0  # 남북 메인 복도는 항상 개방
-        elif lx == 0:
-            # NW 코너 방 남쪽면
-            h_edge = (2 if door_nw == 0 else 1) if room_nw else 0
-        elif lx == 2:
-            # NE 코너 방 남쪽면
-            h_edge = (2 if door_ne == 0 else 1) if room_ne else 0
+        door_sw = (h >> 2) & 1
+        door_se = (h >> 3) & 1
+        door_nw = (h >> 4) & 1
+        door_ne = (h >> 5) & 1
 
-    # 2. 동쪽 수직 경계 (Vertical Edge: x = (gx + 1) * CELL_SIZE)
-    v_edge = 0
-    if lx == 2:
-        # 매크로 구역 간 동쪽 경계: 중심 통로(ly=1)만 개방, 코너 방 우측은 솔리드 외벽
-        v_edge = 0 if ly == 1 else 1
-    elif lx == 0:
-        if ly == 1:
-            v_edge = 0  # 동서 메인 복도는 항상 개방
+        if ly == 2:
+            h_edge = 0 if lx == 1 else 1
         elif ly == 0:
-            # SW 코너 방 동쪽면
-            v_edge = (2 if door_sw == 1 else 1) if room_sw else 0
-        elif ly == 2:
-            # NW 코너 방 동쪽면
-            v_edge = (2 if door_nw == 1 else 1) if room_nw else 0
-    elif lx == 1:
-        if ly == 1:
-            v_edge = 0  # 동서 메인 복도는 항상 개방
+            if lx == 1:
+                h_edge = 0
+            elif lx == 0:
+                h_edge = (2 if door_sw == 0 else 1) if room_sw else 0
+            elif lx == 2:
+                h_edge = (2 if door_se == 0 else 1) if room_se else 0
+        elif ly == 1:
+            if lx == 1:
+                h_edge = 0
+            elif lx == 0:
+                h_edge = (2 if door_nw == 0 else 1) if room_nw else 0
+            elif lx == 2:
+                h_edge = (2 if door_ne == 0 else 1) if room_ne else 0
+
+        if lx == 2:
+            v_edge = 0 if ly == 1 else 1
+        elif lx == 0:
+            if ly == 1:
+                v_edge = 0
+            elif ly == 0:
+                v_edge = (2 if door_sw == 1 else 1) if room_sw else 0
+            elif ly == 2:
+                v_edge = (2 if door_nw == 1 else 1) if room_nw else 0
+        elif lx == 1:
+            if ly == 1:
+                v_edge = 0
+            elif ly == 0:
+                v_edge = (2 if door_se == 1 else 1) if room_se else 0
+            elif ly == 2:
+                v_edge = (2 if door_ne == 1 else 1) if room_ne else 0
+
+    elif zt == 1:
+        # [타입 1] 18m x 18m 초대형 백룸 오픈 홀
+        # 내부 수평/수직 벽은 0으로 완전 개방되어 광대한 9셀 공간 형성
+        if ly == 2:
+            h_edge = 2 if lx == 1 else 1
+        else:
+            h_edge = 0
+
+        if lx == 2:
+            v_edge = 2 if ly == 1 else 1
+        else:
+            v_edge = 0
+
+    elif zt == 2:
+        # [타입 2] 12m x 18m 와이드 백룸 룸 (lx=0,1) + 동쪽 연결 복도 (lx=2)
+        if ly == 2:
+            h_edge = 0 if lx == 2 else (2 if lx == 1 else 1)
+        else:
+            h_edge = 0
+
+        if lx == 2:
+            v_edge = 0 if ly == 1 else 1
+        elif lx == 1:
+            v_edge = 2 if ly == 1 else 1
+        elif lx == 0:
+            v_edge = 0
+
+    elif zt == 3:
+        # [타입 3] 18m x 12m 가로형 와이드 백룸 룸 (ly=0,1) + 북쪽 연결 복도 (ly=2)
+        if lx == 2:
+            v_edge = 0 if ly == 2 else (2 if ly == 1 else 1)
+        else:
+            v_edge = 0
+
+        if ly == 2:
+            h_edge = 0 if lx == 1 else 1
+        elif ly == 1:
+            h_edge = 2 if lx == 1 else 1
         elif ly == 0:
-            # SE 코너 방 서쪽면
-            v_edge = (2 if door_se == 1 else 1) if room_se else 0
-        elif ly == 2:
-            # NE 코너 방 서쪽면
-            v_edge = (2 if door_ne == 1 else 1) if room_ne else 0
+            h_edge = 0
 
     return h_edge, v_edge
 

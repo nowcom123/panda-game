@@ -4,7 +4,7 @@ from constants import (
     CELL_SIZE, CHUNK_CELLS, CHUNK_SIZE, TIER_HEIGHT, WALL_HEIGHT, DOOR_HEIGHT, WALL_THICKNESS,
     MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
-from world_gen import zone_hash, get_edge_types
+from world_gen import zone_hash, get_edge_types, cell_has_pillar
 
 
 
@@ -73,6 +73,11 @@ class Chunk:
         # 문틀 기둥 옆면 마감 (너비: WALL_THICKNESS, 높이: DOOR_HEIGHT)
         cm_jamb = CardMaker('jamb')
         cm_jamb.setFrame(-half_thick, half_thick, 0, DOOR_HEIGHT)
+
+        # 대형 백룸 홀 전용 건축 지지 기둥 카드 (1.2m x 1.2m x 13.0m 사각 기둥)
+        cm_pillar_face = CardMaker('pillar_face')
+        half_p = 0.6
+        cm_pillar_face.setFrame(-half_p, half_p, 0, WALL_HEIGHT)
 
         start_gx = cx * CHUNK_CELLS
         start_gy = cy * CHUNK_CELLS
@@ -301,6 +306,38 @@ class Chunk:
                     j_n.setH(180)
                     j_n.setPos(wx, cell_y + CELL_SIZE, 0)
                     j_n.setTexture(wall_tex)
+
+                # --- (3) 대형 백룸 룸 지지 기둥 (Pillar Column) ---
+                if cell_has_pillar(gx, gy):
+                    px = cell_x + CELL_SIZE * 0.5
+                    py = cell_y + CELL_SIZE * 0.5
+
+                    p_s = self.node.attachNewNode(cm_pillar_face.generate())
+                    p_s.setPos(px, py - half_p, 0)
+                    p_s.setTexture(wall_tex)
+                    p_s.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
+
+                    p_n = self.node.attachNewNode(cm_pillar_face.generate())
+                    p_n.setH(180)
+                    p_n.setPos(px, py + half_p, 0)
+                    p_n.setTexture(wall_tex)
+                    p_n.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
+
+                    p_w = self.node.attachNewNode(cm_pillar_face.generate())
+                    p_w.setH(90)
+                    p_w.setPos(px - half_p, py, 0)
+                    p_w.setTexture(wall_tex)
+                    p_w.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
+
+                    p_e = self.node.attachNewNode(cm_pillar_face.generate())
+                    p_e.setH(-90)
+                    p_e.setPos(px + half_p, py, 0)
+                    p_e.setTexture(wall_tex)
+                    p_e.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
+
+                    col_pillar = (px - half_p, py - half_p, px + half_p, py + half_p)
+                    self.colliders.append(col_pillar)
+                    self.cell_colliders[(gx, gy)].append(col_pillar)
 
         # 4. 드로우 콜 최적화 (청크 벽체 및 바닥/천장 지오메트리 병합)
         self.node.flattenStrong()
