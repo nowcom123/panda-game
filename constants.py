@@ -22,10 +22,10 @@ CELL_SIZE = 6.0         # 그리드 셀 크기 (6.0m x 6.0m: 광폭 리미널 �
 CHUNK_CELLS = 6         # 한 청크당 셀 수 (6x6 = 36개 셀)
 CHUNK_SIZE = CELL_SIZE * CHUNK_CELLS  # 청크 한 변 크기 (36.0m)
 
-# 2단 벽체 구조 (1단: 0~4.5m, 2단: 4.5~9.0m)
-TIER_HEIGHT = 4.5       # 1단 높이 (4.5m)
-WALL_HEIGHT = TIER_HEIGHT * 2.0  # 총 2단 벽 및 천장 높이 (9.0m 높은 천장)
-DOOR_HEIGHT = 2.4       # 출입문 통로 높이 (2.4m)
+# 2단 벽체 구조 (1단: 0~6.5m, 2단: 6.5~13.0m)
+TIER_HEIGHT = 6.5       # 1단 높이 (6.5m)
+WALL_HEIGHT = TIER_HEIGHT * 2.0  # 총 2단 벽 및 천장 높이 (13.0m 초대형 심연 높이)
+DOOR_HEIGHT = 3.0       # 출입문 통로 높이 (3.0m 웅장한 도어)
 WALL_THICKNESS = 0.8    # 두꺼운 3D 벽체 두께 (0.8m 콘크리트/석고 보드 마감)
 
 PLAYER_RADIUS = 0.4     # 플레이어 충돌 반경

@@ -15,7 +15,7 @@ from constants import (
 )
 from world_gen import find_cell_path, check_line_of_sight
 from chunk import Chunk
-from monster import TallShadowMonster
+from monster import CreepySpiderMonster, TallShadowMonster
 
 
 class LiminalInfiniteLoop(ShowBase):
@@ -71,8 +71,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.stamina = self.max_stamina
         self.stamina_exhausted = False
 
-        # 칠흑의 키 큰 추격 괴물 생성 (플레이어 뒤쪽 복도 28m 지점에서 스폰)
-        self.monster = TallShadowMonster(self.render, spawn_x, spawn_y - 28.0)
+        # 벽을 타고 기어오는 기괴한 8족 거미 괴물 생성 (플레이어 뒤쪽 복도 28m 지점)
+        self.monster = CreepySpiderMonster(self.render, spawn_x, spawn_y - 28.0)
         self.player_trail = [(spawn_x, spawn_y)]
 
         # 초기 청크 전체 로드 (멀티스레드 병렬 로딩)
@@ -258,7 +258,7 @@ class LiminalInfiniteLoop(ShowBase):
             **font_kw
         )
         self.game_over_desc = OnscreenText(
-            text="칠흑의 괴물에게 영혼을 붙잡혔습니다...",
+            text="기괴한 거미 괴물에게 영혼을 잠식당했습니다...",
             pos=(0, 0.05),
             scale=0.055,
             fg=(0.88, 0.88, 0.88, 0.95),
@@ -331,8 +331,8 @@ class LiminalInfiniteLoop(ShowBase):
         dx = mx - px
         dy = my - py
         h = math.degrees(math.atan2(-dx, dy))
-        dist = max(0.2, math.hypot(dx, dy))
-        p = math.degrees(math.atan2(2.32 - PLAYER_EYE_HEIGHT, dist))
+        mz = getattr(self.monster.pos, 'z', 0.4)
+        p = math.degrees(math.atan2(mz + 0.25 - PLAYER_EYE_HEIGHT, dist))
         self.camera.setHpr(h, p, 0)
 
         # 괴물 공격 포즈 발동
@@ -527,8 +527,8 @@ class LiminalInfiniteLoop(ShowBase):
             dx = mx - px
             dy = my - py
             h = math.degrees(math.atan2(-dx, dy))
-            dist = max(0.2, math.hypot(dx, dy))
-            p = math.degrees(math.atan2(2.32 - PLAYER_EYE_HEIGHT, dist))
+            mz = getattr(self.monster.pos, 'z', 0.4)
+            p = math.degrees(math.atan2(mz + 0.25 - PLAYER_EYE_HEIGHT, dist))
             self.camera.setHpr(h, p, 0)
             self.monster.update(dt, is_moving=False, is_attacking=True)
             return task.cont
@@ -721,15 +721,45 @@ class LiminalInfiniteLoop(ShowBase):
 
             m_speed = 8.6 if dist_to_player > 15.0 else 9.4  # 음산한 스토킹 속도
 
-        # 3. 괴물 이동 벡터 계산 및 벽체 밀어내기 슬라이딩
+        # 3. 거미 괴물 이동 벡터 계산 및 벽 타기(Wall Crawling) 물리 판정
         tdx, tdy = tx - mx, ty - my
         t_dist = math.hypot(tdx, tdy)
+
+        # 주변 벽체 탐색 (촛대 제외, 너비 0.5m 이상인 실제 벽체만 필터링)
+        spider_walls = [
+            c for c in self.get_nearby_colliders(mx, my, search_dist=2.4)
+            if (c[2] - c[0]) >= 0.5 or (c[3] - c[1]) >= 0.5
+        ]
+
+        closest_wall_dist = 999.0
+        wall_norm = None
+        for min_x, min_y, max_x, max_y in spider_walls:
+            cx = max(min_x, min(mx, max_x))
+            cy = max(min_y, min(my, max_y))
+            vx = mx - cx
+            vy = my - cy
+            d = math.hypot(vx, vy)
+            if d < closest_wall_dist:
+                closest_wall_dist = d
+                if d > 0.05:
+                    wall_norm = Vec3(vx / d, vy / d, 0)
+
+        # 벽면 근접 시 (2.2m 이내) 벽면을 타고 3.6m 높이로 기어오름
+        # 단, 플레이어와 3.5m 이내 초근접 시 바닥으로 급강하하여 덮침
+        if closest_wall_dist < 2.2 and wall_norm is not None:
+            if dist_to_player > 3.5:
+                wall_climb_z = 3.6  # 높은 벽면을 타고 기어오름
+            else:
+                wall_climb_z = 0.4  # 바닥으로 덮치기 위해 급강하
+        else:
+            wall_climb_z = 0.4
+
         if t_dist > 0.05:
             ndx, ndy = tdx / t_dist, tdy / t_dist
             m_disp_x = ndx * m_speed * dt
             m_disp_y = ndy * m_speed * dt
             new_mx, new_my = self.resolve_collision(mx, my, m_disp_x, m_disp_y, radius=0.45)
-            self.monster.update_pos(new_mx, new_my, dt, ndx, ndy)
+            self.monster.update_pos(new_mx, new_my, dt, ndx, ndy, wall_norm=wall_norm, climb_target_z=wall_climb_z)
         else:
             self.monster.update(dt, is_moving=False)
 
@@ -769,18 +799,20 @@ class LiminalInfiniteLoop(ShowBase):
             else:
                 cnp.setPos(0, 0, -100)
 
-        # --- 5. HUD 업데이트 (괴물 위협 거리 및 경고 색상 반영) ---
+        # --- 5. HUD 업데이트 (거미 괴물 위협 거리 및 벽 타기 상태 반영) ---
+        is_climbing = getattr(self.monster, 'climb_z', 0.4) > 1.5
+        climb_tag = " [벽 타는 중!]" if is_climbing else ""
         if dist_to_player > 32.0:
-            threat = f"안전 ({dist_to_player:.0f}m)"
+            threat = f"안전 ({dist_to_player:.0f}m){climb_tag}"
             threat_fg = (0.35, 0.9, 0.45, 0.9)
         elif dist_to_player > 16.0:
-            threat = f"접근 중! ({dist_to_player:.0f}m)"
+            threat = f"접근 중! ({dist_to_player:.0f}m){climb_tag}"
             threat_fg = (1.0, 0.85, 0.2, 0.95)
         elif self.monster.has_los:
-            threat = f"추격 중! 시야에 노출됨! ({dist_to_player:.1f}m)"
+            threat = f"추격 중! 시야에 노출됨! ({dist_to_player:.1f}m){climb_tag}"
             threat_fg = (1.0, 0.1, 0.1, 1.0)
         else:
-            threat = f"위험! 뒤에 있음! ({dist_to_player:.1f}m)"
+            threat = f"위험! 뒤에 있음! ({dist_to_player:.1f}m){climb_tag}"
             threat_fg = (1.0, 0.35, 0.1, 1.0)
 
         new_hud = f"위치: X={px:.1f}, Y={py:.1f} | 괴물: {threat} | 활성: {self.rendered_chunk_count}/{self.total_chunk_count} 청크"
