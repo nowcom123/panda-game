@@ -36,15 +36,14 @@ class Chunk:
         floor.setTexScale(TextureStage.getDefault(), round(CHUNK_SIZE / 3.5, 2), round(CHUNK_SIZE / 3.5, 2))
         floor.setColorScale(0.60, 0.58, 0.52, 1.0) # 어두운 심야 카펫 톤
 
-        # 2. 청크 천장 타일 (광활한 3x3 연속 밤하늘 이미지 텍스처 적용 - 칠흑 같은 심야 하늘)
+        # 2. 청크 천장 타일 (바닥과 동일한 텍스처 에셋 적용)
         ceil = self.node.attachNewNode(cm_floor.generate())
         ceil.setP(90)
         ceil.setPos(chunk_origin_x, chunk_origin_y + CHUNK_SIZE, WALL_HEIGHT)
-        ceil.setTexture(sky_tex)
-        sky_span = 3.0
-        ceil.setTexScale(TextureStage.getDefault(), 1.0 / sky_span, 1.0 / sky_span)
-        ceil.setTexOffset(TextureStage.getDefault(), (cx % sky_span) / sky_span, (cy % sky_span) / sky_span)
-        ceil.setColorScale(0.12, 0.12, 0.18, 1.0) # 어둠에 잠긴 밤하늘과 은은한 별빛
+        ceil.setTexture(floor_tex)
+        floor_scale = round(CHUNK_SIZE / 3.5, 2)
+        ceil.setTexScale(TextureStage.getDefault(), floor_scale, floor_scale)
+        ceil.setColorScale(0.60, 0.58, 0.52, 1.0) # 바닥과 일체감 있는 리미널 카펫/타일 톤
         ceil.setTwoSided(True)
 
         # 텍스처 수직/수평 반복 비율 (높아진 벽체 및 광폭 복도에 맞춘 자연스러운 종횡비 유지)
@@ -104,39 +103,47 @@ class Chunk:
                     b_south_1.setPos(cell_x + CELL_SIZE, cell_y + half_thick, 0)
                     b_south_1.setTexture(wall_tex)
                     b_south_1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    b_south_1.setTwoSided(True)
+
                     b_south_2 = self.node.attachNewNode(cm_tier2.generate())
                     b_south_2.setH(180)
                     b_south_2.setPos(cell_x + CELL_SIZE, cell_y + half_thick, 0)
                     b_south_2.setTexture(wall_tex)
                     b_south_2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    b_south_2.setTwoSided(True)
 
                     cap_s = self.node.attachNewNode(cm_soffit.generate())
                     cap_s.setP(90)
                     cap_s.setPos(cell_x, cell_y, WALL_HEIGHT)
                     cap_s.setTexture(wall_tex)
+                    cap_s.setTwoSided(True)
 
                     b_box_s = (cell_x - half_thick, cell_y - half_thick, cell_x + CELL_SIZE + half_thick, cell_y + half_thick)
                     self.colliders.append(b_box_s)
                     self.cell_colliders[(gx, gy)].append(b_box_s)
 
-                # --- (0-B) 최서단 외곽 경계벽 밀폐 (x = cell_x) ---
+                # --- (0-B) 최서단 외곽 경계벽 밀폐 (x = cell_x, 내부 지향 H=90) ---
                 if cx == MAP_MIN_CHUNK and i == 0:
                     b_west_1 = self.node.attachNewNode(cm_tier1.generate())
-                    b_west_1.setH(-90)
-                    b_west_1.setPos(cell_x + half_thick, cell_y + CELL_SIZE, 0)
+                    b_west_1.setH(90)
+                    b_west_1.setPos(cell_x + half_thick, cell_y, 0)
                     b_west_1.setTexture(wall_tex)
                     b_west_1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    b_west_1.setTwoSided(True)
+
                     b_west_2 = self.node.attachNewNode(cm_tier2.generate())
-                    b_west_2.setH(-90)
-                    b_west_2.setPos(cell_x + half_thick, cell_y + CELL_SIZE, 0)
+                    b_west_2.setH(90)
+                    b_west_2.setPos(cell_x + half_thick, cell_y, 0)
                     b_west_2.setTexture(wall_tex)
                     b_west_2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    b_west_2.setTwoSided(True)
 
                     cap_w = self.node.attachNewNode(cm_soffit.generate())
                     cap_w.setP(90)
                     cap_w.setH(90)
                     cap_w.setPos(cell_x, cell_y, WALL_HEIGHT)
                     cap_w.setTexture(wall_tex)
+                    cap_w.setTwoSided(True)
 
                     b_box_w = (cell_x - half_thick, cell_y - half_thick, cell_x + half_thick, cell_y + CELL_SIZE + half_thick)
                     self.colliders.append(b_box_w)
@@ -151,10 +158,13 @@ class Chunk:
                     s1.setPos(cell_x, wy - half_thick, 0)
                     s1.setTexture(wall_tex)
                     s1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    s1.setTwoSided(True)
+
                     s2 = self.node.attachNewNode(cm_tier2.generate())
                     s2.setPos(cell_x, wy - half_thick, 0)
                     s2.setTexture(wall_tex)
                     s2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    s2.setTwoSided(True)
 
                     # 북쪽면 (Facing +Y)
                     n1 = self.node.attachNewNode(cm_tier1.generate())
@@ -162,11 +172,21 @@ class Chunk:
                     n1.setPos(cell_x + CELL_SIZE, wy + half_thick, 0)
                     n1.setTexture(wall_tex)
                     n1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    n1.setTwoSided(True)
+
                     n2 = self.node.attachNewNode(cm_tier2.generate())
                     n2.setH(180)
                     n2.setPos(cell_x + CELL_SIZE, wy + half_thick, 0)
                     n2.setTexture(wall_tex)
                     n2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    n2.setTwoSided(True)
+
+                    # 벽 상단 마감
+                    cap_h = self.node.attachNewNode(cm_soffit.generate())
+                    cap_h.setP(90)
+                    cap_h.setPos(cell_x, wy, WALL_HEIGHT)
+                    cap_h.setTexture(wall_tex)
+                    cap_h.setTwoSided(True)
 
                     # 플레이어 충돌체 등록 (0.8m 두께 반영 및 셀 공간 인덱싱)
                     col_box = (
@@ -186,41 +206,48 @@ class Chunk:
                     dl_s.setPos(cell_x, wy - half_thick, 0)
                     dl_s.setTexture(wall_tex)
                     dl_s.setTexScale(TextureStage.getDefault(), wall_u_scale, lintel_v_scale)
+                    dl_s.setTwoSided(True)
 
                     dl_n = self.node.attachNewNode(cm_door_lintel.generate())
                     dl_n.setH(180)
                     dl_n.setPos(cell_x + CELL_SIZE, wy + half_thick, 0)
                     dl_n.setTexture(wall_tex)
                     dl_n.setTexScale(TextureStage.getDefault(), wall_u_scale, lintel_v_scale)
+                    dl_n.setTwoSided(True)
 
                     # 2단 벽체 (4.5m ~ 9.0m)
                     u_s = self.node.attachNewNode(cm_tier2.generate())
                     u_s.setPos(cell_x, wy - half_thick, 0)
                     u_s.setTexture(wall_tex)
                     u_s.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    u_s.setTwoSided(True)
 
                     u_n = self.node.attachNewNode(cm_tier2.generate())
                     u_n.setH(180)
                     u_n.setPos(cell_x + CELL_SIZE, wy + half_thick, 0)
                     u_n.setTexture(wall_tex)
                     u_n.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    u_n.setTwoSided(True)
 
                     # 문틀 하부 소핏 (문틀 윗면 천장 마감)
                     soffit = self.node.attachNewNode(cm_soffit.generate())
                     soffit.setP(90)
                     soffit.setPos(cell_x, wy, DOOR_HEIGHT)
                     soffit.setTexture(wall_tex)
+                    soffit.setTwoSided(True)
 
                     # 문틀 좌우 기둥 옆면 마감
                     j_left = self.node.attachNewNode(cm_jamb.generate())
                     j_left.setH(90)
                     j_left.setPos(cell_x, wy, 0)
                     j_left.setTexture(wall_tex)
+                    j_left.setTwoSided(True)
 
                     j_right = self.node.attachNewNode(cm_jamb.generate())
                     j_right.setH(-90)
                     j_right.setPos(cell_x + CELL_SIZE, wy, 0)
                     j_right.setTexture(wall_tex)
+                    j_right.setTwoSided(True)
 
                 # --- (2) 수직 벽체 (Vertical Wall - 동쪽 경계, x = wx) ---
                 wx = cell_x + CELL_SIZE
@@ -228,27 +255,41 @@ class Chunk:
                     # [솔리드 2단 벽체: 서쪽면 + 동쪽면]
                     # 서쪽면 (Facing -X)
                     w1 = self.node.attachNewNode(cm_tier1.generate())
-                    w1.setH(90)
-                    w1.setPos(wx - half_thick, cell_y, 0)
+                    w1.setH(-90)
+                    w1.setPos(wx - half_thick, cell_y + CELL_SIZE, 0)
                     w1.setTexture(wall_tex)
                     w1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    w1.setTwoSided(True)
+
                     w2 = self.node.attachNewNode(cm_tier2.generate())
-                    w2.setH(90)
-                    w2.setPos(wx - half_thick, cell_y, 0)
+                    w2.setH(-90)
+                    w2.setPos(wx - half_thick, cell_y + CELL_SIZE, 0)
                     w2.setTexture(wall_tex)
                     w2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    w2.setTwoSided(True)
 
                     # 동쪽면 (Facing +X)
                     e1 = self.node.attachNewNode(cm_tier1.generate())
-                    e1.setH(-90)
-                    e1.setPos(wx + half_thick, cell_y + CELL_SIZE, 0)
+                    e1.setH(90)
+                    e1.setPos(wx + half_thick, cell_y, 0)
                     e1.setTexture(wall_tex)
                     e1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    e1.setTwoSided(True)
+
                     e2 = self.node.attachNewNode(cm_tier2.generate())
-                    e2.setH(-90)
-                    e2.setPos(wx + half_thick, cell_y + CELL_SIZE, 0)
+                    e2.setH(90)
+                    e2.setPos(wx + half_thick, cell_y, 0)
                     e2.setTexture(wall_tex)
                     e2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    e2.setTwoSided(True)
+
+                    # 벽 상단 마감
+                    cap_v = self.node.attachNewNode(cm_soffit.generate())
+                    cap_v.setP(90)
+                    cap_v.setH(90)
+                    cap_v.setPos(wx, cell_y, WALL_HEIGHT)
+                    cap_v.setTexture(wall_tex)
+                    cap_v.setTwoSided(True)
 
                     # 플레이어 충돌체 등록 (셀 공간 인덱싱)
                     col_box = (
@@ -265,29 +306,33 @@ class Chunk:
                     # [출입문 2단 벽체]
                     # 1단 출입문 인방
                     dl_w = self.node.attachNewNode(cm_door_lintel.generate())
-                    dl_w.setH(90)
-                    dl_w.setPos(wx - half_thick, cell_y, 0)
+                    dl_w.setH(-90)
+                    dl_w.setPos(wx - half_thick, cell_y + CELL_SIZE, 0)
                     dl_w.setTexture(wall_tex)
                     dl_w.setTexScale(TextureStage.getDefault(), wall_u_scale, lintel_v_scale)
+                    dl_w.setTwoSided(True)
 
                     dl_e = self.node.attachNewNode(cm_door_lintel.generate())
-                    dl_e.setH(-90)
-                    dl_e.setPos(wx + half_thick, cell_y + CELL_SIZE, 0)
+                    dl_e.setH(90)
+                    dl_e.setPos(wx + half_thick, cell_y, 0)
                     dl_e.setTexture(wall_tex)
                     dl_e.setTexScale(TextureStage.getDefault(), wall_u_scale, lintel_v_scale)
+                    dl_e.setTwoSided(True)
 
                     # 2단 벽체
                     u_w = self.node.attachNewNode(cm_tier2.generate())
-                    u_w.setH(90)
-                    u_w.setPos(wx - half_thick, cell_y, 0)
+                    u_w.setH(-90)
+                    u_w.setPos(wx - half_thick, cell_y + CELL_SIZE, 0)
                     u_w.setTexture(wall_tex)
                     u_w.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    u_w.setTwoSided(True)
 
                     u_e = self.node.attachNewNode(cm_tier2.generate())
-                    u_e.setH(-90)
-                    u_e.setPos(wx + half_thick, cell_y + CELL_SIZE, 0)
+                    u_e.setH(90)
+                    u_e.setPos(wx + half_thick, cell_y, 0)
                     u_e.setTexture(wall_tex)
                     u_e.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    u_e.setTwoSided(True)
 
                     # 문틀 하부 소핏
                     soffit = self.node.attachNewNode(cm_soffit.generate())
@@ -295,17 +340,20 @@ class Chunk:
                     soffit.setH(90)
                     soffit.setPos(wx, cell_y, DOOR_HEIGHT)
                     soffit.setTexture(wall_tex)
+                    soffit.setTwoSided(True)
 
                     # 문틀 상하 기둥 옆면 마감
                     j_s = self.node.attachNewNode(cm_jamb.generate())
                     j_s.setH(0)
                     j_s.setPos(wx, cell_y, 0)
                     j_s.setTexture(wall_tex)
+                    j_s.setTwoSided(True)
 
                     j_n = self.node.attachNewNode(cm_jamb.generate())
                     j_n.setH(180)
                     j_n.setPos(wx, cell_y + CELL_SIZE, 0)
                     j_n.setTexture(wall_tex)
+                    j_n.setTwoSided(True)
 
                 # --- (3) 대형 백룸 룸 지지 기둥 (Pillar Column) ---
                 if cell_has_pillar(gx, gy):
@@ -316,24 +364,28 @@ class Chunk:
                     p_s.setPos(px, py - half_p, 0)
                     p_s.setTexture(wall_tex)
                     p_s.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
+                    p_s.setTwoSided(True)
 
                     p_n = self.node.attachNewNode(cm_pillar_face.generate())
                     p_n.setH(180)
                     p_n.setPos(px, py + half_p, 0)
                     p_n.setTexture(wall_tex)
                     p_n.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
+                    p_n.setTwoSided(True)
 
                     p_w = self.node.attachNewNode(cm_pillar_face.generate())
                     p_w.setH(90)
                     p_w.setPos(px - half_p, py, 0)
                     p_w.setTexture(wall_tex)
                     p_w.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
+                    p_w.setTwoSided(True)
 
                     p_e = self.node.attachNewNode(cm_pillar_face.generate())
                     p_e.setH(-90)
                     p_e.setPos(px + half_p, py, 0)
                     p_e.setTexture(wall_tex)
                     p_e.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
+                    p_e.setTwoSided(True)
 
                     col_pillar = (px - half_p, py - half_p, px + half_p, py + half_p)
                     self.colliders.append(col_pillar)

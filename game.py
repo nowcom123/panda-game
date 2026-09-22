@@ -6,12 +6,13 @@ import math
 import random
 import concurrent.futures
 from direct.showbase.ShowBase import ShowBase
+from direct.showbase.Audio3DManager import Audio3DManager
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectGui import DirectButton, DirectFrame, DirectLabel, DGG
 from panda3d.core import (
     WindowProperties, Vec3, SamplerState, Fog,
     AmbientLight, PointLight, Spotlight, PerspectiveLens, TextNode, LColor, KeyboardButton,
-    LineSegs
+    LineSegs, Filename
 )
 import simplepbr
 
@@ -126,6 +127,9 @@ class LiminalInfiniteLoop(ShowBase):
 
         # 초기 청크 전체 로드 (멀티스레드 병렬 로딩)
         self.update_chunks(force=True)
+
+        # 6.5. 3D 입체 음향 및 호러 사운드 시스템 초기화
+        self.setup_audio()
 
         # 7. UI, 인트로 메뉴 및 랭킹 모달 설정
         self.setup_ui()
@@ -358,6 +362,7 @@ class LiminalInfiniteLoop(ShowBase):
         self.muzzle_timer = 0.04
         self.muzzle_flash_geom.show()
         self.render.setLight(self.muzzle_light_np)
+        self.play_gunshot()
 
         # 탄약 HUD 갱신
         self.update_ammo_ui()
@@ -378,9 +383,15 @@ class LiminalInfiniteLoop(ShowBase):
         if hit_s:
             self.serpent.stun(0.5)
             self.show_hit_marker("적중! 뱀 괴물 0.5초 기절!", (1.0, 0.85, 0.2, 1.0))
+            if getattr(self, 'serpent_hiss_sfx', None):
+                self.serpent_hiss_sfx.setVolume(1.0)
+                self.serpent_hiss_sfx.play()
         elif hit_k:
             self.skeleton.stun(0.5)
             self.show_hit_marker("적중! 해골 괴물 0.5초 기절!", (0.4, 0.95, 1.0, 1.0))
+            if getattr(self, 'skeleton_groan_sfx', None):
+                self.skeleton_groan_sfx.setVolume(1.0)
+                self.skeleton_groan_sfx.play()
 
         # 발광 총알 궤적 (Bullet Tracer) 생성 (새로운 전방 총구 위치 반영)
         cam_pos = self.camera.getPos()
@@ -408,6 +419,120 @@ class LiminalInfiniteLoop(ShowBase):
         tracer_np.setLightOff()
 
         self.active_tracers.append({"np": tracer_np, "life": 0.09})
+
+    def setup_audio(self):
+        """
+        Panda3D OpenAL 기반 3D 입체 음향 및 호러 사운드트랙/효과음 초기화
+        - 24초 심리스 루프 어둡고 음산한 앰비언스 BGM
+        - 플레이어 걷기/달리기 발자국 소리 (3종 변주 + 달리기 임팩트)
+        - 2종 괴물(칠흑 뱀, 장신 해골) 3D 공간 음향 (Audio3DManager)
+        - 권총 발사음 및 피격 스턴 사운드
+        """
+        audio_dir = os.path.join(os.path.dirname(__file__), "assets", "audio")
+
+        def p3d_path(fname):
+            full_p = os.path.join(audio_dir, fname)
+            if os.path.exists(full_p):
+                return Filename.fromOsSpecific(os.path.abspath(full_p))
+            return None
+
+        # 1. 3D 오디오 매니저 설정 (거리 감쇠 및 좌우 입체 패닝)
+        if hasattr(self, 'sfxManagerList') and self.sfxManagerList:
+            self.audio3d = Audio3DManager(self.sfxManagerList[0], self.camera)
+            self.audio3d.setDistanceFactor(1.0)
+            self.audio3d.setDropOffFactor(1.1)
+        else:
+            self.audio3d = None
+
+        # 2. 어둡고 음산한 배경음악 (BGM)
+        bgm_p = p3d_path("bgm_horror.wav")
+        if bgm_p:
+            self.bgm = self.loader.loadMusic(bgm_p)
+            if self.bgm:
+                self.bgm.setLoop(True)
+                self.bgm.setVolume(0.35)  # 인트로 모드 기본 볼륨
+                self.bgm.play()
+        else:
+            self.bgm = None
+
+        # 3. 플레이어 발자국 소리 (걷기 변주 3종 + 달리기)
+        self.footstep_sfx = []
+        for name in ["footstep_1.wav", "footstep_2.wav", "footstep_3.wav"]:
+            snd_p = p3d_path(name)
+            if snd_p:
+                snd = self.loader.loadSfx(snd_p)
+                if snd:
+                    self.footstep_sfx.append(snd)
+
+        sprint_p = p3d_path("footstep_sprint.wav")
+        self.footstep_sprint_sfx = self.loader.loadSfx(sprint_p) if sprint_p else None
+        self.footstep_timer = 0.0
+        self.footstep_idx = 0
+
+        # 권총 발사음
+        gunshot_p = p3d_path("gunshot.wav")
+        self.gunshot_sfx = self.loader.loadSfx(gunshot_p) if gunshot_p else None
+
+        # 4. 괴물 2종 3D 입체 음향 부착
+        self.serpent_slither_sfx = None
+        self.serpent_hiss_sfx = None
+        self.skeleton_rattle_sfx = None
+        self.skeleton_groan_sfx = None
+
+        if self.audio3d:
+            # 뱀 괴물 사운드
+            slither_p = p3d_path("serpent_slither.wav")
+            hiss_p = p3d_path("serpent_hiss.wav")
+            if slither_p:
+                self.serpent_slither_sfx = self.audio3d.loadSfx(slither_p)
+                if self.serpent_slither_sfx:
+                    self.serpent_slither_sfx.setLoop(True)
+                    self.serpent_slither_sfx.setVolume(0.0)
+                    self.audio3d.attachSoundToObject(self.serpent_slither_sfx, self.serpent.node)
+                    self.serpent_slither_sfx.play()
+
+            if hiss_p:
+                self.serpent_hiss_sfx = self.audio3d.loadSfx(hiss_p)
+                if self.serpent_hiss_sfx:
+                    self.serpent_hiss_sfx.setVolume(0.8)
+                    self.audio3d.attachSoundToObject(self.serpent_hiss_sfx, self.serpent.node)
+
+            # 해골 괴물 사운드
+            rattle_p = p3d_path("skeleton_rattle.wav")
+            groan_p = p3d_path("skeleton_groan.wav")
+            if rattle_p:
+                self.skeleton_rattle_sfx = self.audio3d.loadSfx(rattle_p)
+                if self.skeleton_rattle_sfx:
+                    self.skeleton_rattle_sfx.setLoop(True)
+                    self.skeleton_rattle_sfx.setVolume(0.0)
+                    self.audio3d.attachSoundToObject(self.skeleton_rattle_sfx, self.skeleton.node)
+                    self.skeleton_rattle_sfx.play()
+
+            if groan_p:
+                self.skeleton_groan_sfx = self.audio3d.loadSfx(groan_p)
+                if self.skeleton_groan_sfx:
+                    self.skeleton_groan_sfx.setVolume(0.8)
+                    self.audio3d.attachSoundToObject(self.skeleton_groan_sfx, self.skeleton.node)
+
+        self.serpent_hiss_cooldown = 3.0
+        self.skeleton_groan_cooldown = 4.0
+
+    def play_footstep(self, is_sprinting=False):
+        """플레이어 이동 시 걷기/달리기 발자국 소리 재생"""
+        if is_sprinting and getattr(self, 'footstep_sprint_sfx', None):
+            self.footstep_sprint_sfx.setVolume(random.uniform(0.65, 0.85))
+            self.footstep_sprint_sfx.play()
+        elif getattr(self, 'footstep_sfx', None):
+            snd = self.footstep_sfx[self.footstep_idx % len(self.footstep_sfx)]
+            self.footstep_idx += 1
+            snd.setVolume(random.uniform(0.38, 0.55))
+            snd.play()
+
+    def play_gunshot(self):
+        """권총 사격음 재생"""
+        if getattr(self, 'gunshot_sfx', None):
+            self.gunshot_sfx.setVolume(0.85)
+            self.gunshot_sfx.play()
 
     def reload_pistol(self):
         """R 키 입력 시 권총 재장전 (예비 탄약에서 탄창으로 12발 충전)"""
@@ -975,6 +1100,14 @@ class LiminalInfiniteLoop(ShowBase):
         # 인트로 UI 표시
         self.intro_frame.show()
 
+        # 오디오 볼륨 인트로 상태로 전환
+        if getattr(self, 'bgm', None):
+            self.bgm.setVolume(0.35)
+        if getattr(self, 'serpent_slither_sfx', None):
+            self.serpent_slither_sfx.setVolume(0.0)
+        if getattr(self, 'skeleton_rattle_sfx', None):
+            self.skeleton_rattle_sfx.setVolume(0.0)
+
     def start_game(self):
         """START 버튼 클릭 시 1인칭 게임플레이 시작"""
         self.game_state = "PLAYING"
@@ -991,6 +1124,11 @@ class LiminalInfiniteLoop(ShowBase):
         self.stamina_text.show()
         self.guide_text.show()
         self.lock_mouse(True)
+
+        # 게임플레이 모드 BGM 볼륨 상향
+        if getattr(self, 'bgm', None):
+            self.bgm.setVolume(0.55)
+        self.footstep_timer = 0.0
 
     def return_to_intro(self):
         """게임 종료 화면에서 메인 메뉴로 복귀"""
@@ -1114,6 +1252,11 @@ class LiminalInfiniteLoop(ShowBase):
         # 스테이지 2 이상부터 탄약 상자 드랍 생성
         self.setup_ammo_drops()
 
+        # 오디오 쿨다운 리셋
+        self.footstep_timer = 0.0
+        self.serpent_hiss_cooldown = 3.0
+        self.skeleton_groan_cooldown = 4.0
+
         # 스테이지 전환 보상: 탄약 지급 (탄창 완충 12발 + 예비 탄약 24발 추가)
         self.ammo = self.max_ammo
         self.reserve_ammo += 24
@@ -1220,6 +1363,13 @@ class LiminalInfiniteLoop(ShowBase):
         self.hit_marker_text.setText("")
         self.update_ammo_ui()
 
+        # 오디오 상태 리셋
+        if getattr(self, 'bgm', None):
+            self.bgm.setVolume(0.55)
+        self.footstep_timer = 0.0
+        self.serpent_hiss_cooldown = 3.0
+        self.skeleton_groan_cooldown = 4.0
+
     def trigger_victory(self):
         """탈출구 5초 홀드아웃 성공 시 승리 연출 및 랭킹 자동 기록"""
         if self.game_over or self.game_won:
@@ -1233,6 +1383,14 @@ class LiminalInfiniteLoop(ShowBase):
         self.liminal_fog.setColor(green_fog)
         self.setBackgroundColor(green_fog)
         self.win.setClearColor(green_fog)
+
+        # 오디오 정리
+        if getattr(self, 'bgm', None):
+            self.bgm.setVolume(0.25)
+        if getattr(self, 'serpent_slither_sfx', None):
+            self.serpent_slither_sfx.setVolume(0.0)
+        if getattr(self, 'skeleton_rattle_sfx', None):
+            self.skeleton_rattle_sfx.setVolume(0.0)
 
         elapsed = self.time_limit - self.time_left
         remaining = max(0.0, self.time_left)
@@ -1281,9 +1439,15 @@ class LiminalInfiniteLoop(ShowBase):
             if isinstance(killer, TallSkeletonMonster):
                 self.game_over_desc.setText("쩍 벌어진 입의 거대 해골 괴물에게 영혼을 빼앗겼습니다...")
                 result_desc = "사망 (해골 괴물)"
+                if getattr(self, 'skeleton_groan_sfx', None):
+                    self.skeleton_groan_sfx.setVolume(1.0)
+                    self.skeleton_groan_sfx.play()
             else:
                 self.game_over_desc.setText("칠흑의 거대한 뱀에게 온몸을 휘감겨 삼켜졌습니다...")
                 result_desc = "사망 (뱀 괴물)"
+                if getattr(self, 'serpent_hiss_sfx', None):
+                    self.serpent_hiss_sfx.setVolume(1.0)
+                    self.serpent_hiss_sfx.play()
 
             blood_fog = LColor(0.22, 0.02, 0.02, 1.0)
             self.liminal_fog.setColor(blood_fog)
@@ -1299,6 +1463,14 @@ class LiminalInfiniteLoop(ShowBase):
             self.liminal_fog.setColor(purple_fog)
             self.setBackgroundColor(purple_fog)
             self.win.setClearColor(purple_fog)
+
+        # 게임 오버 시 오디오 제어
+        if getattr(self, 'bgm', None):
+            self.bgm.setVolume(0.20)
+        if getattr(self, 'serpent_slither_sfx', None):
+            self.serpent_slither_sfx.setVolume(0.0)
+        if getattr(self, 'skeleton_rattle_sfx', None):
+            self.skeleton_rattle_sfx.setVolume(0.0)
 
         self.game_over_banner.show()
         self.game_over_desc.show()
@@ -1501,6 +1673,10 @@ class LiminalInfiniteLoop(ShowBase):
                 tr["np"].removeNode()
                 self.active_tracers.remove(tr)
 
+        # 3D 입체 음향 갱신 (OpenAL 리스너 위치 및 방향 자동 동기화)
+        if getattr(self, 'audio3d', None):
+            self.audio3d.update()
+
         # --- [INTRO 상태] 맵 전경 시네마틱 회전 및 청크 렌더링 ---
         if self.game_state == "INTRO":
             t = globalClock.getFrameTime()
@@ -1634,6 +1810,13 @@ class LiminalInfiniteLoop(ShowBase):
             speed = SPRINT_SPEED if self.is_sprinting else WALK_SPEED
             disp = move_dir * speed * dt
 
+            # 발자국 소리 타이머 갱신 (달리기: 0.26초, 걷기: 0.42초 주기)
+            step_interval = 0.26 if self.is_sprinting else 0.42
+            self.footstep_timer += dt
+            if self.footstep_timer >= step_interval:
+                self.footstep_timer = 0.0
+                self.play_footstep(self.is_sprinting)
+
             # --- 3. 정밀 벽 충돌 판정 및 매끄러운 슬라이딩 처리 ---
             curr_pos = self.camera.getPos()
             new_x, new_y = self.resolve_collision(curr_pos.x, curr_pos.y, disp.x, disp.y, radius=PLAYER_RADIUS)
@@ -1644,6 +1827,7 @@ class LiminalInfiniteLoop(ShowBase):
             view_changed = True
         else:
             self.last_move_dir = Vec3(0, 0, 0)
+            self.footstep_timer = 0.35  # 다음 이동 시 즉각 반응하도록 설정
 
         # --- 괴물 2종 지능형 추격 AI (검은 뱀 & 키 큰 해골 괴물) ---
         px, py = self.camera.getX(), self.camera.getY()
@@ -1813,6 +1997,33 @@ class LiminalInfiniteLoop(ShowBase):
             self.skeleton.update_pos(new_kx, new_ky, dt, kndx, kndy)
         else:
             self.skeleton.update(dt, is_moving=False)
+
+        # --- 괴물 2종 3D 입체 음향 실시간 거리 감쇠 및 포효/신음 트리거 ---
+        if getattr(self, 'serpent_slither_sfx', None):
+            vol_s = max(0.0, min(1.0, (32.0 - dist_serpent) / 24.0)) * 0.75
+            self.serpent_slither_sfx.setVolume(vol_s)
+
+        if dist_serpent < 18.0 or s_los:
+            self.serpent_hiss_cooldown -= dt
+            if self.serpent_hiss_cooldown <= 0.0:
+                if getattr(self, 'serpent_hiss_sfx', None):
+                    h_vol = max(0.35, min(1.0, (22.0 - dist_serpent) / 18.0))
+                    self.serpent_hiss_sfx.setVolume(h_vol)
+                    self.serpent_hiss_sfx.play()
+                self.serpent_hiss_cooldown = random.uniform(3.5, 6.5)
+
+        if getattr(self, 'skeleton_rattle_sfx', None):
+            vol_k = max(0.0, min(1.0, (34.0 - dist_skeleton) / 26.0)) * 0.75
+            self.skeleton_rattle_sfx.setVolume(vol_k)
+
+        if dist_skeleton < 20.0 or k_los:
+            self.skeleton_groan_cooldown -= dt
+            if self.skeleton_groan_cooldown <= 0.0:
+                if getattr(self, 'skeleton_groan_sfx', None):
+                    g_vol = max(0.35, min(1.0, (24.0 - dist_skeleton) / 20.0))
+                    self.skeleton_groan_sfx.setVolume(g_vol)
+                    self.skeleton_groan_sfx.play()
+                self.skeleton_groan_cooldown = random.uniform(4.0, 7.5)
 
         # --- 4. 안개 가시거리 컬링 (청크 생성 또는 대폭 이동 시에만 갱신) ---
         if chunk_created or (view_changed and is_moving):

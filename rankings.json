@@ -113,5 +113,93 @@
     "ammo_left": 0,
     "reserve_ammo": 0,
     "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-09-22 21:19:05",
+    "stage": 2,
+    "result": "사망 (해골 괴물)",
+    "success": false,
+    "time_elapsed": 4.7,
+    "time_left": 55.3,
+    "ammo_left": 10,
+    "reserve_ammo": 24,
+    "ammo_used": 2
+  },
+  {
+    "timestamp": "2026-09-22 21:36:55",
+    "stage": 1,
+    "result": "사망 (해골 괴물)",
+    "success": false,
+    "time_elapsed": 0.0,
+    "time_left": 60.0,
+    "ammo_left": 11,
+    "reserve_ammo": 0,
+    "ammo_used": 1
+  },
+  {
+    "timestamp": "2026-09-22 21:36:55",
+    "stage": 1,
+    "result": "탈출 성공",
+    "success": true,
+    "time_elapsed": 0.0,
+    "time_left": 60.0,
+    "ammo_left": 12,
+    "reserve_ammo": 0,
+    "ammo_used": 0
+  },
+  {
+    "timestamp": "2026-09-22 21:38:39",
+    "stage": 1,
+    "result": "탈출 실패 (시간 초과)",
+    "success": false,
+    "time_elapsed": 60.0,
+    "time_left": 0.0,
+    "ammo_left": 12,
+    "reserve_ammo": 0,
+    "ammo_used": 0
+  },
+  {
+    "timestamp": "2026-09-22 21:38:46",
+    "stage": 1,
+    "result": "사망 (뱀 괴물)",
+    "success": false,
+    "time_elapsed": 3.9,
+    "time_left": 56.1,
+    "ammo_left": 7,
+    "reserve_ammo": 0,
+    "ammo_used": 5
+  },
+  {
+    "timestamp": "2026-09-22 21:39:35",
+    "stage": 1,
+    "result": "사망 (해골 괴물)",
+    "success": false,
+    "time_elapsed": 47.2,
+    "time_left": 12.8,
+    "ammo_left": 10,
+    "reserve_ammo": 0,
+    "ammo_used": 2
+  },
+  {
+    "timestamp": "2026-09-22 21:40:42",
+    "stage": 1,
+    "result": "탈출 실패 (시간 초과)",
+    "success": false,
+    "time_elapsed": 60.0,
+    "time_left": 0.0,
+    "ammo_left": 0,
+    "reserve_ammo": 0,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-09-22 22:07:56",
+    "stage": 1,
+    "result": "탈출 실패 (시간 초과)",
+    "success": false,
+    "time_elapsed": 60.0,
+    "time_left": 0.0,
+    "ammo_left": 5,
+    "reserve_ammo": 0,
+    "ammo_used": 7
   }
 ]

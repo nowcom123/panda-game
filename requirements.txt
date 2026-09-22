@@ -1,0 +1,2 @@
+panda3d>=1.10.14
+panda3d-simplepbr>=0.13.0

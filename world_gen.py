@@ -10,24 +10,45 @@ def zone_hash(mx, my):
 def get_zone_type(mx, my):
     """
     3x3 매크로 구역의 건축 유형 결정:
-    - 0: 클래식 백룸 미로 복도 및 1x1 독립 오피스 룸 (스폰 구역 (0,0) 기본 보장)
-    - 1: 18m x 18m 초대형 백룸 오픈 홀 (내부 벽 전무, 13m 천장 지지 중앙 콘크리트 기둥)
-    - 2: 12m x 18m 와이드 백룸 룸 (2x3 개방 공간 + 동쪽 연결 복도)
-    - 3: 18m x 12m 가로형 와이드 백룸 룸 (3x2 개방 공간 + 북쪽 연결 복도)
+    - 0: 클래식 넓은 복도 및 1개의 독립 룸 (정사각형 중첩 기둥 현상 제거)
+    - 1: 18m x 18m 대형 백룸 홀 (중앙 1기둥)
+    - 2: 12m x 18m 와이드 백룸 룸 (lx=0,1 개방 공간)
+    - 3: 18m x 12m 가로형 와이드 백룸 룸 (ly=0,1 개방 공간)
+    - 4: 18m x 18m 완전 개방형 '빈 공터' (기둥 0개, 내부 벽 0개, 시원하게 트인 광장)
+    - 5: 사방 연결 초대형 '빈 공터' (기둥 0개, 인접 구역과 통째로 이어지는 광활한 평지)
     """
     if mx == 0 and my == 0:
-        return 0  # 스폰 지점은 항상 안전하고 명확한 십자 복도
+        return 4  # 초기 스폰 구역도 시원하고 쾌적한 빈 공터 보장
     h = zone_hash(mx, my)
-    return (h >> 4) % 4
+    # 빈 공터(타입 4, 5)가 약 40% 이상 생성되도록 가중치 부여
+    r = (h >> 4) % 10
+    if r in (0, 1):
+        return 0  # 클래식 넓은 복도 (20%)
+    elif r == 2:
+        return 1  # 중앙 1기둥 대형 홀 (10%)
+    elif r == 3:
+        return 2  # 와이드 룸 (10%)
+    elif r == 4:
+        return 3  # 가로 와이드 룸 (10%)
+    elif r in (5, 6, 7):
+        return 4  # 18m x 18m 빈 공터 (30%)
+    else:
+        return 5  # 사방 연결 초대형 빈 공터 (20%)
 
 
 def cell_has_pillar(gx, gy):
-    """대형 방 내부의 상징적인 백룸 콘크리트 지지 기둥 배치 판정"""
+    """대형 방 내부의 상징적인 백룸 콘크리트 지지 기둥 배치 판정 (빈 공터 및 복도는 기둥 절대 배제)"""
     if gx == 1 and gy == 1:
         return False  # 플레이어 초기 스폰 위치 기둥 배제
     mx, my = gx // 3, gy // 3
     lx, ly = gx % 3, gy % 3
     zt = get_zone_type(mx, my)
+
+    # 빈 공터(타입 4, 5) 및 일반 복도(타입 0)는 기둥을 100% 배치하지 않음 (탁 트인 빈 공터 보장)
+    if zt in (0, 4, 5):
+        return False
+
+    # 오직 타입 1, 2, 3에서만 정중앙에 1개의 얇은 기둥만 허용 (정사각형 중첩 방지)
     if zt == 1 and lx == 1 and ly == 1:
         return True  # 18m x 18m 대형 홀 정중앙 지지 기둥
     if zt == 2 and lx == 0 and ly == 1:
@@ -43,9 +64,10 @@ def get_edge_types(gx, gy):
     셀 (gx, gy)의 북쪽 경계(h_edge) 및 동쪽 경계(v_edge) 타입 판정
     반환값: 0 = 완전 개방, 1 = 솔리드 2단 벽, 2 = 출입문 (1단 인방 + 2단 상단벽)
     
-    [백룸 대형 홀 & 와이드 룸 & 무한 복도 규칙]:
-    1. 대형 홀 및 와이드 룸은 내부 벽을 완전 제거(0)하여 광활한 리미널 개방 공간을 형성합니다.
-    2. 모든 구역은 중앙 연결 통로 및 출입문을 통해 100% 끊김 없이 사통팔달로 상호 연결됩니다.
+    [백룸 빈 공터 & 대형 홀 & 무한 복도 규칙]:
+    1. 빈 공터(타입 4, 5)는 내부 벽을 완전 제거(0)하여 18m~36m 광활한 개방 공간을 형성합니다.
+    2. 클래식 복도(타입 0)도 4개 모서리 정사각형 방이 겹치지 않도록 최대 1개 방만 배치합니다.
+    3. 모든 구역은 중앙 연결 통로 및 출입문을 통해 100% 끊김 없이 사통팔달로 상호 연결됩니다.
     """
     mx, my = gx // 3, gy // 3
     lx, ly = gx % 3, gy % 3
@@ -57,12 +79,13 @@ def get_edge_types(gx, gy):
     v_edge = 1
 
     if zt == 0:
-        # [타입 0] 클래식 코너 방 & 십자 복도
-        pattern = h % 4
-        room_sw = True if pattern in (0, 1, 3) else False
-        room_se = True if pattern in (0, 2, 3) else False
-        room_nw = True if pattern in (0, 2, 3) else False
-        room_ne = True if pattern in (0, 1, 3) else False
+        # [타입 0] 넓은 복도 & 최대 1개 독립 오피스 (정사각형 방 겹침 제거)
+        pattern = h % 5
+        room_sw = (pattern == 0)
+        room_se = (pattern == 1)
+        room_nw = (pattern == 2)
+        room_ne = (pattern == 3)
+        # pattern == 4 이면 방이 전혀 없는 완전 개방형 십자 대로
 
         door_sw = (h >> 2) & 1
         door_se = (h >> 3) & 1
@@ -70,7 +93,7 @@ def get_edge_types(gx, gy):
         door_ne = (h >> 5) & 1
 
         if ly == 2:
-            h_edge = 0 if lx == 1 else 1
+            h_edge = 0 if lx == 1 else (1 if room_nw or room_ne else 0)
         elif ly == 0:
             if lx == 1:
                 h_edge = 0
@@ -87,7 +110,7 @@ def get_edge_types(gx, gy):
                 h_edge = (2 if door_ne == 0 else 1) if room_ne else 0
 
         if lx == 2:
-            v_edge = 0 if ly == 1 else 1
+            v_edge = 0 if ly == 1 else (1 if room_se or room_ne else 0)
         elif lx == 0:
             if ly == 1:
                 v_edge = 0
@@ -105,7 +128,6 @@ def get_edge_types(gx, gy):
 
     elif zt == 1:
         # [타입 1] 18m x 18m 초대형 백룸 오픈 홀
-        # 내부 수평/수직 벽은 0으로 완전 개방되어 광대한 9셀 공간 형성
         if ly == 2:
             h_edge = 2 if lx == 1 else 1
         else:
@@ -143,6 +165,32 @@ def get_edge_types(gx, gy):
             h_edge = 2 if lx == 1 else 1
         elif ly == 0:
             h_edge = 0
+
+    elif zt == 4:
+        # [타입 4] 18m x 18m 완전 개방형 '빈 공터' (Empty Plaza)
+        # 내부 벽 0개, 기둥 0개로 광활하고 시원하게 트인 평지
+        if ly == 2:
+            h_edge = 0 if lx == 1 else 1  # 북쪽 중앙 복도 개방
+        else:
+            h_edge = 0
+
+        if lx == 2:
+            v_edge = 0 if ly == 1 else 1  # 동쪽 중앙 복도 개방
+        else:
+            v_edge = 0
+
+    elif zt == 5:
+        # [타입 5] 사방 완전 개방 초대형 '빈 공터' (Grand Open Plaza)
+        # 내부 벽 0개, 기둥 0개이며, 경계도 2칸씩 널찍하게 뚫려 인접 구역과 거대한 빈 공터 형성
+        if ly == 2:
+            h_edge = 0 if lx in (0, 1) else 1
+        else:
+            h_edge = 0
+
+        if lx == 2:
+            v_edge = 0 if ly in (0, 1) else 1
+        else:
+            v_edge = 0
 
     return h_edge, v_edge
 
