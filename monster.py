@@ -12,7 +12,7 @@ class CreepySpiderMonster:
     """
     def __init__(self, parent, start_x, start_y):
         self.node = parent.attachNewNode("creepy_spider_monster")
-        self.pos = Vec3(start_x, start_y, 0.4)
+        self.pos = Vec3(start_x, start_y, 1.25)
         self.node.setPos(self.pos)
         self.anim_time = 0.0
         self.path = []
@@ -20,7 +20,7 @@ class CreepySpiderMonster:
         self.has_los = False
         self.wall_tilt = 0.0      # 0.0 = 바닥, 1.0 = 벽면 완전 밀착
         self.curr_wall_norm = Vec3(0, 0, 0)
-        self.climb_z = 0.4        # 현재 고도
+        self.climb_z = 1.25       # 긴 다리로 공중에 부유하는 기준 고도 (1.25m)
 
         black = LColor(0.02, 0.02, 0.025, 1.0)
         chitin_dark = LColor(0.035, 0.025, 0.025, 1.0)
@@ -69,19 +69,19 @@ class CreepySpiderMonster:
             eye.reparentTo(self.body_root)
             self.eyes.append(eye)
 
-        # 6. 기괴한 8개의 2단 관절 다리 (8 Multi-jointed Spindly Legs)
+        # 6. 기괴한 8개의 극도로 긴 2단 관절 다리 (Ultra-long Spindly Legs - 전폭 ~6m 초대형 거미 다리)
         # 좌측 4개 (L1, L2, L3, L4), 우측 4개 (R1, R2, R3, R4)
         self.legs = []  # [(coxa_pivot, femur_node, tibia_pivot, tibia_node, base_h, side_sign), ...]
         leg_configs = [
             # (side: -1=좌, 1=우, index, base_y, base_h, femur_p, tibia_p)
-            (-1, 0, 0.38, 45, -28, 55),    # L1 (전방 좌)
-            (1, 0, 0.38, -45, -28, 55),    # R1 (전방 우)
-            (-1, 1, 0.12, 80, -32, 60),    # L2 (전측 좌)
-            (1, 1, 0.12, -80, -32, 60),    # R2 (전측 우)
-            (-1, 2, -0.15, 105, -34, 62),  # L3 (후측 좌)
-            (1, 2, -0.15, -105, -34, 62),  # R3 (후측 우)
-            (-1, 3, -0.42, 140, -30, 58),  # L4 (후방 좌)
-            (1, 3, -0.42, -140, -30, 58),  # R4 (후방 우)
+            (-1, 0, 0.38, 45, -35, 68),    # L1 (전방 좌)
+            (1, 0, 0.38, -45, -35, 68),    # R1 (전방 우)
+            (-1, 1, 0.12, 80, -38, 72),    # L2 (전측 좌)
+            (1, 1, 0.12, -80, -38, 72),    # R2 (전측 우)
+            (-1, 2, -0.15, 105, -40, 74),  # L3 (후측 좌)
+            (1, 2, -0.15, -105, -40, 74),  # R3 (후측 우)
+            (-1, 3, -0.42, 140, -36, 70),  # L4 (후방 좌)
+            (1, 3, -0.42, -140, -36, 70),  # R4 (후방 우)
         ]
 
         for side, idx, by, base_h, fem_p, tib_p in leg_configs:
@@ -90,19 +90,19 @@ class CreepySpiderMonster:
             coxa_pivot.setPos(side * 0.42, by, 0.05)
             coxa_pivot.setH(base_h)
 
-            # 상완 허벅지 (Femur: 위쪽 대각선으로 뻗침, 길이 1.25m)
+            # 1단 상완 허벅지 (Femur: 하늘 높이 치솟는 2.6m의 긴 다리 관절)
             femur_pivot = coxa_pivot.attachNewNode("femur_pivot")
             femur_pivot.setP(fem_p)
-            femur_geom = make_cube("femur_geom", 0.11, 0.11, 1.25, chitin_dark)
-            femur_geom.setPos(0, 0, 0.60)
+            femur_geom = make_cube("femur_geom", 0.09, 0.09, 2.60, chitin_dark)
+            femur_geom.setPos(0, 0, 1.25)
             femur_geom.reparentTo(femur_pivot)
 
-            # 무릎 관절 및 하완 종아리 (Tibia: 바닥/벽면을 향해 날카롭게 꺾여 내려감, 길이 1.55m)
+            # 2단 하완 종아리 (Tibia: 바닥과 벽면을 향해 날카롭게 꺾여 뻗는 3.6m의 극도로 긴 바늘 다리)
             tibia_pivot = femur_pivot.attachNewNode("tibia_pivot")
-            tibia_pivot.setPos(0, 0, 1.22)
+            tibia_pivot.setPos(0, 0, 2.50)
             tibia_pivot.setP(tib_p)
-            tibia_geom = make_cube("tibia_geom", 0.07, 0.07, 1.55, black)
-            tibia_geom.setPos(0, 0, -0.75)
+            tibia_geom = make_cube("tibia_geom", 0.06, 0.06, 3.60, black)
+            tibia_geom.setPos(0, 0, -1.75)
             tibia_geom.reparentTo(tibia_pivot)
 
             self.legs.append({
@@ -124,7 +124,7 @@ class CreepySpiderMonster:
         self.aura_np.setPos(0, 0, 0.8)
         parent.setLight(self.aura_np)
 
-    def reset_pos(self, x, y, z=0.4):
+    def reset_pos(self, x, y, z=1.25):
         """괴물 위치 및 상태 초기화"""
         self.pos = Vec3(x, y, z)
         self.node.setPos(self.pos)
@@ -146,7 +146,7 @@ class CreepySpiderMonster:
         self.fang_r.setH(0)
         self.abdomen.setScale(1.0)
 
-    def update_pos(self, new_x, new_y, dt, dir_x, dir_y, wall_norm=None, climb_target_z=0.4):
+    def update_pos(self, new_x, new_y, dt, dir_x, dir_y, wall_norm=None, climb_target_z=1.25):
         """
         위치 갱신 및 벽 타기(Wall Crawling) 물리 적용:
         - 벽면 인접 시 벽면 법선 방향으로 몸체를 틸트하고 높은 고도(2.5~4.5m)로 수직 기어오름

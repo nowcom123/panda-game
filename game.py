@@ -331,6 +331,7 @@ class LiminalInfiniteLoop(ShowBase):
         dx = mx - px
         dy = my - py
         h = math.degrees(math.atan2(-dx, dy))
+        dist = max(0.2, math.hypot(dx, dy))
         mz = getattr(self.monster.pos, 'z', 0.4)
         p = math.degrees(math.atan2(mz + 0.25 - PLAYER_EYE_HEIGHT, dist))
         self.camera.setHpr(h, p, 0)
@@ -527,6 +528,7 @@ class LiminalInfiniteLoop(ShowBase):
             dx = mx - px
             dy = my - py
             h = math.degrees(math.atan2(-dx, dy))
+            dist = max(0.2, math.hypot(dx, dy))
             mz = getattr(self.monster.pos, 'z', 0.4)
             p = math.degrees(math.atan2(mz + 0.25 - PLAYER_EYE_HEIGHT, dist))
             self.camera.setHpr(h, p, 0)
@@ -744,15 +746,15 @@ class LiminalInfiniteLoop(ShowBase):
                 if d > 0.05:
                     wall_norm = Vec3(vx / d, vy / d, 0)
 
-        # 벽면 근접 시 (2.2m 이내) 벽면을 타고 3.6m 높이로 기어오름
+        # 벽면 근접 시 (2.2m 이내) 13m 높은 벽면을 타고 4.8m 높이로 기어오름
         # 단, 플레이어와 3.5m 이내 초근접 시 바닥으로 급강하하여 덮침
         if closest_wall_dist < 2.2 and wall_norm is not None:
             if dist_to_player > 3.5:
-                wall_climb_z = 3.6  # 높은 벽면을 타고 기어오름
+                wall_climb_z = 4.8  # 높은 13m 벽면을 타고 기어오름
             else:
-                wall_climb_z = 0.4  # 바닥으로 덮치기 위해 급강하
+                wall_climb_z = 1.25 # 바닥으로 덮치기 위해 급강하
         else:
-            wall_climb_z = 0.4
+            wall_climb_z = 1.25
 
         if t_dist > 0.05:
             ndx, ndy = tdx / t_dist, tdy / t_dist
@@ -800,7 +802,7 @@ class LiminalInfiniteLoop(ShowBase):
                 cnp.setPos(0, 0, -100)
 
         # --- 5. HUD 업데이트 (거미 괴물 위협 거리 및 벽 타기 상태 반영) ---
-        is_climbing = getattr(self.monster, 'climb_z', 0.4) > 1.5
+        is_climbing = getattr(self.monster, 'climb_z', 1.25) > 2.2
         climb_tag = " [벽 타는 중!]" if is_climbing else ""
         if dist_to_player > 32.0:
             threat = f"안전 ({dist_to_player:.0f}m){climb_tag}"
