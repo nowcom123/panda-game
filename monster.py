@@ -12,14 +12,14 @@ class LongBlackSerpent:
     """
     def __init__(self, parent, start_x, start_y):
         self.node = parent.attachNewNode("long_black_serpent")
-        self.pos = Vec3(start_x, start_y, 0.28)
+        self.pos = Vec3(start_x, start_y, 0.45)
         self.node.setPos(self.pos)
         self.anim_time = 0.0
         self.path = []
         self.path_timer = 0.0
         self.has_los = False
         self.wall_tilt = 0.0
-        self.climb_z = 0.28
+        self.climb_z = 0.45
 
         black = LColor(0.015, 0.015, 0.02, 1.0)
         scale_black = LColor(0.025, 0.025, 0.035, 1.0)
@@ -31,74 +31,74 @@ class LongBlackSerpent:
         self.tilt_root = self.node.attachNewNode("tilt_root")
         self.body_root = self.tilt_root.attachNewNode("body_root")
 
-        # 1. 뱀 머리 (Head - 전방을 향해 쐐기형으로 뻗은 사나운 독사 머리)
-        self.head = make_cube('serpent_head', 0.68, 0.88, 0.38, black)
-        self.head.setPos(0, 0.20, 0)
+        # 1. 뱀 머리 (Head - 거대하고 사나운 칠흑의 대사 머리: 폭 1.4m, 길이 1.8m)
+        self.head = make_cube('serpent_head', 1.40, 1.80, 0.72, black)
+        self.head.setPos(0, 0.40, 0)
         self.head.reparentTo(self.body_root)
 
-        # 머리 상단 비늘 능선
-        crest = make_cube('crest', 0.38, 0.70, 0.12, scale_black)
-        crest.setPos(0, 0.15, 0.22)
+        # 머리 상단 비늘 능선 (Crest)
+        crest = make_cube('crest', 0.80, 1.40, 0.22, scale_black)
+        crest.setPos(0, 0.30, 0.40)
         crest.reparentTo(self.head)
 
-        # 2. 날카로운 송곳니 (Fangs)
-        self.fang_l = make_cube('fang_l', 0.06, 0.08, 0.22, fang_ivory)
-        self.fang_l.setPos(-0.18, 0.52, -0.15)
-        self.fang_l.setP(18)
+        # 2. 거대한 날카로운 송곳니 (Giant Fangs)
+        self.fang_l = make_cube('fang_l', 0.12, 0.16, 0.42, fang_ivory)
+        self.fang_l.setPos(-0.38, 1.05, -0.30)
+        self.fang_l.setP(22)
         self.fang_l.reparentTo(self.head)
 
-        self.fang_r = make_cube('fang_r', 0.06, 0.08, 0.22, fang_ivory)
-        self.fang_r.setPos(0.18, 0.52, -0.15)
-        self.fang_r.setP(18)
+        self.fang_r = make_cube('fang_r', 0.12, 0.16, 0.42, fang_ivory)
+        self.fang_r.setPos(0.38, 1.05, -0.30)
+        self.fang_r.setP(22)
         self.fang_r.reparentTo(self.head)
 
-        # 3. 날름거리는 붉은 갈라진 혀 (Forked Tongue)
-        self.tongue = make_cube('tongue', 0.10, 0.45, 0.03, tongue_red)
-        self.tongue.setPos(0, 0.55, -0.06)
+        # 3. 날름거리는 거대 붉은 갈라진 혀 (Giant Forked Tongue)
+        self.tongue = make_cube('tongue', 0.20, 0.85, 0.05, tongue_red)
+        self.tongue.setPos(0, 1.10, -0.12)
         self.tongue.setLightOff()
         self.tongue.reparentTo(self.head)
 
-        # 4. 번뜩이는 뱀 눈 (Slit-pupil Eyes)
-        eye_l = make_cube('eye_l', 0.07, 0.06, 0.08, eye_yellow_red)
-        eye_l.setPos(-0.24, 0.32, 0.12)
+        # 4. 번뜩이는 거대 뱀 눈 (Slit-pupil Eyes)
+        eye_l = make_cube('eye_l', 0.14, 0.12, 0.16, eye_yellow_red)
+        eye_l.setPos(-0.52, 0.65, 0.24)
         eye_l.setLightOff()
         eye_l.reparentTo(self.head)
 
-        eye_r = make_cube('eye_r', 0.07, 0.06, 0.08, eye_yellow_red)
-        eye_r.setPos(0.24, 0.32, 0.12)
+        eye_r = make_cube('eye_r', 0.14, 0.12, 0.16, eye_yellow_red)
+        eye_r.setPos(0.52, 0.65, 0.24)
         eye_r.setLightOff()
         eye_r.reparentTo(self.head)
 
-        # 5. 14개의 유연한 몸통 마디 (Segmented Undulating Body, 총 연장 ~8.5m)
+        # 5. 14개의 거대 몸통 마디 (Segmented Undulating Body, 총 연장 ~13.5m 초대형 뱀)
         self.segments = []
         for i in range(14):
             t = i / 13.0
             # 머리 뒤쪽에서 굵어졌다가 꼬리로 갈수록 자연스럽게 가늘어지는 비례
             thickness = math.sin((1.0 - t * 0.85) * math.pi * 0.5)
-            sx = 0.62 * thickness
-            sy = 0.62 * (1.0 - t * 0.25)
-            sz = 0.38 * thickness
+            sx = 1.30 * thickness
+            sy = 1.05 * (1.0 - t * 0.22)
+            sz = 0.72 * thickness
 
             seg_pivot = self.body_root.attachNewNode(f"seg_pivot_{i}")
-            seg_pivot.setPos(0, -(i + 1) * 0.55, 0)
-            seg_geom = make_cube(f"seg_geom_{i}", max(0.12, sx), max(0.20, sy), max(0.10, sz), black)
+            seg_pivot.setPos(0, -(i + 1) * 0.92, 0)
+            seg_geom = make_cube(f"seg_geom_{i}", max(0.24, sx), max(0.40, sy), max(0.20, sz), black)
             seg_geom.reparentTo(seg_pivot)
             self.segments.append({
                 'pivot': seg_pivot,
                 'geom': seg_geom,
-                'base_y': -(i + 1) * 0.55,
+                'base_y': -(i + 1) * 0.92,
                 'idx': i
             })
 
         # 6. 핏빛 암흑 오라 조명
         aura_light = PointLight('serpent_aura')
-        aura_light.setColor((0.85, 0.05, 0.05, 1.0))
-        aura_light.setAttenuation((1.0, 0.05, 0.010))
+        aura_light.setColor((0.95, 0.05, 0.05, 1.0))
+        aura_light.setAttenuation((1.0, 0.025, 0.0035))
         self.aura_np = self.node.attachNewNode(aura_light)
-        self.aura_np.setPos(0, 0, 0.6)
+        self.aura_np.setPos(0, 0, 0.95)
         parent.setLight(self.aura_np)
 
-    def reset_pos(self, x, y, z=0.28):
+    def reset_pos(self, x, y, z=0.45):
         """뱀 위치 및 상태 초기화"""
         self.pos = Vec3(x, y, z)
         self.node.setPos(self.pos)
@@ -117,7 +117,7 @@ class LongBlackSerpent:
         self.head.setH(0)
         self.head.setP(0)
 
-    def update_pos(self, new_x, new_y, dt, dir_x, dir_y, wall_norm=None, climb_target_z=0.28):
+    def update_pos(self, new_x, new_y, dt, dir_x, dir_y, wall_norm=None, climb_target_z=0.45):
         """위치 갱신 및 벽 타기(Wall Crawling) 슬리더링 물리 적용"""
         self.climb_z += (climb_target_z - self.climb_z) * min(1.0, dt * 4.5)
         self.pos.x = new_x
@@ -153,8 +153,8 @@ class LongBlackSerpent:
         if is_attacking:
             # 점프스케어 공격 포즈: 머리를 바짝 쳐들고 독니와 혀를 활짝 벌림
             self.head.setP(-35)
-            self.head.setZ(0.35)
-            self.tongue.setPos(0, 0.85, -0.06)
+            self.head.setZ(0.65)
+            self.tongue.setPos(0, 1.65, -0.12)
             self.fang_l.setP(45)
             self.fang_r.setP(45)
             return
@@ -168,31 +168,31 @@ class LongBlackSerpent:
             self.head.setP(math.sin(phase * 0.5) * 4.0)
             self.head.setZ(0)
 
-            # 14개 마디 사인파 S자 파동 전파 (Sinusoidal Undulation)
+            # 14개 마디 사인파 S자 파동 전파 (Sinusoidal Undulation - 거대한 진폭)
             for seg in self.segments:
                 i = seg['idx']
                 seg_phase = phase - (i + 1) * 0.48
-                # 꼬리로 갈수록 파동의 진폭이 유연하게 확장
-                amplitude = 0.38 + (i / 14.0) * 0.32
+                # 거대한 몸집에 맞추어 꼬리로 갈수록 파동의 진폭 확장
+                amplitude = 0.65 + (i / 14.0) * 0.55
                 lateral_x = math.sin(seg_phase) * amplitude
                 seg_angle = math.cos(seg_phase) * (26.0 + i * 1.5)
 
-                seg['pivot'].setPos(lateral_x, seg['base_y'], math.sin(seg_phase * 0.5) * 0.04)
+                seg['pivot'].setPos(lateral_x, seg['base_y'], math.sin(seg_phase * 0.5) * 0.08)
                 seg['pivot'].setH(seg_angle)
 
             # 날름거리는 혀 모션
-            tongue_flick = 0.55 + abs(math.sin(phase * 2.2)) * 0.28
-            self.tongue.setPos(0, tongue_flick, -0.06)
+            tongue_flick = 1.10 + abs(math.sin(phase * 2.2)) * 0.45
+            self.tongue.setPos(0, tongue_flick, -0.12)
         else:
-            # 정지 상태: 서서히 몸체를 사리고 혀를 간헐적으로 날름거림
+            # 정지 상태: 서서히 거대 몸체를 사리고 혀를 간헐적으로 날름거림
             t = ClockObject.getGlobalClock().getFrameTime()
             self.head.setH(math.sin(t * 1.8) * 5.0)
             self.head.setP(math.sin(t * 1.2) * 3.0)
-            tongue_flick = 0.55 + abs(math.sin(t * 3.5)) * 0.18
-            self.tongue.setPos(0, tongue_flick, -0.06)
+            tongue_flick = 1.10 + abs(math.sin(t * 3.5)) * 0.30
+            self.tongue.setPos(0, tongue_flick, -0.12)
             for seg in self.segments:
                 i = seg['idx']
-                seg['pivot'].setPos(math.sin(t * 1.2 + i * 0.3) * 0.12, seg['base_y'], 0)
+                seg['pivot'].setPos(math.sin(t * 1.2 + i * 0.3) * 0.20, seg['base_y'], 0)
 
 
 class TallSkeletonMonster:

@@ -1,7 +1,8 @@
 import collections
 from panda3d.core import CardMaker, TextureStage, NodePath, LColor
 from constants import (
-    CELL_SIZE, CHUNK_CELLS, CHUNK_SIZE, TIER_HEIGHT, WALL_HEIGHT, DOOR_HEIGHT, WALL_THICKNESS
+    CELL_SIZE, CHUNK_CELLS, CHUNK_SIZE, TIER_HEIGHT, WALL_HEIGHT, DOOR_HEIGHT, WALL_THICKNESS,
+    MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
 from geometry import make_cube_to
 from world_gen import zone_hash, get_edge_types
@@ -113,6 +114,57 @@ class Chunk:
                 gy = start_gy + j
                 cell_y = gy * CELL_SIZE
                 ht, vt = get_edge_types(gx, gy)
+
+                # 맵 외곽 경계: 최북단 및 최동단은 강제 솔리드 2단 벽체로 밀폐
+                if gy == (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 1:
+                    ht = 1
+                if gx == (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 1:
+                    vt = 1
+
+                # --- (0-A) 최남단 외곽 경계벽 밀폐 (y = cell_y) ---
+                if cy == MAP_MIN_CHUNK and j == 0:
+                    b_south_1 = self.node.attachNewNode(cm_tier1.generate())
+                    b_south_1.setH(180)
+                    b_south_1.setPos(cell_x + CELL_SIZE, cell_y + half_thick, 0)
+                    b_south_1.setTexture(wall_tex)
+                    b_south_1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    b_south_2 = self.node.attachNewNode(cm_tier2.generate())
+                    b_south_2.setH(180)
+                    b_south_2.setPos(cell_x + CELL_SIZE, cell_y + half_thick, 0)
+                    b_south_2.setTexture(wall_tex)
+                    b_south_2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+
+                    cap_s = self.node.attachNewNode(cm_soffit.generate())
+                    cap_s.setP(90)
+                    cap_s.setPos(cell_x, cell_y, WALL_HEIGHT)
+                    cap_s.setTexture(wall_tex)
+
+                    b_box_s = (cell_x - half_thick, cell_y - half_thick, cell_x + CELL_SIZE + half_thick, cell_y + half_thick)
+                    self.colliders.append(b_box_s)
+                    self.cell_colliders[(gx, gy)].append(b_box_s)
+
+                # --- (0-B) 최서단 외곽 경계벽 밀폐 (x = cell_x) ---
+                if cx == MAP_MIN_CHUNK and i == 0:
+                    b_west_1 = self.node.attachNewNode(cm_tier1.generate())
+                    b_west_1.setH(-90)
+                    b_west_1.setPos(cell_x + half_thick, cell_y + CELL_SIZE, 0)
+                    b_west_1.setTexture(wall_tex)
+                    b_west_1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+                    b_west_2 = self.node.attachNewNode(cm_tier2.generate())
+                    b_west_2.setH(-90)
+                    b_west_2.setPos(cell_x + half_thick, cell_y + CELL_SIZE, 0)
+                    b_west_2.setTexture(wall_tex)
+                    b_west_2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
+
+                    cap_w = self.node.attachNewNode(cm_soffit.generate())
+                    cap_w.setP(90)
+                    cap_w.setH(90)
+                    cap_w.setPos(cell_x, cell_y, WALL_HEIGHT)
+                    cap_w.setTexture(wall_tex)
+
+                    b_box_w = (cell_x - half_thick, cell_y - half_thick, cell_x + half_thick, cell_y + CELL_SIZE + half_thick)
+                    self.colliders.append(b_box_w)
+                    self.cell_colliders[(gx, gy)].append(b_box_w)
 
                 # --- (1) 수평 벽체 (Horizontal Wall - 북쪽 경계, y = wy) ---
                 wy = cell_y + CELL_SIZE
@@ -291,6 +343,11 @@ class Chunk:
             for j in range(CHUNK_CELLS):
                 gy = start_gy + j
                 cell_y = gy * CELL_SIZE
+
+                # 촛불 50% 감축 (공간 해시 비트 체크로 절반만 스폰 - 어둠의 공포감 극대화)
+                if (zone_hash(gx, gy) >> 6) % 2 != 0:
+                    continue
+
                 mx, my = gx // 3, gy // 3
                 lx, ly = gx % 3, gy % 3
                 h = zone_hash(mx, my)

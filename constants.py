@@ -34,3 +34,8 @@ WALK_SPEED = 9.0        # 일반 걷기 속도 (광폭 복도에 맞춘 쾌적�
 SPRINT_SPEED = 15.0     # Shift 달리기 속도
 RENDER_RADIUS = 2       # 청크 렌더링 반경 (5x5 = 25청크)
 FOG_COLOR = LColor(0.002, 0.002, 0.003, 1.0) # 칠흑 같은 암흑 톤 (완전한 어둠)
+
+# 맵 크기 제한 (7x7 청크 = 252m x 252m, 총 1,764개 방/복도로 이루어진 광활한 폐쇄 시설)
+MAP_MIN_CHUNK = -3
+MAP_MAX_CHUNK = 3
+

@@ -2,16 +2,18 @@ import math
 import concurrent.futures
 from direct.showbase.ShowBase import ShowBase
 from direct.gui.OnscreenText import OnscreenText
+import random
 from panda3d.core import (
     WindowProperties, Vec3, SamplerState, Fog,
-    AmbientLight, PointLight, TextNode, LColor, KeyboardButton
+    AmbientLight, PointLight, Spotlight, PerspectiveLens, TextNode, LColor, KeyboardButton
 )
 import simplepbr
 
 # 모듈화된 하위 시스템 임포트 (PRC 설정은 constants에서 자동 초기화)
 from constants import (
     CELL_SIZE, CHUNK_SIZE, CHUNK_CELLS, WALL_HEIGHT, PLAYER_RADIUS,
-    PLAYER_EYE_HEIGHT, WALK_SPEED, SPRINT_SPEED, RENDER_RADIUS, FOG_COLOR
+    PLAYER_EYE_HEIGHT, WALK_SPEED, SPRINT_SPEED, RENDER_RADIUS, FOG_COLOR,
+    MAP_MIN_CHUNK, MAP_MAX_CHUNK, WALL_THICKNESS
 )
 from world_gen import find_cell_path, check_line_of_sight
 from chunk import Chunk
@@ -22,14 +24,15 @@ class LiminalInfiniteLoop(ShowBase):
     def __init__(self):
         super().__init__()
 
-        # PBR 렌더링 최적화 (손전등 + 촛불2 + 뱀오라 + 해골오라 등 6개 슬롯 지원)
-        simplepbr.init(
-            max_lights=6,
-            use_normal_maps=False,
-            use_emission_maps=False,
-            use_occlusion_maps=False,
-            enable_shadows=False
-        )
+        # PBR 렌더링 최적화 (직선 손전등 + 근접 필라이트 + 촛불2 + 뱀오라 + 해골오라 등 8개 슬롯 지원)
+        if hasattr(self, 'win') and self.win is not None:
+            simplepbr.init(
+                max_lights=8,
+                use_normal_maps=False,
+                use_emission_maps=False,
+                use_occlusion_maps=False,
+                enable_shadows=False
+            )
 
         # 1. 카메라 가시거리 및 안개 설정 (짙은 안개 한계 거리 65m에 맞춘 하드웨어 클리핑으로 원거리 오버드로우 0%)
         self.camLens.setNearFar(0.2, 65.0)
@@ -73,10 +76,12 @@ class LiminalInfiniteLoop(ShowBase):
         self.stamina = self.max_stamina
         self.stamina_exhausted = False
 
-        # 적 1: 몸통이 긴 칠흑의 거대 뱀 (플레이어 뒤쪽 복도 28m 지점)
-        self.serpent = LongBlackSerpent(self.render, spawn_x, spawn_y - 28.0)
-        # 적 2: 키 크고 팔이 매우 긴 쩍 벌어진 해골 괴물 (다른 복도 34m 지점)
-        self.skeleton = TallSkeletonMonster(self.render, spawn_x + 30.0, spawn_y + 12.0)
+        # 적 1 & 적 2: 항상 유효한 복도 구역 중 무작위 랜덤 스폰 (26m~46m 거리 유지)
+        s_spawn = self.get_random_monster_spawn(spawn_x, spawn_y)
+        k_spawn = self.get_random_monster_spawn(spawn_x, spawn_y, exclude_pos=s_spawn)
+
+        self.serpent = LongBlackSerpent(self.render, s_spawn[0], s_spawn[1])
+        self.skeleton = TallSkeletonMonster(self.render, k_spawn[0], k_spawn[1])
         self.monsters = [self.serpent, self.skeleton]
 
         # 초기 청크 전체 로드 (멀티스레드 병렬 로딩)
@@ -92,6 +97,28 @@ class LiminalInfiniteLoop(ShowBase):
         for _ in range(2):
             self.taskMgr.step()
 
+    def get_random_monster_spawn(self, px, py, min_dist=26.0, max_dist=46.0, exclude_pos=None):
+        """플레이어로부터 min_dist~max_dist 사이의 유효한 복도 셀 중심 랜덤 스폰 좌표 산출"""
+        min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 1
+        max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 2
+        candidates = []
+        for gx in range(min_cell, max_cell + 1):
+            for gy in range(min_cell, max_cell + 1):
+                # 중앙 주 복도(lx=1 또는 ly=1)는 벽체 없이 100% 개방 보장
+                if gx % 3 == 1 or gy % 3 == 1:
+                    cx = (gx + 0.5) * CELL_SIZE
+                    cy = (gy + 0.5) * CELL_SIZE
+                    d = math.hypot(cx - px, cy - py)
+                    if min_dist <= d <= max_dist:
+                        if exclude_pos is not None:
+                            ed = math.hypot(cx - exclude_pos[0], cy - exclude_pos[1])
+                            if ed < 15.0:
+                                continue
+                        candidates.append((cx, cy))
+        if candidates:
+            return random.choice(candidates)
+        return (px + 30.0, py + 30.0)
+
     def setup_fog(self):
         """칠흑 같은 암흑 안개 및 배경색 설정"""
         self.liminal_fog = Fog("liminal_fog")
@@ -103,19 +130,31 @@ class LiminalInfiniteLoop(ShowBase):
         self.win.setClearColor(FOG_COLOR)
 
     def setup_lighting(self):
-        """완전한 암흑 분위기 (최소 앰비언트 + 플레이어 손전등 + 촛불 동적 조명 풀)"""
+        """완전한 암흑 분위기 (최소 앰비언트 + 플레이어 강력 직선 스포트라이트 + 촛불 동적 조명 풀)"""
         alight = AmbientLight('ambient_light')
-        alight.setColor((0.006, 0.006, 0.008, 1.0))
+        alight.setColor((0.005, 0.005, 0.007, 1.0))
         alnp = self.render.attachNewNode(alight)
         self.render.setLight(alnp)
 
-        # 플레이어 손전등 (주변 벽체와 바닥을 비추는 좁고 날카로운 빔)
-        plight = PointLight('player_light')
-        plight.setColor((1.25, 1.20, 1.05, 1.0))
-        plight.setAttenuation((1.0, 0.045, 0.0028))
-        self.pl_np = self.camera.attachNewNode(plight)
-        self.pl_np.setPos(0, 0, 0.2)
+        # 플레이어 손전등: 전방으로 곧게 뻗어나가는 강력한 원추형 직선 빔 (Spotlight)
+        spotlight = Spotlight('player_flashlight')
+        spotlight.setColor((2.85, 2.70, 2.35, 1.0)) # 밝기 대폭 상향
+        spot_lens = PerspectiveLens()
+        spot_lens.setFov(44.0)                     # 직선으로 뻗는 집중 빔 각도
+        spot_lens.setNearFar(0.15, 65.0)           # 65m 안개 한계까지 관통
+        spotlight.setLens(spot_lens)
+        spotlight.setAttenuation((1.0, 0.015, 0.0006))
+        self.pl_np = self.camera.attachNewNode(spotlight)
+        self.pl_np.setPos(0.25, 0.35, -0.15)       # 카메라 오른손 전방에 장착
         self.render.setLight(self.pl_np)
+
+        # 근거리 보조 조명 (플레이어 발밑 극소 반경만 은은하게 비춤)
+        fill_light = PointLight('player_fill')
+        fill_light.setColor((0.18, 0.16, 0.14, 1.0))
+        fill_light.setAttenuation((1.0, 0.28, 0.08))
+        self.fill_np = self.camera.attachNewNode(fill_light)
+        self.fill_np.setPos(0, 0, -0.1)
+        self.render.setLight(self.fill_np)
 
         # 촛불 동적 포인트 라이트 풀 (플레이어 주변 가장 가까운 2개 촛대에 실시간 바인딩 - 셰이더 부하 최소화)
         self.candle_lights = []
@@ -310,9 +349,11 @@ class LiminalInfiniteLoop(ShowBase):
         self.killer_monster = None
         self.last_move_dir = Vec3(0, 0, 0)
 
-        # 괴물 2종 위치 리셋
-        self.serpent.reset_pos(spawn_x, spawn_y - 28.0)
-        self.skeleton.reset_pos(spawn_x + 30.0, spawn_y + 12.0)
+        # 괴물 2종 위치 랜덤 리셋 (항상 무작위 새로운 복도 위치)
+        s_spawn = self.get_random_monster_spawn(spawn_x, spawn_y)
+        k_spawn = self.get_random_monster_spawn(spawn_x, spawn_y, exclude_pos=s_spawn)
+        self.serpent.reset_pos(s_spawn[0], s_spawn[1])
+        self.skeleton.reset_pos(k_spawn[0], k_spawn[1])
 
         # 안개 및 배경색 복구
         self.liminal_fog.setColor(FOG_COLOR)
@@ -376,11 +417,14 @@ class LiminalInfiniteLoop(ShowBase):
 
         self.last_chunk = (player_cx, player_cy)
 
-        # 5x5 활성 청크 영역 (반경 2 = 105m x 105m 영역 커버)
+        # 5x5 활성 청크 영역 (반경 2, 7x7 맵 경계 MAP_MIN_CHUNK ~ MAP_MAX_CHUNK 내부로 제한)
         needed_chunks = set()
         for dx in range(-RENDER_RADIUS, RENDER_RADIUS + 1):
             for dy in range(-RENDER_RADIUS, RENDER_RADIUS + 1):
-                needed_chunks.add((player_cx + dx, player_cy + dy))
+                cx = player_cx + dx
+                cy = player_cy + dy
+                if MAP_MIN_CHUNK <= cx <= MAP_MAX_CHUNK and MAP_MIN_CHUNK <= cy <= MAP_MAX_CHUNK:
+                    needed_chunks.add((cx, cy))
 
         # 이동 벡터 기반 전방 예측 청크 (Lookahead Pre-caching)
         if hasattr(self, 'last_move_dir') and self.last_move_dir.lengthSquared() > 0.01:
@@ -390,7 +434,10 @@ class LiminalInfiniteLoop(ShowBase):
             pred_cy = int(math.floor(pred_y / CHUNK_SIZE))
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
-                    needed_chunks.add((pred_cx + dx, pred_cy + dy))
+                    cx = pred_cx + dx
+                    cy = pred_cy + dy
+                    if MAP_MIN_CHUNK <= cx <= MAP_MAX_CHUNK and MAP_MIN_CHUNK <= cy <= MAP_MAX_CHUNK:
+                        needed_chunks.add((cx, cy))
 
         # 가시거리 밖으로 벗어난 청크 안전 해제
         chunks_to_remove = [coord for coord in self.chunks if coord not in needed_chunks]
@@ -527,6 +574,12 @@ class LiminalInfiniteLoop(ShowBase):
                             py = max_y + r
             if not hit:
                 break
+
+        # 맵 외곽 절대 경계 내부로 클램핑 (252m x 252m 경계 밖 추락/탈출 100% 차단)
+        min_bound = MAP_MIN_CHUNK * CHUNK_SIZE + WALL_THICKNESS * 0.5 + radius
+        max_bound = (MAP_MAX_CHUNK + 1) * CHUNK_SIZE - WALL_THICKNESS * 0.5 - radius
+        px = max(min_bound, min(max_bound, px))
+        py = max(min_bound, min(max_bound, py))
 
         return px, py
 
@@ -749,10 +802,10 @@ class LiminalInfiniteLoop(ShowBase):
                 if d > 0.05:
                     s_wall_norm = Vec3(vx / d, vy / d, 0)
 
-        if s_closest_wall < 2.0 and s_wall_norm is not None:
-            s_climb_z = 3.6 if dist_serpent > 3.5 else 0.28
+        if s_closest_wall < 2.2 and s_wall_norm is not None:
+            s_climb_z = 4.2 if dist_serpent > 4.0 else 0.45
         else:
-            s_climb_z = 0.28
+            s_climb_z = 0.45
 
         if s_tdist > 0.05:
             sndx, sndy = s_tdx / s_tdist, s_tdy / s_tdist
@@ -861,25 +914,11 @@ class LiminalInfiniteLoop(ShowBase):
             else:
                 cnp.setPos(0, 0, -100)
 
-        # --- 5. HUD 업데이트 (뱀 & 해골 위협 거리 및 상태 반영) ---
-        s_climbing = getattr(self.serpent, 'climb_z', 0.28) > 1.5
-        s_tag = " [벽타기]" if s_climbing else ""
-        if dist_serpent < 12.0 or self.serpent.has_los:
-            s_msg = f"위험({dist_serpent:.0f}m{s_tag})"
-        else:
-            s_msg = f"{dist_serpent:.0f}m{s_tag}"
-
-        if dist_skeleton < 14.0 or self.skeleton.has_los:
-            k_msg = f"위험({dist_skeleton:.0f}m)"
-        else:
-            k_msg = f"{dist_skeleton:.0f}m"
-
-        threat_fg = (1.0, 0.15, 0.15, 1.0) if (self.serpent.has_los or self.skeleton.has_los or min(dist_serpent, dist_skeleton) < 12.0) else (1.0, 0.85, 0.2, 0.95)
-
-        new_hud = f"위치: X={px:.1f}, Y={py:.1f} | 뱀: {s_msg} | 해골: {k_msg} | 활성: {self.rendered_chunk_count}/{self.total_chunk_count} 청크"
+        # --- 5. HUD 업데이트 (괴물 거리 및 위치 표시 완전 금지 - 순수 미지의 공포감 유지) ---
+        new_hud = f"위치: X={px:.1f}, Y={py:.1f} | 활성: {self.rendered_chunk_count}/{self.total_chunk_count} 청크"
         if new_hud != self.last_hud_text:
             self.hud_text.setText(new_hud)
-            self.hud_text.setFg(threat_fg)
+            self.hud_text.setFg((0.95, 0.95, 0.95, 0.9))
             self.last_hud_text = new_hud
 
         # --- 6. 스테미나 게이지 실시간 갱신 ---
