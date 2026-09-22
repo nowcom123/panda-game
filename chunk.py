@@ -4,38 +4,9 @@ from constants import (
     CELL_SIZE, CHUNK_CELLS, CHUNK_SIZE, TIER_HEIGHT, WALL_HEIGHT, DOOR_HEIGHT, WALL_THICKNESS,
     MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
-from geometry import make_cube_to
 from world_gen import zone_hash, get_edge_types
 
-_STAND_TEMPLATE = None
-_FLAME_TEMPLATE = None
 
-def _get_candle_templates():
-    """촛대 바디 및 불꽃 원형(Prototype) 지연 생성 및 캐싱 (청크당 생성시간 79ms -> 1.3ms 단축)"""
-    global _STAND_TEMPLATE, _FLAME_TEMPLATE
-    if _STAND_TEMPLATE is None:
-        iron_col = LColor(0.08, 0.08, 0.09, 1.0)
-        wax_col = LColor(0.88, 0.84, 0.72, 1.0)
-        wick_col = LColor(0.04, 0.04, 0.04, 1.0)
-        _STAND_TEMPLATE = NodePath("candle_stand_proto")
-        make_cube_to(_STAND_TEMPLATE, 0.44, 0.44, 0.05, iron_col, 0, 0, 0.025)
-        make_cube_to(_STAND_TEMPLATE, 0.28, 0.28, 0.06, iron_col, 0, 0, 0.08)
-        make_cube_to(_STAND_TEMPLATE, 0.10, 0.10, 1.15, iron_col, 0, 0, 0.685)
-        make_cube_to(_STAND_TEMPLATE, 0.38, 0.38, 0.04, iron_col, 0, 0, 1.28)
-        make_cube_to(_STAND_TEMPLATE, 0.16, 0.16, 0.32, wax_col, 0, 0, 1.46)
-        make_cube_to(_STAND_TEMPLATE, 0.02, 0.02, 0.06, wick_col, 0, 0, 1.65)
-        _STAND_TEMPLATE.flattenStrong()
-
-    if _FLAME_TEMPLATE is None:
-        flame_out_col = LColor(1.0, 0.62, 0.08, 1.0)
-        flame_in_col = LColor(1.0, 0.96, 0.75, 1.0)
-        _FLAME_TEMPLATE = NodePath("candle_flame_proto")
-        make_cube_to(_FLAME_TEMPLATE, 0.08, 0.08, 0.18, flame_out_col, 0, 0, 1.76, rot_h=45)
-        make_cube_to(_FLAME_TEMPLATE, 0.045, 0.045, 0.11, flame_in_col, 0, 0, 1.75)
-        _FLAME_TEMPLATE.flattenStrong()
-        _FLAME_TEMPLATE.setLightOff()
-
-    return _STAND_TEMPLATE, _FLAME_TEMPLATE
 
 
 class Chunk:
@@ -333,84 +304,7 @@ class Chunk:
 
         # 4. 드로우 콜 최적화 (청크 벽체 및 바닥/천장 지오메트리 병합)
         self.node.flattenStrong()
-
-        # 5. 절차적 3D 촛대 및 자체 발광 촛불 배치 (사전 빌드 원형 인스턴싱으로 0.2ms 빌드)
         self.candle_positions = []
-        chunk_candles = []
-        for i in range(CHUNK_CELLS):
-            gx = start_gx + i
-            cell_x = gx * CELL_SIZE
-            for j in range(CHUNK_CELLS):
-                gy = start_gy + j
-                cell_y = gy * CELL_SIZE
-
-                # 촛불 50% 감축 (공간 해시 비트 체크로 절반만 스폰 - 어둠의 공포감 극대화)
-                if (zone_hash(gx, gy) >> 6) % 2 != 0:
-                    continue
-
-                mx, my = gx // 3, gy // 3
-                lx, ly = gx % 3, gy % 3
-                h = zone_hash(mx, my)
-                pattern = h % 4
-                room_sw = pattern in (0, 1, 3)
-                room_se = pattern in (0, 2, 3)
-                room_nw = pattern in (0, 2, 3)
-                room_ne = pattern in (0, 1, 3)
-
-                # (A) 중심 십자 교차로 복도 (lx=1, ly=1): 모서리 인근에 고딕 촛대 배치
-                if lx == 1 and ly == 1:
-                    corner_idx = (h >> 3) % 4
-                    if corner_idx == 0:
-                        cx_pos = cell_x + 1.25
-                        cy_pos = cell_y + 1.25
-                    elif corner_idx == 1:
-                        cx_pos = cell_x + CELL_SIZE - 1.25
-                        cy_pos = cell_y + 1.25
-                    elif corner_idx == 2:
-                        cx_pos = cell_x + 1.25
-                        cy_pos = cell_y + CELL_SIZE - 1.25
-                    else:
-                        cx_pos = cell_x + CELL_SIZE - 1.25
-                        cy_pos = cell_y + CELL_SIZE - 1.25
-                    chunk_candles.append((cx_pos, cy_pos, gx, gy))
-
-                # (B) 사방이 막힌 독립 닫힌 방: 방 중심부에 제단 촛대 배치
-                elif lx == 0 and ly == 0 and room_sw:
-                    chunk_candles.append((cell_x + CELL_SIZE * 0.5, cell_y + CELL_SIZE * 0.5, gx, gy))
-                elif lx == 2 and ly == 0 and room_se:
-                    chunk_candles.append((cell_x + CELL_SIZE * 0.5, cell_y + CELL_SIZE * 0.5, gx, gy))
-                elif lx == 0 and ly == 2 and room_nw:
-                    chunk_candles.append((cell_x + CELL_SIZE * 0.5, cell_y + CELL_SIZE * 0.5, gx, gy))
-                elif lx == 2 and ly == 2 and room_ne:
-                    chunk_candles.append((cell_x + CELL_SIZE * 0.5, cell_y + CELL_SIZE * 0.5, gx, gy))
-
-        if chunk_candles:
-            stand_proto, flame_proto = _get_candle_templates()
-            candle_root = self.node.attachNewNode("candles")
-            stands_batch = candle_root.attachNewNode("stands")
-            flames_batch = candle_root.attachNewNode("flames")
-
-            for cx_pos, cy_pos, cgx, cgy in chunk_candles:
-                self.candle_positions.append((cx_pos, cy_pos, 1.76))
-                # 촛대 충돌체 등록 (해당 셀에 정확한 공간 인덱싱)
-                cand_box = (
-                    cx_pos - 0.22, cy_pos - 0.22,
-                    cx_pos + 0.22, cy_pos + 0.22
-                )
-                self.colliders.append(cand_box)
-                self.cell_colliders[(cgx, cgy)].append(cand_box)
-
-                # 원형 템플릿 초고속 인스턴스 복제 (C++ 레벨 인스턴싱)
-                s_inst = stand_proto.copyTo(stands_batch)
-                s_inst.setPos(cx_pos, cy_pos, 0)
-
-                f_inst = flame_proto.copyTo(flames_batch)
-                f_inst.setPos(cx_pos, cy_pos, 0)
-
-            # 촛대 및 불꽃 지오메트리 일괄 병합 (단 2개의 드로우 콜로 렌더 파이프라인 극대화)
-            stands_batch.flattenStrong()
-            flames_batch.flattenStrong()
-            flames_batch.setLightOff()
 
     def set_visible(self, visible):
         """1인칭 시야 렌더링 온/오프 상태 전환 (Panda3D 렌더 패스 스킵)"""

@@ -18,6 +18,7 @@ from constants import (
 from world_gen import find_cell_path, check_line_of_sight
 from chunk import Chunk
 from monster import LongBlackSerpent, TallSkeletonMonster
+from geometry import make_cube_to
 
 
 class LiminalInfiniteLoop(ShowBase):
@@ -64,6 +65,17 @@ class LiminalInfiniteLoop(ShowBase):
 
         # 6. 플레이어 및 추격 괴물 2종 초기 상태
         self.game_over = False
+        self.game_won = False
+        self.time_limit = 60.0
+        self.time_left = self.time_limit
+        self.max_ammo = 12
+        self.ammo = self.max_ammo
+        self.shoot_cooldown = 0.0
+        self.recoil_timer = 0.0
+        self.muzzle_timer = 0.0
+        self.hit_marker_timer = 0.0
+        self.bobbing_time = 0.0
+
         self.heading = 0.0
         self.pitch = 0.0
         spawn_x = 1.5 * CELL_SIZE
@@ -83,6 +95,12 @@ class LiminalInfiniteLoop(ShowBase):
         self.serpent = LongBlackSerpent(self.render, s_spawn[0], s_spawn[1])
         self.skeleton = TallSkeletonMonster(self.render, k_spawn[0], k_spawn[1])
         self.monsters = [self.serpent, self.skeleton]
+
+        # 스폰 지역과 먼 유효 복도에 완전 랜덤 비상 탈출구 생성
+        self.setup_escape_portal()
+
+        # 1인칭 듀얼 뷰모델 (왼손 손전등, 오른손 12발 권총)
+        self.setup_viewmodel()
 
         # 초기 청크 전체 로드 (멀티스레드 병렬 로딩)
         self.update_chunks(force=True)
@@ -119,6 +137,207 @@ class LiminalInfiniteLoop(ShowBase):
             return random.choice(candidates)
         return (px + 30.0, py + 30.0)
 
+    def setup_escape_portal(self):
+        """스폰 지점(9.0, 9.0)으로부터 최소 70m 이상 떨어진 원거리 복도에 랜덤 비상 탈출구 생성"""
+        min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 1
+        max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 2
+        candidates = []
+        spawn_x = 1.5 * CELL_SIZE
+        spawn_y = 1.5 * CELL_SIZE
+        for gx in range(min_cell, max_cell + 1):
+            for gy in range(min_cell, max_cell + 1):
+                if gx % 3 == 1 or gy % 3 == 1:
+                    cx = (gx + 0.5) * CELL_SIZE
+                    cy = (gy + 0.5) * CELL_SIZE
+                    d = math.hypot(cx - spawn_x, cy - spawn_y)
+                    if d >= 70.0:
+                        candidates.append((cx, cy))
+        if candidates:
+            self.escape_pos = random.choice(candidates)
+        else:
+            self.escape_pos = (spawn_x + 75.0, spawn_y + 75.0)
+
+        if hasattr(self, 'escape_portal_np') and self.escape_portal_np:
+            self.escape_portal_np.removeNode()
+
+        self.escape_portal_np = self.world_root.attachNewNode("escape_portal")
+        ex, ey = self.escape_pos
+        self.escape_portal_np.setPos(ex, ey, 0)
+
+        emerald_bright = LColor(0.18, 1.0, 0.48, 1.0)
+        emerald_dark = LColor(0.05, 0.42, 0.16, 1.0)
+
+        # 1. 비상구 게이트 프레임 (너비 2.6m, 높이 3.4m)
+        make_cube_to(self.escape_portal_np, 0.22, 0.30, 3.4, emerald_dark, -1.3, 0, 1.7)
+        make_cube_to(self.escape_portal_np, 0.22, 0.30, 3.4, emerald_dark, 1.3, 0, 1.7)
+        make_cube_to(self.escape_portal_np, 2.8, 0.30, 0.25, emerald_dark, 0, 0, 3.4)
+
+        # 2. 발광 EXIT 비상탈출 간판
+        sign = make_cube_to(self.escape_portal_np, 1.8, 0.18, 0.45, emerald_bright, 0, 0, 3.8)
+        sign.setLightOff()
+
+        # 3. 신비로운 초록빛 탈출 포탈 면
+        portal_plane = make_cube_to(self.escape_portal_np, 2.3, 0.08, 3.2, emerald_bright, 0, 0, 1.6)
+        portal_plane.setLightOff()
+
+        # 4. 13m 천장까지 솟구치는 빛기둥
+        pillar = make_cube_to(self.escape_portal_np, 0.16, 0.16, WALL_HEIGHT, emerald_bright, 0, 0, WALL_HEIGHT * 0.5)
+        pillar.setLightOff()
+
+        # 5. 에메랄드 원거리 비콘 라이트 (벽체 반사로 원거리 복도에서 유인)
+        exit_light = PointLight('exit_beacon')
+        exit_light.setColor((0.35, 2.4, 0.8, 1.0))
+        exit_light.setAttenuation((1.0, 0.035, 0.0035))
+        self.exit_light_np = self.escape_portal_np.attachNewNode(exit_light)
+        self.exit_light_np.setPos(0, 0, 1.8)
+        self.render.setLight(self.exit_light_np)
+
+    def setup_viewmodel(self):
+        """1인칭 듀얼 뷰모델: 왼손 손전등 & 오른손 12발 권총"""
+        if hasattr(self, 'vm_root') and self.vm_root:
+            self.vm_root.removeNode()
+
+        self.vm_root = self.camera.attachNewNode("viewmodel_root")
+
+        # --- (A) 왼손: 택티컬 손전등 ---
+        self.vm_flashlight = self.vm_root.attachNewNode("vm_flashlight")
+        self.vm_flashlight.setPos(-0.28, 0.62, -0.24)
+        self.vm_flashlight.setHpr(-3.5, 2.0, 0)
+
+        fl_body_col = LColor(0.12, 0.12, 0.14, 1.0)
+        fl_ring_col = LColor(0.28, 0.30, 0.34, 1.0)
+        fl_lens_col = LColor(1.0, 0.98, 0.88, 1.0)
+
+        # 손잡이 몸체
+        make_cube_to(self.vm_flashlight, 0.08, 0.28, 0.08, fl_body_col, 0, 0, 0)
+        # 렌즈 베젤 헤드
+        make_cube_to(self.vm_flashlight, 0.11, 0.09, 0.11, fl_ring_col, 0, 0.17, 0)
+        # 발광 렌즈면
+        glass = make_cube_to(self.vm_flashlight, 0.095, 0.02, 0.095, fl_lens_col, 0, 0.22, 0)
+        glass.setLightOff()
+
+        # 손전등 Spotlight: 왼손 손전등 헤드에서 전방으로 직진 빔 방출
+        spotlight = Spotlight('player_flashlight')
+        spotlight.setColor((2.85, 2.70, 2.35, 1.0))
+        spot_lens = PerspectiveLens()
+        spot_lens.setFov(44.0)
+        spot_lens.setNearFar(0.15, 65.0)
+        spotlight.setLens(spot_lens)
+        spotlight.setAttenuation((1.0, 0.015, 0.0006))
+        self.pl_np = self.vm_flashlight.attachNewNode(spotlight)
+        self.pl_np.setPos(0, 0.24, 0)
+        self.render.setLight(self.pl_np)
+
+        # 근거리 보조 조명
+        fill_light = PointLight('player_fill')
+        fill_light.setColor((0.18, 0.16, 0.14, 1.0))
+        fill_light.setAttenuation((1.0, 0.28, 0.08))
+        self.fill_np = self.vm_flashlight.attachNewNode(fill_light)
+        self.fill_np.setPos(0, 0.10, 0)
+        self.render.setLight(self.fill_np)
+
+        # --- (B) 오른손: 12발 권총 ---
+        self.vm_pistol = self.vm_root.attachNewNode("vm_pistol")
+        self.vm_pistol.setPos(0.26, 0.58, -0.22)
+        self.vm_pistol.setHpr(3.0, 1.5, 0)
+
+        # 반동 애니메이션 피벗 노드
+        self.recoil_node = self.vm_pistol.attachNewNode("recoil_node")
+
+        steel_dark = LColor(0.10, 0.10, 0.12, 1.0)
+        steel_slide = LColor(0.22, 0.23, 0.26, 1.0)
+        grip_col = LColor(0.06, 0.06, 0.07, 1.0)
+        tritium_green = LColor(0.35, 1.0, 0.40, 1.0)
+
+        # 슬라이드 & 리시버
+        make_cube_to(self.recoil_node, 0.065, 0.30, 0.09, steel_slide, 0, 0.05, 0.04)
+        # 총열 팁
+        make_cube_to(self.recoil_node, 0.045, 0.08, 0.045, steel_dark, 0, 0.22, 0.035)
+        # 권총 그립 (각도 기울임)
+        grip = make_cube_to(self.recoil_node, 0.058, 0.11, 0.20, grip_col, 0, -0.06, -0.09)
+        grip.setP(16)
+        # 방아쇠울 & 방아쇠
+        make_cube_to(self.recoil_node, 0.030, 0.08, 0.06, steel_dark, 0, 0.04, -0.04)
+
+        # 전방 트리튬 가늠쇠 (자체 발광 녹색 도트)
+        front_sight = make_cube_to(self.recoil_node, 0.012, 0.02, 0.02, tritium_green, 0, 0.19, 0.09)
+        front_sight.setLightOff()
+
+        # 후방 가늠자
+        r_sight1 = make_cube_to(self.recoil_node, 0.012, 0.015, 0.02, tritium_green, -0.022, -0.09, 0.09)
+        r_sight2 = make_cube_to(self.recoil_node, 0.012, 0.015, 0.02, tritium_green, 0.022, -0.09, 0.09)
+        r_sight1.setLightOff()
+        r_sight2.setLightOff()
+
+        # 총구 화염 지오메트리 (발사 시 순간 노출)
+        self.muzzle_flash_geom = make_cube_to(self.recoil_node, 0.16, 0.22, 0.16, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.34, 0.04, rot_h=45)
+        self.muzzle_flash_geom.setLightOff()
+        self.muzzle_flash_geom.hide()
+
+        # 총구 화염 동적 조명
+        self.muzzle_light = PointLight('muzzle_light')
+        self.muzzle_light.setColor((2.8, 2.2, 0.9, 1.0))
+        self.muzzle_light.setAttenuation((1.0, 0.08, 0.015))
+        self.muzzle_light_np = self.recoil_node.attachNewNode(self.muzzle_light)
+        self.muzzle_light_np.setPos(0, 0.35, 0.04)
+
+    def shoot_pistol(self):
+        """마우스 좌클릭 시 12발 권총 사격 및 적중 시 0.5초 스턴"""
+        if self.game_over or self.game_won:
+            return
+        if self.shoot_cooldown > 0.0:
+            return
+
+        if self.ammo <= 0:
+            # 탄약 고갈 (공이치기 찰칵)
+            self.show_hit_marker("탄약 소진! (0/12)", (1.0, 0.3, 0.3, 1.0))
+            self.shoot_cooldown = 0.35
+            return
+
+        self.ammo -= 1
+        self.shoot_cooldown = 0.22
+        self.recoil_timer = 0.10
+        self.muzzle_timer = 0.04
+        self.muzzle_flash_geom.show()
+        self.render.setLight(self.muzzle_light_np)
+
+        # 탄약 HUD 갱신
+        self.update_ammo_ui()
+
+        # 전방 레이캐스트 히트스캔
+        ray_origin = self.camera.getPos()
+        ray_dir = self.camera.getQuat().getForward()
+
+        hit_s, dist_s = self.serpent.is_hit_by_ray(ray_origin, ray_dir)
+        hit_k, dist_k = self.skeleton.is_hit_by_ray(ray_origin, ray_dir)
+
+        if hit_s and hit_k:
+            if dist_s <= dist_k:
+                hit_k = False
+            else:
+                hit_s = False
+
+        if hit_s:
+            self.serpent.stun(0.5)
+            self.show_hit_marker("적중! 뱀 괴물 0.5초 기절!", (1.0, 0.85, 0.2, 1.0))
+        elif hit_k:
+            self.skeleton.stun(0.5)
+            self.show_hit_marker("적중! 해골 괴물 0.5초 기절!", (0.4, 0.95, 1.0, 1.0))
+
+    def show_hit_marker(self, text, color):
+        """피격/적중 알림 HUD 일시 표시"""
+        self.hit_marker_text.setText(text)
+        self.hit_marker_text.setFg(color)
+        self.hit_marker_timer = 0.65
+
+    def update_ammo_ui(self):
+        """탄약 HUD 게이지 갱신"""
+        self.ammo_text.setText(f"[ 탄약: {self.ammo} / {self.max_ammo} ]")
+        if self.ammo <= 3:
+            self.ammo_text.setFg((1.0, 0.25, 0.25, 1.0))
+        else:
+            self.ammo_text.setFg((1.0, 0.90, 0.35, 1.0))
+
     def setup_fog(self):
         """칠흑 같은 암흑 안개 및 배경색 설정"""
         self.liminal_fog = Fog("liminal_fog")
@@ -130,44 +349,11 @@ class LiminalInfiniteLoop(ShowBase):
         self.win.setClearColor(FOG_COLOR)
 
     def setup_lighting(self):
-        """완전한 암흑 분위기 (최소 앰비언트 + 플레이어 강력 직선 스포트라이트 + 촛불 동적 조명 풀)"""
+        """완전한 암흑 분위기 (최소 앰비언트 - 촛불 완전 제거)"""
         alight = AmbientLight('ambient_light')
         alight.setColor((0.005, 0.005, 0.007, 1.0))
         alnp = self.render.attachNewNode(alight)
         self.render.setLight(alnp)
-
-        # 플레이어 손전등: 전방으로 곧게 뻗어나가는 강력한 원추형 직선 빔 (Spotlight)
-        spotlight = Spotlight('player_flashlight')
-        spotlight.setColor((2.85, 2.70, 2.35, 1.0)) # 밝기 대폭 상향
-        spot_lens = PerspectiveLens()
-        spot_lens.setFov(44.0)                     # 직선으로 뻗는 집중 빔 각도
-        spot_lens.setNearFar(0.15, 65.0)           # 65m 안개 한계까지 관통
-        spotlight.setLens(spot_lens)
-        spotlight.setAttenuation((1.0, 0.015, 0.0006))
-        self.pl_np = self.camera.attachNewNode(spotlight)
-        self.pl_np.setPos(0.25, 0.35, -0.15)       # 카메라 오른손 전방에 장착
-        self.render.setLight(self.pl_np)
-
-        # 근거리 보조 조명 (플레이어 발밑 극소 반경만 은은하게 비춤)
-        fill_light = PointLight('player_fill')
-        fill_light.setColor((0.18, 0.16, 0.14, 1.0))
-        fill_light.setAttenuation((1.0, 0.28, 0.08))
-        self.fill_np = self.camera.attachNewNode(fill_light)
-        self.fill_np.setPos(0, 0, -0.1)
-        self.render.setLight(self.fill_np)
-
-        # 촛불 동적 포인트 라이트 풀 (플레이어 주변 가장 가까운 2개 촛대에 실시간 바인딩 - 셰이더 부하 최소화)
-        self.candle_lights = []
-        self.candle_light_nps = []
-        for i in range(2):
-            clight = PointLight(f'candle_light_{i}')
-            clight.setColor((1.35, 0.82, 0.28, 1.0))
-            clight.setAttenuation((1.0, 0.12, 0.035))
-            clnp = self.render.attachNewNode(clight)
-            clnp.setPos(0, 0, -100)  # 미사용 시 지하 대기
-            self.render.setLight(clnp)
-            self.candle_lights.append(clight)
-            self.candle_light_nps.append(clnp)
 
     def load_assets(self):
         """바닥 및 벽 텍스처 로드 및 반복 모드 설정"""
@@ -202,7 +388,7 @@ class LiminalInfiniteLoop(ShowBase):
             "shift": 0
         }
 
-        # WASD 8방향 이동 키 (Shift 조합 및 대소문자 모두 등록하여 대각선 달리기 100% 보장)
+        # WASD 8방향 이동 키
         for key in ["w", "a", "s", "d"]:
             self.accept(key, self.set_key, [key, 1])
             self.accept(f"{key}-up", self.set_key, [key, 0])
@@ -229,6 +415,9 @@ class LiminalInfiniteLoop(ShowBase):
             self.accept(s_key, self.set_key, ["shift", 1])
             self.accept(f"{s_key}-up", self.set_key, ["shift", 0])
 
+        # 마우스 좌클릭: 12발 권총 사격 (적중 시 0.5초 스턴)
+        self.accept("mouse1", self.shoot_pistol)
+
         # ESC 마우스 커서 해제/잠금 토글
         self.accept("escape", self.toggle_mouse_lock)
 
@@ -244,7 +433,6 @@ class LiminalInfiniteLoop(ShowBase):
         self.mouse_locked = lock
         props = WindowProperties()
         props.setCursorHidden(lock)
-        # Windows API 마우스 카운터 움직임 충돌 방지를 위한 M_confined 모드 사용
         props.setMouseMode(WindowProperties.M_confined if lock else WindowProperties.M_absolute)
         if hasattr(self.win, 'requestProperties'):
             self.win.requestProperties(props)
@@ -253,7 +441,7 @@ class LiminalInfiniteLoop(ShowBase):
         self.lock_mouse(not self.mouse_locked)
 
     def setup_ui(self):
-        """정보 표시 HUD 및 게임 오버 UI 설정"""
+        """FPS 정보 표시 HUD, 타이머, 탄약, 조준점 및 게임 오버/승리 UI 설정"""
         try:
             self.korean_font = self.loader.loadFont('/c/Windows/Fonts/malgun.ttf')
         except Exception:
@@ -261,6 +449,54 @@ class LiminalInfiniteLoop(ShowBase):
 
         font_kw = {"font": self.korean_font} if self.korean_font else {}
 
+        # 1. 화면 중앙 조준점 (Crosshair)
+        self.crosshair = OnscreenText(
+            text="+",
+            pos=(0, -0.015),
+            scale=0.065,
+            fg=(1.0, 1.0, 1.0, 0.85),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=False
+        )
+
+        # 2. 상단 중앙 60초 탈출 카운트다운 타이머 HUD
+        self.timer_text = OnscreenText(
+            text="[ 탈출 제한시간: 01:00 ]",
+            pos=(0, 0.91),
+            scale=0.052,
+            fg=(0.25, 0.95, 0.45, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **font_kw
+        )
+
+        # 3. 우측 하단 12발 권총 탄약 HUD
+        self.ammo_text = OnscreenText(
+            text="[ 탄약: 12 / 12 ]",
+            pos=(1.28, -0.85),
+            scale=0.048,
+            fg=(1.0, 0.90, 0.35, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ARight,
+            mayChange=True,
+            **font_kw
+        )
+
+        # 4. 중앙 피격/적중 알림 HUD
+        self.hit_marker_text = OnscreenText(
+            text="",
+            pos=(0, -0.16),
+            scale=0.046,
+            fg=(1.0, 0.85, 0.2, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **font_kw
+        )
+
+        # 5. 좌상단 위치 좌표 HUD
         self.hud_text = OnscreenText(
             text="위치: X=0.0, Y=0.0",
             pos=(-1.3, 0.92),
@@ -280,16 +516,16 @@ class LiminalInfiniteLoop(ShowBase):
             **font_kw
         )
         self.guide_text = OnscreenText(
-            text="[WASD] 8방향 이동 (대각선 지원)  |  [Shift] 달리기 (스테미나 소모)  |  [Mouse] 시선  |  [R] 재시작  |  [ESC] 마우스 해제",
-            pos=(0, -0.92),
-            scale=0.04,
-            fg=(0.9, 0.9, 0.8, 0.8),
+            text="[WASD] 8방향 이동  |  [Shift] 달리기  |  [좌클릭] 12발 권총 사격 (적중 시 0.5초 기절)  |  [R] 재시작",
+            pos=(0, -0.93),
+            scale=0.038,
+            fg=(0.9, 0.9, 0.8, 0.85),
             align=TextNode.ACenter,
             mayChange=False,
             **font_kw
         )
 
-        # 게임 오버 UI (기본 숨김)
+        # 6. 게임 오버 UI
         self.game_over_banner = OnscreenText(
             text="사  망",
             pos=(0, 0.25),
@@ -297,11 +533,11 @@ class LiminalInfiniteLoop(ShowBase):
             fg=(0.95, 0.08, 0.08, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
-            mayChange=False,
+            mayChange=True,
             **font_kw
         )
         self.game_over_desc = OnscreenText(
-            text="기괴한 거미 괴물에게 영혼을 잠식당했습니다...",
+            text="기괴한 괴물에게 영혼을 잠식당했습니다...",
             pos=(0, 0.05),
             scale=0.055,
             fg=(0.88, 0.88, 0.88, 0.95),
@@ -320,13 +556,46 @@ class LiminalInfiniteLoop(ShowBase):
             mayChange=False,
             **font_kw
         )
+
+        # 7. 탈출 성공(승리) UI
+        self.victory_banner = OnscreenText(
+            text="탈  출  성  공",
+            pos=(0, 0.25),
+            scale=0.14,
+            fg=(0.20, 0.95, 0.45, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=False,
+            **font_kw
+        )
+        self.victory_desc = OnscreenText(
+            text="비상 탈출구를 찾아 악몽의 미궁을 탈출했습니다!",
+            pos=(0, 0.05),
+            scale=0.055,
+            fg=(0.92, 0.98, 0.92, 0.95),
+            shadow=(0, 0, 0, 0.85),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **font_kw
+        )
+
         self.game_over_banner.hide()
         self.game_over_desc.hide()
         self.game_over_restart.hide()
+        self.victory_banner.hide()
+        self.victory_desc.hide()
 
     def restart_game(self):
-        """게임 재시작: 플레이어 및 괴물 초기화"""
+        """게임 재시작: 플레이어, 괴물, 탈출구, 60초 타이머, 12발 탄약 초기화"""
         self.game_over = False
+        self.game_won = False
+        self.time_left = self.time_limit
+        self.ammo = self.max_ammo
+        self.shoot_cooldown = 0.0
+        self.recoil_timer = 0.0
+        self.muzzle_timer = 0.0
+        self.hit_marker_timer = 0.0
+        self.bobbing_time = 0.0
         self.keyMap = {k: 0 for k in self.keyMap}
 
         spawn_x = 1.5 * CELL_SIZE
@@ -335,6 +604,12 @@ class LiminalInfiniteLoop(ShowBase):
         self.heading = 0.0
         self.pitch = 0.0
         self.camera.setHpr(0, 0, 0)
+
+        # 뷰모델 리셋
+        self.recoil_node.setPos(0, 0, 0)
+        self.recoil_node.setP(0)
+        self.muzzle_flash_geom.hide()
+        self.render.clearLight(self.muzzle_light_np)
 
         # 스테미나 리셋
         self.stamina = self.max_stamina
@@ -349,11 +624,14 @@ class LiminalInfiniteLoop(ShowBase):
         self.killer_monster = None
         self.last_move_dir = Vec3(0, 0, 0)
 
-        # 괴물 2종 위치 랜덤 리셋 (항상 무작위 새로운 복도 위치)
+        # 괴물 2종 위치 랜덤 리셋
         s_spawn = self.get_random_monster_spawn(spawn_x, spawn_y)
         k_spawn = self.get_random_monster_spawn(spawn_x, spawn_y, exclude_pos=s_spawn)
         self.serpent.reset_pos(s_spawn[0], s_spawn[1])
         self.skeleton.reset_pos(k_spawn[0], k_spawn[1])
+
+        # 원거리 탈출구 신규 랜덤 재배치
+        self.setup_escape_portal()
 
         # 안개 및 배경색 복구
         self.liminal_fog.setColor(FOG_COLOR)
@@ -364,47 +642,83 @@ class LiminalInfiniteLoop(ShowBase):
         self.game_over_banner.hide()
         self.game_over_desc.hide()
         self.game_over_restart.hide()
+        self.victory_banner.hide()
+        self.victory_desc.hide()
+        self.crosshair.show()
         self.guide_text.show()
+        self.hit_marker_text.setText("")
+        self.update_ammo_ui()
         self.lock_mouse(True)
 
-    def trigger_game_over(self, killer):
-        """괴물에게 잡혔을 때 게임 오버 연출"""
+    def trigger_victory(self):
+        """탈출구 도착 시 탈출 성공 연출"""
+        if self.game_over or self.game_won:
+            return
+        self.game_won = True
+        self.keyMap = {k: 0 for k in self.keyMap}
+
+        # 초록빛 승리 조명
+        green_fog = LColor(0.02, 0.20, 0.07, 1.0)
+        self.liminal_fog.setColor(green_fog)
+        self.setBackgroundColor(green_fog)
+        self.win.setClearColor(green_fog)
+
+        remaining = max(0.0, self.time_left)
+        self.victory_banner.show()
+        self.victory_desc.setText(f"비상 탈출구를 찾아 악몽에서 탈출했습니다!\n[남은 시간: {remaining:.1f}초  |  남은 탄약: {self.ammo}/12발]")
+        self.victory_desc.show()
+        self.game_over_restart.show()
+        self.guide_text.hide()
+        self.crosshair.hide()
+
+    def trigger_game_over(self, killer=None, reason="killed"):
+        """괴물에게 잡혔거나 제한시간 초과 시 게임 오버 연출"""
+        if self.game_over or self.game_won:
+            return
         self.game_over = True
         self.killer_monster = killer
         self.keyMap = {k: 0 for k in self.keyMap}
 
-        # 카메라를 킬러 괴물의 섬뜩한 얼굴로 즉시 강제 응시 (점프스케어 앵글)
-        px, py = self.camera.getX(), self.camera.getY()
-        kx, ky = killer.pos.x, killer.pos.y
-        kz = getattr(killer.pos, 'z', 0.0)
-        dx = kx - px
-        dy = ky - py
-        h = math.degrees(math.atan2(-dx, dy))
-        dist = max(0.2, math.hypot(dx, dy))
-        target_eye_z = kz + (3.85 if isinstance(killer, TallSkeletonMonster) else 0.45)
-        p = math.degrees(math.atan2(target_eye_z - PLAYER_EYE_HEIGHT, dist))
-        self.camera.setHpr(h, p, 0)
+        if killer is not None:
+            # 카메라를 킬러 괴물의 섬뜩한 얼굴로 즉시 강제 응시 (점프스케어 앵글)
+            px, py = self.camera.getX(), self.camera.getY()
+            kx, ky = killer.pos.x, killer.pos.y
+            kz = getattr(killer.pos, 'z', 0.0)
+            dx = kx - px
+            dy = ky - py
+            h = math.degrees(math.atan2(-dx, dy))
+            dist = max(0.2, math.hypot(dx, dy))
+            target_eye_z = kz + (3.85 if isinstance(killer, TallSkeletonMonster) else 0.45)
+            p = math.degrees(math.atan2(target_eye_z - PLAYER_EYE_HEIGHT, dist))
+            self.camera.setHpr(h, p, 0)
+            killer.update(0.016, is_moving=False, is_attacking=True)
 
-        # 킬러 괴물 공격 포즈 발동
-        killer.update(0.016, is_moving=False, is_attacking=True)
+            self.game_over_banner.setText("사  망")
+            self.game_over_banner.setFg((0.95, 0.08, 0.08, 1.0))
+            if isinstance(killer, TallSkeletonMonster):
+                self.game_over_desc.setText("쩍 벌어진 입의 거대 해골 괴물에게 영혼을 빼앗겼습니다...")
+            else:
+                self.game_over_desc.setText("칠흑의 거대한 뱀에게 온몸을 휘감겨 삼켜졌습니다...")
 
-        # 킬러별 맞춤형 데스 메시지
-        if isinstance(killer, TallSkeletonMonster):
-            self.game_over_desc.setText("쩍 벌어진 입의 거대 해골 괴물에게 영혼을 빼앗겼습니다...")
+            blood_fog = LColor(0.22, 0.02, 0.02, 1.0)
+            self.liminal_fog.setColor(blood_fog)
+            self.setBackgroundColor(blood_fog)
+            self.win.setClearColor(blood_fog)
         else:
-            self.game_over_desc.setText("칠흑의 거대한 뱀에게 온몸을 휘감겨 삼켜졌습니다...")
+            # 1분 제한시간 초과
+            self.game_over_banner.setText("탈  출  실  패")
+            self.game_over_banner.setFg((0.85, 0.25, 0.95, 1.0))
+            self.game_over_desc.setText("제한시간 1분이 모두 지나 미궁의 심연에 영원히 갇혔습니다...")
+            purple_fog = LColor(0.08, 0.02, 0.15, 1.0)
+            self.liminal_fog.setColor(purple_fog)
+            self.setBackgroundColor(purple_fog)
+            self.win.setClearColor(purple_fog)
 
-        # 핏빛 암전 연출
-        blood_fog = LColor(0.22, 0.02, 0.02, 1.0)
-        self.liminal_fog.setColor(blood_fog)
-        self.setBackgroundColor(blood_fog)
-        self.win.setClearColor(blood_fog)
-
-        # 게임 오버 UI 노출
         self.game_over_banner.show()
         self.game_over_desc.show()
         self.game_over_restart.show()
         self.guide_text.hide()
+        self.crosshair.hide()
 
     def update_chunks(self, force=False):
         """시야 내 및 이동 방향을 예측하는 비동기 멀티스레드 청크 스트리밍"""
@@ -588,20 +902,25 @@ class LiminalInfiniteLoop(ShowBase):
         if dt > 0.1:
             dt = 0.1
 
+        # --- [승리 상태] 탈출 성공 시: 업데이트 정지 ---
+        if self.game_won:
+            return task.cont
+
         # --- [게임 오버 상태] 플레이어 사망 시: 시선 강제 고정 및 킬러 괴물 공격 모션 유지 ---
         if self.game_over:
-            killer = self.killer_monster or self.serpent
-            px, py = self.camera.getX(), self.camera.getY()
-            kx, ky = killer.pos.x, killer.pos.y
-            kz = getattr(killer.pos, 'z', 0.0)
-            dx = kx - px
-            dy = ky - py
-            h = math.degrees(math.atan2(-dx, dy))
-            dist = max(0.2, math.hypot(dx, dy))
-            target_eye_z = kz + (3.85 if isinstance(killer, TallSkeletonMonster) else 0.45)
-            p = math.degrees(math.atan2(target_eye_z - PLAYER_EYE_HEIGHT, dist))
-            self.camera.setHpr(h, p, 0)
-            killer.update(dt, is_moving=False, is_attacking=True)
+            if self.killer_monster is not None:
+                killer = self.killer_monster
+                px, py = self.camera.getX(), self.camera.getY()
+                kx, ky = killer.pos.x, killer.pos.y
+                kz = getattr(killer.pos, 'z', 0.0)
+                dx = kx - px
+                dy = ky - py
+                h = math.degrees(math.atan2(-dx, dy))
+                dist = max(0.2, math.hypot(dx, dy))
+                target_eye_z = kz + (3.85 if isinstance(killer, TallSkeletonMonster) else 0.45)
+                p = math.degrees(math.atan2(target_eye_z - PLAYER_EYE_HEIGHT, dist))
+                self.camera.setHpr(h, p, 0)
+                killer.update(dt, is_moving=False, is_attacking=True)
             return task.cont
 
         # --- 0. 비동기 백그라운드 스레드 청크 마운트 (메인 스레드 지연 제로) ---
@@ -723,11 +1042,11 @@ class LiminalInfiniteLoop(ShowBase):
         dist_serpent = math.hypot(px - self.serpent.pos.x, py - self.serpent.pos.y)
         dist_skeleton = math.hypot(px - self.skeleton.pos.x, py - self.skeleton.pos.y)
 
-        # 잡힘 판정 (뱀: 1.45m, 해골: 1.85m)
-        if dist_serpent <= 1.45:
+        # 잡힘 판정 (뱀: 1.45m, 해골: 1.85m) - 스턴 중인 적은 플레이어를 공격하지 못함
+        if dist_serpent <= 1.45 and self.serpent.stun_timer <= 0.0:
             self.trigger_game_over(self.serpent)
             return task.cont
-        if dist_skeleton <= 1.85:
+        if dist_skeleton <= 1.85 and self.skeleton.stun_timer <= 0.0:
             self.trigger_game_over(self.skeleton)
             return task.cont
 
@@ -882,37 +1201,77 @@ class LiminalInfiniteLoop(ShowBase):
         if chunk_created or (view_changed and is_moving):
             self.cull_chunks_to_view()
 
-        # --- 4.5. 촛불 동적 조명 할당 및 리얼타임 깜빡임 (캐싱 기반 초고속 갱신) ---
-        player_moved_dist_sq = (px - getattr(self, 'last_candle_px', -9999.0))**2 + (py - getattr(self, 'last_candle_py', -9999.0))**2
-        if player_moved_dist_sq > 2.25 or chunk_created or not hasattr(self, 'cached_candles'):
-            self.last_candle_px = px
-            self.last_candle_py = py
-            cand_candidates = []
-            pcx = int(math.floor(px / CHUNK_SIZE))
-            pcy = int(math.floor(py / CHUNK_SIZE))
-            # 인접 3x3 청크 영역의 촛대만 고속 수집
-            for ncx in (pcx - 1, pcx, pcx + 1):
-                for ncy in (pcy - 1, pcy, pcy + 1):
-                    chunk = self.chunks.get((ncx, ncy))
-                    if chunk and not chunk.is_hidden and hasattr(chunk, 'candle_positions'):
-                        for cx, cy, cz in chunk.candle_positions:
-                            d_sq = (cx - px) ** 2 + (cy - py) ** 2
-                            if d_sq < 2500:
-                                cand_candidates.append((d_sq, cx, cy, cz))
-            cand_candidates.sort(key=lambda item: item[0])
-            self.cached_candles = cand_candidates[:len(self.candle_lights)]
+        # --- 4.5. FPS 뷰모델 (반동, 총구화염, 흔들림) & 타이머/탈출구 로직 ---
+        # 권총 발사 쿨다운 & 총구 화염 처리
+        if self.shoot_cooldown > 0.0:
+            self.shoot_cooldown = max(0.0, self.shoot_cooldown - dt)
 
-        t = globalClock.getFrameTime()
-        for i, clight in enumerate(self.candle_lights):
-            cnp = self.candle_light_nps[i]
-            if i < len(self.cached_candles):
-                _, cx, cy, cz = self.cached_candles[i]
-                flicker = 1.0 + 0.14 * math.sin(t * 13.5 + i * 2.3) + 0.08 * math.cos(t * 26.0 + i * 1.7) + 0.04 * math.sin(t * 43.0)
-                flicker = max(0.65, min(1.35, flicker))
-                clight.setColor((1.35 * flicker, 0.82 * flicker, 0.28 * flicker, 1.0))
-                cnp.setPos(cx, cy, cz)
-            else:
-                cnp.setPos(0, 0, -100)
+        if self.muzzle_timer > 0.0:
+            self.muzzle_timer -= dt
+            if self.muzzle_timer <= 0.0:
+                self.muzzle_flash_geom.hide()
+                self.render.clearLight(self.muzzle_light_np)
+
+        # 권총 반동 애니메이션 (Slide Kickback & Pitch Up)
+        if self.recoil_timer > 0.0:
+            self.recoil_timer -= dt
+            t_norm = max(0.0, self.recoil_timer / 0.10)
+            self.recoil_node.setPos(0, -0.05 * t_norm, 0.02 * t_norm)
+            self.recoil_node.setP(12.0 * t_norm)
+        else:
+            self.recoil_node.setPos(0, 0, 0)
+            self.recoil_node.setP(0)
+
+        # 피격 알림 타이머
+        if self.hit_marker_timer > 0.0:
+            self.hit_marker_timer -= dt
+            if self.hit_marker_timer <= 0.0:
+                self.hit_marker_text.setText("")
+
+        # 뷰모델 보행 밥빙(Bobbing) & 정지 호흡 스웨이
+        if is_moving:
+            self.bobbing_time += dt * (14.0 if (hasattr(self, 'is_sprinting') and self.is_sprinting) else 8.5)
+            bob_x = math.sin(self.bobbing_time * 0.5) * 0.012
+            bob_y = abs(math.cos(self.bobbing_time)) * 0.014
+            self.vm_root.setPos(bob_x, 0, -bob_y)
+        else:
+            self.bobbing_time += dt * 2.0
+            sway_z = math.sin(self.bobbing_time) * 0.003
+            self.vm_root.setPos(0, 0, sway_z)
+
+        # 60초 탈출 제한시간 카운트다운
+        self.time_left -= dt
+        if self.time_left <= 0.0:
+            self.time_left = 0.0
+            self.trigger_game_over(killer=None, reason="timeout")
+            return task.cont
+
+        # 탈출구 비콘 은은한 펄스 발광
+        if hasattr(self, 'exit_light_np') and self.exit_light_np:
+            t = globalClock.getFrameTime()
+            pulse = 1.0 + 0.28 * math.sin(t * 4.5)
+            self.exit_light_np.node().setColor((0.35 * pulse, 2.4 * pulse, 0.8 * pulse, 1.0))
+
+        # 탈출구 도달 판정 (탈출 포탈 2.8m 이내 도달 시 탈출 성공)
+        dist_exit = math.hypot(px - self.escape_pos[0], py - self.escape_pos[1])
+        if dist_exit <= 2.8:
+            self.trigger_victory()
+            return task.cont
+
+        # 타이머 HUD 갱신
+        mins = int(self.time_left) // 60
+        secs = int(self.time_left) % 60
+        t_str = f"{mins:02d}:{secs:02d}"
+        if self.time_left <= 10.0:
+            flash_col = (1.0, 0.2, 0.2, 1.0) if int(self.time_left * 4) % 2 == 0 else (1.0, 0.8, 0.8, 1.0)
+            self.timer_text.setText(f"[ ! 탈출 제한시간: {t_str} (서두르세요!) ]")
+            self.timer_text.setFg(flash_col)
+        elif self.time_left <= 25.0:
+            self.timer_text.setText(f"[ 탈출 제한시간: {t_str} ]")
+            self.timer_text.setFg((1.0, 0.85, 0.2, 1.0))
+        else:
+            self.timer_text.setText(f"[ 탈출 제한시간: {t_str} ]")
+            self.timer_text.setFg((0.25, 0.95, 0.45, 1.0))
 
         # --- 5. HUD 업데이트 (괴물 거리 및 위치 표시 완전 금지 - 순수 미지의 공포감 유지) ---
         new_hud = f"위치: X={px:.1f}, Y={py:.1f} | 활성: {self.rendered_chunk_count}/{self.total_chunk_count} 청크"

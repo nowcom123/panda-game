@@ -20,6 +20,7 @@ class LongBlackSerpent:
         self.has_los = False
         self.wall_tilt = 0.0
         self.climb_z = 0.45
+        self.stun_timer = 0.0
 
         black = LColor(0.015, 0.015, 0.02, 1.0)
         scale_black = LColor(0.025, 0.025, 0.035, 1.0)
@@ -109,6 +110,7 @@ class LongBlackSerpent:
         self.path = []
         self.path_timer = 0.0
         self.has_los = False
+        self.stun_timer = 0.0
 
         for seg in self.segments:
             seg['pivot'].setPos(0, seg['base_y'], 0)
@@ -116,9 +118,54 @@ class LongBlackSerpent:
 
         self.head.setH(0)
         self.head.setP(0)
+        self.aura_np.node().setColor((0.95, 0.05, 0.05, 1.0))
+
+    def stun(self, duration=0.5):
+        """총격 적중 시 0.5초간 경직/스턴 발동"""
+        self.stun_timer = duration
+        if hasattr(self, 'aura_np') and self.aura_np:
+            self.aura_np.node().setColor((2.2, 1.8, 0.4, 1.0)) # 피격 시 번쩍임
+
+    def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
+        """플레이어 사격 레이캐스트와 뱀 머리/14마디 마디별 충돌 판정"""
+        # 머리 및 주요 마디들의 월드 좌표 수집
+        targets = [(self.pos.x, self.pos.y, self.pos.z + 0.3, 1.1)] # head: radius 1.1m
+        h_rad = math.radians(self.node.getH())
+        cos_h, sin_h = math.cos(h_rad), math.sin(h_rad)
+        for i in range(0, 14, 2):
+            seg = self.segments[i]
+            by = seg['base_y']
+            # 로컬 Y 오프셋을 월드 위치로 변환
+            wx = self.pos.x + (-sin_h * by)
+            wy = self.pos.y + (cos_h * by)
+            targets.append((wx, wy, self.pos.z, 0.95))
+
+        for tx, ty, tz, r in targets:
+            vx = tx - ray_o.x
+            vy = ty - ray_o.y
+            vz = tz - ray_o.z
+            t = vx * ray_d.x + vy * ray_d.y + vz * ray_d.z
+            if 0.2 < t < max_dist:
+                cx = ray_o.x + t * ray_d.x
+                cy = ray_o.y + t * ray_d.y
+                cz = ray_o.z + t * ray_d.z
+                dist_sq = (tx - cx)**2 + (ty - cy)**2 + (tz - cz)**2
+                if dist_sq <= r * r:
+                    return True, t
+        return False, 999.0
 
     def update_pos(self, new_x, new_y, dt, dir_x, dir_y, wall_norm=None, climb_target_z=0.45):
-        """위치 갱신 및 벽 타기(Wall Crawling) 슬리더링 물리 적용"""
+        """위치 갱신 및 벽 타기(Wall Crawling) 슬리더링 물리 적용 (스턴 처리 포함)"""
+        if self.stun_timer > 0.0:
+            self.stun_timer -= dt
+            # 스턴 경직 떨림 효과
+            shake = math.sin(self.stun_timer * 65.0) * 0.08
+            self.node.setPos(self.pos.x + shake, self.pos.y, self.pos.z)
+            self.head.setP(18)
+            if self.stun_timer <= 0.0:
+                self.aura_np.node().setColor((0.95, 0.05, 0.05, 1.0))
+            return
+
         self.climb_z += (climb_target_z - self.climb_z) * min(1.0, dt * 4.5)
         self.pos.x = new_x
         self.pos.y = new_y
@@ -213,6 +260,7 @@ class TallSkeletonMonster:
         self.path = []
         self.path_timer = 0.0
         self.has_los = False
+        self.stun_timer = 0.0
 
         bone_col = LColor(0.85, 0.83, 0.76, 1.0)
         bone_dark = LColor(0.55, 0.52, 0.45, 1.0)
@@ -359,6 +407,7 @@ class TallSkeletonMonster:
         self.path = []
         self.path_timer = 0.0
         self.has_los = False
+        self.stun_timer = 0.0
 
         for arm in self.arms:
             arm['upper'].setP(0)
@@ -366,9 +415,50 @@ class TallSkeletonMonster:
         for leg in self.legs:
             leg['femur'].setP(0)
             leg['knee'].setP(0)
+        self.aura_np.node().setColor((0.35, 0.55, 0.95, 1.0))
+
+    def stun(self, duration=0.5):
+        """총격 적중 시 0.5초간 경직/스턴 발동"""
+        self.stun_timer = duration
+        if hasattr(self, 'aura_np') and self.aura_np:
+            self.aura_np.node().setColor((2.2, 2.0, 0.6, 1.0)) # 피격 시 번쩍임
+
+    def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
+        """플레이어 사격 레이캐스트와 4.2m 해골 괴물 전신(두개골, 흉곽, 골반 등) 충돌 판정"""
+        targets = [
+            (self.pos.x, self.pos.y, self.pos.z + 1.0, 0.70), # 하체/다리
+            (self.pos.x, self.pos.y, self.pos.z + 1.85, 0.75), # 골반
+            (self.pos.x, self.pos.y, self.pos.z + 2.65, 0.85), # 흉곽/갈비뼈
+            (self.pos.x, self.pos.y, self.pos.z + 3.35, 0.80), # 쇄골/어깨
+            (self.pos.x, self.pos.y, self.pos.z + 3.85, 0.80), # 쩍 벌어진 두개골
+        ]
+        for tx, ty, tz, r in targets:
+            vx = tx - ray_o.x
+            vy = ty - ray_o.y
+            vz = tz - ray_o.z
+            t = vx * ray_d.x + vy * ray_d.y + vz * ray_d.z
+            if 0.2 < t < max_dist:
+                cx = ray_o.x + t * ray_d.x
+                cy = ray_o.y + t * ray_d.y
+                cz = ray_o.z + t * ray_d.z
+                dist_sq = (tx - cx)**2 + (ty - cy)**2 + (tz - cz)**2
+                if dist_sq <= r * r:
+                    return True, t
+        return False, 999.0
 
     def update_pos(self, new_x, new_y, dt, dir_x, dir_y):
-        """위치 갱신 및 시선 회전"""
+        """위치 갱신 및 시선 회전 (스턴 처리 포함)"""
+        if self.stun_timer > 0.0:
+            self.stun_timer -= dt
+            # 스턴 경직 떨림 효과
+            shake = math.sin(self.stun_timer * 65.0) * 0.08
+            self.node.setPos(self.pos.x + shake, self.pos.y, self.pos.z)
+            self.skull_pivot.setP(-18)
+            self.jaw_pivot.setP(15)
+            if self.stun_timer <= 0.0:
+                self.aura_np.node().setColor((0.35, 0.55, 0.95, 1.0))
+            return
+
         self.pos.x = new_x
         self.pos.y = new_y
         self.pos.z = 0.0
