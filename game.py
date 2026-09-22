@@ -41,9 +41,9 @@ class LiminalInfiniteLoop(ShowBase):
                 enable_shadows=False
             )
 
-        # 1. 카메라 가시거리 및 안개 설정 (짙은 안개 한계 거리 65m에 맞춘 하드웨어 클리핑으로 원거리 오버드로우 0%)
+        # 1. 카메라 가시거리 및 안개 설정 (POV 확장: FOV 88도로 넓고 시원한 시야 확보)
         self.camLens.setNearFar(0.2, 65.0)
-        self.camLens.setFov(75)
+        self.camLens.setFov(88.0)
         self.rendered_chunk_count = 0
         self.total_chunk_count = 0
         self.last_hud_text = ""
@@ -74,12 +74,17 @@ class LiminalInfiniteLoop(ShowBase):
         self.rank_file = os.path.join(os.path.dirname(__file__), "rankings.json")
         self.game_over = False
         self.game_won = False
+        self.current_stage = 1
         self.time_limit = 60.0
         self.time_left = self.time_limit
         self.door_hold_timer = 5.0
         self.door_hold_required = 5.0
         self.max_ammo = 12
         self.ammo = self.max_ammo
+        self.reserve_ammo = 0
+        self.is_reloading = False
+        self.reload_timer = 0.0
+        self.ammo_drops = []
         self.shoot_cooldown = 0.0
         self.recoil_timer = 0.0
         self.muzzle_timer = 0.0
@@ -217,9 +222,9 @@ class LiminalInfiniteLoop(ShowBase):
 
         self.vm_root = self.camera.attachNewNode("viewmodel_root")
 
-        # --- (A) 왼손: 택티컬 손전등 ---
+        # --- (A) 왼손: 택티컬 손전등 (POV 확장: 카메라에서 더 멀리 배치) ---
         self.vm_flashlight = self.vm_root.attachNewNode("vm_flashlight")
-        self.vm_flashlight.setPos(-0.28, 0.62, -0.24)
+        self.vm_flashlight.setPos(-0.32, 0.78, -0.28)
         self.vm_flashlight.setHpr(-3.5, 2.0, 0)
 
         fl_body_col = LColor(0.12, 0.12, 0.14, 1.0)
@@ -254,9 +259,9 @@ class LiminalInfiniteLoop(ShowBase):
         self.fill_np.setPos(0, 0.10, 0)
         self.render.setLight(self.fill_np)
 
-        # --- (B) 오른손: 12발 권총 ---
+        # --- (B) 오른손: 12발 권총 (POV 확장: 카메라에서 더 멀리 배치) ---
         self.vm_pistol = self.vm_root.attachNewNode("vm_pistol")
-        self.vm_pistol.setPos(0.26, 0.58, -0.22)
+        self.vm_pistol.setPos(0.30, 0.74, -0.26)
         self.vm_pistol.setHpr(3.0, 1.5, 0)
 
         # 반동 애니메이션 피벗 노드
@@ -301,14 +306,19 @@ class LiminalInfiniteLoop(ShowBase):
 
     def shoot_pistol(self):
         """마우스 좌클릭 시 12발 권총 사격 및 적중 시 0.5초 스턴"""
-        if self.game_over or self.game_won:
+        if self.game_over or self.game_won or self.game_state != "PLAYING":
+            return
+        if getattr(self, 'is_reloading', False):
             return
         if self.shoot_cooldown > 0.0:
             return
 
         if self.ammo <= 0:
             # 탄약 고갈 (공이치기 찰칵)
-            self.show_hit_marker("탄약 소진! (0/12)", (1.0, 0.3, 0.3, 1.0))
+            if getattr(self, 'reserve_ammo', 0) > 0:
+                self.show_hit_marker("탄약 소진! [R] 키를 눌러 재장전하세요!", (1.0, 0.4, 0.4, 1.0))
+            else:
+                self.show_hit_marker("탄약 소진! (맵에서 탄약 상자를 찾으세요)", (1.0, 0.3, 0.3, 1.0))
             self.shoot_cooldown = 0.35
             return
 
@@ -342,14 +352,14 @@ class LiminalInfiniteLoop(ShowBase):
             self.skeleton.stun(0.5)
             self.show_hit_marker("적중! 해골 괴물 0.5초 기절!", (0.4, 0.95, 1.0, 1.0))
 
-        # 발광 총알 궤적 (Bullet Tracer) 생성
+        # 발광 총알 궤적 (Bullet Tracer) 생성 (새로운 전방 총구 위치 반영)
         cam_pos = self.camera.getPos()
         cam_quat = self.camera.getQuat()
         cam_fwd = cam_quat.getForward()
         cam_right = cam_quat.getRight()
         cam_up = cam_quat.getUp()
 
-        muzzle_world = cam_pos + cam_fwd * 0.70 + cam_right * 0.26 - cam_up * 0.18
+        muzzle_world = cam_pos + cam_fwd * 0.86 + cam_right * 0.30 - cam_up * 0.22
         tracer_dist = 55.0
         if hit_s:
             tracer_dist = min(tracer_dist, dist_s)
@@ -369,15 +379,33 @@ class LiminalInfiniteLoop(ShowBase):
 
         self.active_tracers.append({"np": tracer_np, "life": 0.09})
 
+    def reload_pistol(self):
+        """R 키 입력 시 권총 재장전 (예비 탄약에서 탄창으로 12발 충전)"""
+        if self.game_over or self.game_won or self.game_state != "PLAYING":
+            return
+        if getattr(self, 'is_reloading', False):
+            return
+        if self.ammo >= self.max_ammo:
+            self.show_hit_marker("이미 탄창이 가득 찼습니다! (12/12)", (0.8, 0.8, 0.8, 1.0))
+            return
+        if getattr(self, 'reserve_ammo', 0) <= 0:
+            self.show_hit_marker("예비 탄약이 없습니다! (맵에서 탄약 상자를 찾으세요)", (1.0, 0.3, 0.3, 1.0))
+            return
+
+        self.is_reloading = True
+        self.reload_timer = 1.2
+        self.show_hit_marker("[ 재장전 중... ]", (1.0, 0.85, 0.2, 1.0))
+
     def show_hit_marker(self, text, color):
         """피격/적중 알림 HUD 일시 표시"""
         self.hit_marker_text.setText(text)
         self.hit_marker_text.setFg(color)
-        self.hit_marker_timer = 0.65
+        self.hit_marker_timer = 0.75
 
     def update_ammo_ui(self):
-        """탄약 HUD 게이지 갱신"""
-        self.ammo_text.setText(f"[ 탄약: {self.ammo} / {self.max_ammo} ]")
+        """탄약 HUD 게이지 갱신 (탄창 탄약 / 예비 탄약 표시)"""
+        res = getattr(self, 'reserve_ammo', 0)
+        self.ammo_text.setText(f"[ 탄약: {self.ammo} / {self.max_ammo}  |  예비: {res} ]")
         if self.ammo <= 3:
             self.ammo_text.setFg((1.0, 0.25, 0.25, 1.0))
         else:
@@ -462,6 +490,11 @@ class LiminalInfiniteLoop(ShowBase):
 
         # 마우스 좌클릭: 12발 권총 사격 (적중 시 0.5초 스턴)
         self.accept("mouse1", self.shoot_pistol)
+
+        # R 키: 재장전 (예비 탄약에서 12발 충전)
+        self.accept("r", self.reload_pistol)
+        self.accept("shift-r", self.reload_pistol)
+        self.accept("R", self.reload_pistol)
 
         # ESC 마우스 커서 해제/잠금 토글
         self.accept("escape", self.toggle_mouse_lock)
@@ -556,7 +589,7 @@ class LiminalInfiniteLoop(ShowBase):
             **font_kw
         )
         self.guide_text = OnscreenText(
-            text="[WASD] 8방향 이동  |  [Shift] 달리기  |  [좌클릭] 12발 권총 사격 (적중 시 0.5초 기절)",
+            text="[WASD] 8방향 이동  |  [Shift] 달리기  |  [좌클릭] 사격  |  [R] 재장전",
             pos=(0, -0.93),
             scale=0.038,
             fg=(0.9, 0.9, 0.8, 0.85),
@@ -564,6 +597,19 @@ class LiminalInfiniteLoop(ShowBase):
             mayChange=False,
             **font_kw
         )
+
+        # 6. 스테이지 클리어 안내 배너
+        self.stage_clear_banner = OnscreenText(
+            text="",
+            pos=(0, 0.42),
+            scale=0.08,
+            fg=(0.3, 1.0, 0.5, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **font_kw
+        )
+        self.stage_clear_banner.hide()
 
         # 6. 비상탈출문 5초 홀드아웃 상태 알림 HUD
         self.door_status_text = OnscreenText(
@@ -802,21 +848,25 @@ class LiminalInfiniteLoop(ShowBase):
         lines.append("=== [ 탈출 성공 명예의 전당 (최단 시간 TOP 5) ] ===")
         if escapes:
             for i, r in enumerate(escapes[:5], 1):
+                stg = r.get('stage', 1)
                 t_el = r.get('time_elapsed', 0)
                 ammo = r.get('ammo_left', 0)
+                res = r.get('reserve_ammo', 0)
                 ts = r.get('timestamp', '')
-                lines.append(f"  #{i}위 | 탈출 시간: {t_el:.1f}초 | 남은 탄약: {ammo}/12발 | 일시: {ts}")
+                lines.append(f"  #{i}위 | STAGE {stg} | 탈출 시간: {t_el:.1f}초 | 탄약: {ammo}/12 (예비: {res}) | {ts}")
         else:
             lines.append("  아직 탈출 성공 기록이 없습니다. 최초로 탈출에 성공해보세요!")
 
         lines.append("\n=== [ 최근 플레이 도전 기록 (최근 6회) ] ===")
         if recent:
             for r in recent:
-                res = r.get('result', '기록 없음')
+                stg = r.get('stage', 1)
+                res_desc = r.get('result', '기록 없음')
                 t_el = r.get('time_elapsed', 0)
                 ammo = r.get('ammo_left', 0)
+                res_am = r.get('reserve_ammo', 0)
                 ts = r.get('timestamp', '')
-                lines.append(f"  • [{res}]  진행: {t_el:.1f}초 | 잔여 탄약: {ammo}/12발 | {ts}")
+                lines.append(f"  • [STAGE {stg} | {res_desc}]  진행: {t_el:.1f}초 | 탄약: {ammo}/12 (예비: {res_am}) | {ts}")
         else:
             lines.append("  플레이 기록이 없습니다.")
 
@@ -843,14 +893,16 @@ class LiminalInfiniteLoop(ShowBase):
         return []
 
     def save_rank_record(self, result_type, success, time_elapsed, time_left, ammo_left):
-        """사망 또는 탈출 성공 시 기록 자동 파일 저장"""
+        """사망 또는 탈출 성공 시 기록 자동 파일 저장 (스테이지 정보 포함)"""
         rec = {
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "stage": getattr(self, 'current_stage', 1),
             "result": result_type,
             "success": success,
             "time_elapsed": round(time_elapsed, 1),
             "time_left": round(time_left, 1),
             "ammo_left": ammo_left,
+            "reserve_ammo": getattr(self, 'reserve_ammo', 0),
             "ammo_used": self.max_ammo - ammo_left
         }
         records = self.load_rankings()
@@ -914,19 +966,160 @@ class LiminalInfiniteLoop(ShowBase):
         """게임 종료 화면에서 메인 메뉴로 복귀"""
         self.show_intro_scene()
 
+    def setup_ammo_drops(self):
+        """스테이지 2부터 맵 복도에 3D 밀리터리 탄약 상자 드랍 (4~6개)"""
+        # 기존 탄약 드랍 정리
+        for d in getattr(self, 'ammo_drops', []):
+            if d.get("light_np") and not d["light_np"].isEmpty():
+                self.render.clearLight(d["light_np"])
+            if d.get("node") and not d["node"].isEmpty():
+                d["node"].removeNode()
+        self.ammo_drops = []
+
+        if self.current_stage < 2:
+            return
+
+        min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 1
+        max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 2
+        candidates = []
+        spawn_x = 1.5 * CELL_SIZE
+        spawn_y = 1.5 * CELL_SIZE
+
+        for gx in range(min_cell, max_cell + 1):
+            for gy in range(min_cell, max_cell + 1):
+                if gx % 3 == 1 or gy % 3 == 1:
+                    cx = (gx + 0.5) * CELL_SIZE
+                    cy = (gy + 0.5) * CELL_SIZE
+                    d = math.hypot(cx - spawn_x, cy - spawn_y)
+                    if d >= 20.0:
+                        candidates.append((cx, cy))
+
+        if not candidates:
+            return
+
+        drop_count = min(6, len(candidates))
+        chosen_positions = random.sample(candidates, drop_count)
+
+        olive_box = LColor(0.20, 0.32, 0.18, 1.0)
+        steel_latch = LColor(0.28, 0.28, 0.32, 1.0)
+        brass_bullet = LColor(0.95, 0.82, 0.22, 1.0)
+
+        for x, y in chosen_positions:
+            drop_np = self.world_root.attachNewNode("ammo_crate")
+            drop_np.setPos(x, y, 0.18)
+
+            # 올리브 그린 철제 탄약통 본체 (폭 0.50m, 깊이 0.32m, 높이 0.28m)
+            make_cube_to(drop_np, 0.50, 0.32, 0.28, olive_box, 0, 0, 0)
+            # 상단 커버 덮개 & 잠금 힌지
+            make_cube_to(drop_np, 0.52, 0.34, 0.05, steel_latch, 0, 0, 0.16)
+            make_cube_to(drop_np, 0.08, 0.36, 0.08, steel_latch, 0, 0, 0)
+            # 황동 탄피 데코 (상단 노출)
+            b1 = make_cube_to(drop_np, 0.06, 0.06, 0.14, brass_bullet, -0.12, 0, 0.22)
+            b2 = make_cube_to(drop_np, 0.06, 0.06, 0.14, brass_bullet, 0.12, 0, 0.22)
+            b1.setLightOff()
+            b2.setLightOff()
+
+            # 어둠 속에서 은은하게 반짝이는 황금빛 유인 앰비언트 라이트
+            drop_light = PointLight('ammo_glow')
+            drop_light.setColor((0.65, 0.55, 0.18, 1.0))
+            drop_light.setAttenuation((1.0, 0.15, 0.04))
+            drop_light_np = drop_np.attachNewNode(drop_light)
+            drop_light_np.setPos(0, 0, 0.3)
+            self.render.setLight(drop_light_np)
+
+            self.ammo_drops.append({
+                "node": drop_np,
+                "light_np": drop_light_np,
+                "pos": (x, y)
+            })
+
+    def advance_to_next_stage(self):
+        """스테이지 클리어 시 다음 스테이지로 진입 및 난이도(적 속도) 상향"""
+        prev_stage = self.current_stage
+        self.current_stage += 1
+        self.time_left = self.time_limit
+        self.door_hold_timer = 5.0
+        self.is_reloading = False
+        self.reload_timer = 0.0
+        self.keyMap = {k: 0 for k in self.keyMap}
+
+        # 총알 궤적 정리
+        for tr in self.active_tracers:
+            tr["np"].removeNode()
+        self.active_tracers.clear()
+
+        spawn_x = 1.5 * CELL_SIZE
+        spawn_y = 1.5 * CELL_SIZE
+        self.camera.setPos(spawn_x, spawn_y, PLAYER_EYE_HEIGHT)
+        self.heading = 0.0
+        self.pitch = 0.0
+        self.camera.setHpr(0, 0, 0)
+
+        # 뷰모델 리셋
+        self.recoil_node.setPos(0, 0, 0)
+        self.recoil_node.setP(0)
+
+        # 스테미나 리셋
+        self.stamina = self.max_stamina
+        self.stamina_exhausted = False
+
+        # 비동기 작업 정리
+        for fut in self.active_chunk_futures.values():
+            fut.cancel()
+        self.active_chunk_futures.clear()
+        self.serpent_path_future = None
+        self.skeleton_path_future = None
+        self.killer_monster = None
+        self.last_move_dir = Vec3(0, 0, 0)
+
+        # 괴물 2종 새 랜덤 스폰
+        s_spawn = self.get_random_monster_spawn(spawn_x, spawn_y)
+        k_spawn = self.get_random_monster_spawn(spawn_x, spawn_y, exclude_pos=s_spawn)
+        self.serpent.reset_pos(s_spawn[0], s_spawn[1])
+        self.skeleton.reset_pos(k_spawn[0], k_spawn[1])
+
+        # 새 원거리 탈출구 무작위 생성
+        self.setup_escape_portal()
+
+        # 스테이지 2 이상부터 탄약 상자 드랍 생성
+        self.setup_ammo_drops()
+
+        # 안개 복구
+        self.liminal_fog.setColor(FOG_COLOR)
+        self.setBackgroundColor(FOG_COLOR)
+        self.win.setClearColor(FOG_COLOR)
+
+        self.door_status_text.setText("")
+        self.door_status_text.hide()
+        self.update_ammo_ui()
+
+        # 스테이지 클리어 및 진입 알림
+        speed_bonus = int((self.current_stage - 1) * 18)
+        self.show_hit_marker(
+            f"[ STAGE {prev_stage} CLEAR! ] -> [ STAGE {self.current_stage} 진입! (괴물 속도 +{speed_bonus}%) ]",
+            (0.35, 1.0, 0.5, 1.0)
+        )
+
     def restart_game(self):
         """게임 초기화: 플레이어, 괴물, 탈출구, 60초 타이머, 5초 홀드아웃, 12발 탄약 초기화"""
         self.game_over = False
         self.game_won = False
+        self.current_stage = 1
         self.time_left = self.time_limit
         self.door_hold_timer = 5.0
         self.ammo = self.max_ammo
+        self.reserve_ammo = 0
+        self.is_reloading = False
+        self.reload_timer = 0.0
         self.shoot_cooldown = 0.0
         self.recoil_timer = 0.0
         self.muzzle_timer = 0.0
         self.hit_marker_timer = 0.0
         self.bobbing_time = 0.0
         self.keyMap = {k: 0 for k in self.keyMap}
+
+        # 탄약 상자 정리 및 재생성 (스테이지 1은 0개)
+        self.setup_ammo_drops()
 
         # 총알 궤적 정리
         for tr in self.active_tracers:
@@ -1479,6 +1672,10 @@ class LiminalInfiniteLoop(ShowBase):
 
             s_speed = 8.8 if dist_serpent > 15.0 else 9.6
 
+        # 스테이지별 단계적 괴물 이동 속도 승수 (+18% per stage)
+        stage_speed_mult = 1.0 + (getattr(self, 'current_stage', 1) - 1) * 0.18
+        s_speed *= stage_speed_mult
+
         # 뱀 벽면 검출 및 벽 타기(Wall Crawling) 판정
         s_tdx, s_tdy = s_tx - sx, s_ty - sy
         s_tdist = math.hypot(s_tdx, s_tdy)
@@ -1564,6 +1761,8 @@ class LiminalInfiniteLoop(ShowBase):
 
             k_speed = 8.5 if dist_skeleton > 16.0 else 9.5
 
+        k_speed *= stage_speed_mult
+
         k_tdx, k_tdy = k_tx - kx, k_ty - ky
         k_tdist = math.hypot(k_tdx, k_tdy)
         if k_tdist > 0.05:
@@ -1590,8 +1789,25 @@ class LiminalInfiniteLoop(ShowBase):
                 self.muzzle_flash_geom.hide()
                 self.render.clearLight(self.muzzle_light_np)
 
-        # 권총 반동 애니메이션 (Slide Kickback & Pitch Up)
-        if self.recoil_timer > 0.0:
+        # 권총 재장전 및 반동 애니메이션
+        if getattr(self, 'is_reloading', False):
+            self.reload_timer -= dt
+            t_rel = max(0.0, self.reload_timer / 1.2)
+            tilt = math.sin(t_rel * math.pi)
+            self.recoil_node.setPos(0, -0.07 * tilt, -0.10 * tilt)
+            self.recoil_node.setP(-26.0 * tilt)
+
+            if self.reload_timer <= 0.0:
+                self.is_reloading = False
+                self.recoil_node.setPos(0, 0, 0)
+                self.recoil_node.setP(0)
+                needed = self.max_ammo - self.ammo
+                transferred = min(needed, getattr(self, 'reserve_ammo', 0))
+                self.ammo += transferred
+                self.reserve_ammo -= transferred
+                self.update_ammo_ui()
+                self.show_hit_marker(f"재장전 완료! (+{transferred}발)", (0.35, 1.0, 0.5, 1.0))
+        elif self.recoil_timer > 0.0:
             self.recoil_timer -= dt
             t_norm = max(0.0, self.recoil_timer / 0.10)
             self.recoil_node.setPos(0, -0.05 * t_norm, 0.02 * t_norm)
@@ -1605,6 +1821,21 @@ class LiminalInfiniteLoop(ShowBase):
             self.hit_marker_timer -= dt
             if self.hit_marker_timer <= 0.0:
                 self.hit_marker_text.setText("")
+
+        # 스테이지 2+ 탄약 상자 수거 판정 (플레이어 1.8m 이내 접근 시 예비 탄약 12발 획득)
+        if getattr(self, 'ammo_drops', None):
+            for drop in self.ammo_drops[:]:
+                dx = px - drop["pos"][0]
+                dy = py - drop["pos"][1]
+                if math.hypot(dx, dy) <= 1.8:
+                    self.reserve_ammo += 12
+                    self.show_hit_marker("탄약 상자 획득! (+12발 예비탄)", (0.35, 1.0, 0.5, 1.0))
+                    if "light_np" in drop and drop["light_np"] and not drop["light_np"].isEmpty():
+                        self.render.clearLight(drop["light_np"])
+                    if "node" in drop and drop["node"] and not drop["node"].isEmpty():
+                        drop["node"].removeNode()
+                    self.ammo_drops.remove(drop)
+                    self.update_ammo_ui()
 
         # 뷰모델 보행 밥빙(Bobbing) & 정지 호흡 스웨이
         if is_moving:
@@ -1643,11 +1874,11 @@ class LiminalInfiniteLoop(ShowBase):
                 self.door_lamp.setColor(LColor(0.9, 0.15, 0.15, 1.0) if blink else LColor(0.3, 0.05, 0.05, 1.0))
 
             if self.door_hold_timer <= 0.0:
-                self.door_status_text.setText("[ 비상문 개방 완료! 탈출 성공! ]")
+                self.door_status_text.setText("[ 비상문 개방 완료! 다음 스테이지로 진입합니다! ]")
                 self.door_status_text.setFg((0.2, 1.0, 0.4, 1.0))
                 if hasattr(self, 'door_lamp') and self.door_lamp:
                     self.door_lamp.setColor(LColor(0.2, 1.0, 0.4, 1.0))
-                self.trigger_victory()
+                self.advance_to_next_stage()
                 return task.cont
         else:
             if self.door_hold_timer < 5.0:
@@ -1658,19 +1889,20 @@ class LiminalInfiniteLoop(ShowBase):
             elif hasattr(self, 'door_status_text') and self.door_status_text.getText() != "":
                 self.door_status_text.setText("")
 
-        # 타이머 HUD 갱신
+        # 타이머 HUD 갱신 (스테이지 번호 표시)
         mins = int(self.time_left) // 60
         secs = int(self.time_left) % 60
         t_str = f"{mins:02d}:{secs:02d}"
+        stg_str = f"[ STAGE {getattr(self, 'current_stage', 1)} ]  "
         if self.time_left <= 10.0:
             flash_col = (1.0, 0.2, 0.2, 1.0) if int(self.time_left * 4) % 2 == 0 else (1.0, 0.8, 0.8, 1.0)
-            self.timer_text.setText(f"[ ! 탈출 제한시간: {t_str} (서두르세요!) ]")
+            self.timer_text.setText(f"{stg_str}[ ! 탈출 제한시간: {t_str} (서두르세요!) ]")
             self.timer_text.setFg(flash_col)
         elif self.time_left <= 25.0:
-            self.timer_text.setText(f"[ 탈출 제한시간: {t_str} ]")
+            self.timer_text.setText(f"{stg_str}[ 탈출 제한시간: {t_str} ]")
             self.timer_text.setFg((1.0, 0.85, 0.2, 1.0))
         else:
-            self.timer_text.setText(f"[ 탈출 제한시간: {t_str} ]")
+            self.timer_text.setText(f"{stg_str}[ 탈출 제한시간: {t_str} ]")
             self.timer_text.setFg((0.25, 0.95, 0.45, 1.0))
 
         # --- 5. HUD 업데이트 (괴물 거리 및 위치 표시 완전 금지 - 순수 미지의 공포감 유지) ---

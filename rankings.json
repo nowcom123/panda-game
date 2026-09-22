@@ -16,5 +16,25 @@
     "time_left": 60.0,
     "ammo_left": 12,
     "ammo_used": 0
+  },
+  {
+    "timestamp": "2026-09-22 16:54:20",
+    "result": "사망 (해골 괴물)",
+    "success": false,
+    "time_elapsed": 34.5,
+    "time_left": 25.5,
+    "ammo_left": 0,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-09-22 17:28:45",
+    "stage": 2,
+    "result": "사망 (뱀 괴물)",
+    "success": false,
+    "time_elapsed": 0.1,
+    "time_left": 59.9,
+    "ammo_left": 12,
+    "reserve_ammo": 21,
+    "ammo_used": 0
   }
 ]
