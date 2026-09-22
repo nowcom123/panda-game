@@ -1,11 +1,17 @@
+import os
+import sys
+import json
+import datetime
 import math
+import random
 import concurrent.futures
 from direct.showbase.ShowBase import ShowBase
 from direct.gui.OnscreenText import OnscreenText
-import random
+from direct.gui.DirectGui import DirectButton, DirectFrame, DirectLabel, DGG
 from panda3d.core import (
     WindowProperties, Vec3, SamplerState, Fog,
-    AmbientLight, PointLight, Spotlight, PerspectiveLens, TextNode, LColor, KeyboardButton
+    AmbientLight, PointLight, Spotlight, PerspectiveLens, TextNode, LColor, KeyboardButton,
+    LineSegs
 )
 import simplepbr
 
@@ -50,7 +56,7 @@ class LiminalInfiniteLoop(ShowBase):
         self.load_assets()
 
         # 4. 키보드 & 마우스 입력 설정
-        self.mouse_locked = True
+        self.mouse_locked = False
         self.setup_input()
 
         # 5. 무한 청크 관리자 설정 (멀티스레드 비동기 스트리밍 워커 풀)
@@ -64,10 +70,14 @@ class LiminalInfiniteLoop(ShowBase):
         self.world_root = self.render.attachNewNode("world_root")
 
         # 6. 플레이어 및 추격 괴물 2종 초기 상태
+        self.game_state = "INTRO"  # "INTRO", "PLAYING", "GAME_OVER", "VICTORY"
+        self.rank_file = os.path.join(os.path.dirname(__file__), "rankings.json")
         self.game_over = False
         self.game_won = False
         self.time_limit = 60.0
         self.time_left = self.time_limit
+        self.door_hold_timer = 5.0
+        self.door_hold_required = 5.0
         self.max_ammo = 12
         self.ammo = self.max_ammo
         self.shoot_cooldown = 0.0
@@ -75,13 +85,18 @@ class LiminalInfiniteLoop(ShowBase):
         self.muzzle_timer = 0.0
         self.hit_marker_timer = 0.0
         self.bobbing_time = 0.0
+        self.active_tracers = []
 
         self.heading = 0.0
         self.pitch = 0.0
         spawn_x = 1.5 * CELL_SIZE
         spawn_y = 1.5 * CELL_SIZE
-        self.camera.setPos(spawn_x, spawn_y, PLAYER_EYE_HEIGHT)
-        self.camera.setHpr(self.heading, self.pitch, 0)
+
+        # 인트로 맵 전경 카메라 중심 좌표
+        self.intro_center_x = 45.0
+        self.intro_center_y = 45.0
+        self.camera.setPos(self.intro_center_x, self.intro_center_y - 38.0, 11.5)
+        self.camera.lookAt(self.intro_center_x, self.intro_center_y, 1.5)
 
         # 달리기 스테미나 시스템 (100% 게이지, 전력질주 시 소모 및 걷기/정지 시 회복)
         self.max_stamina = 100.0
@@ -105,8 +120,11 @@ class LiminalInfiniteLoop(ShowBase):
         # 초기 청크 전체 로드 (멀티스레드 병렬 로딩)
         self.update_chunks(force=True)
 
-        # 7. UI 안내 문구 및 좌표 HUD
+        # 7. UI, 인트로 메뉴 및 랭킹 모달 설정
         self.setup_ui()
+        self.setup_intro_ui()
+        self.setup_rank_ui()
+        self.show_intro_scene()
 
         # 메인 업데이트 루프 등록
         self.taskMgr.add(self.update, "updateTask")
@@ -164,33 +182,33 @@ class LiminalInfiniteLoop(ShowBase):
         ex, ey = self.escape_pos
         self.escape_portal_np.setPos(ex, ey, 0)
 
-        emerald_bright = LColor(0.18, 1.0, 0.48, 1.0)
-        emerald_dark = LColor(0.05, 0.42, 0.16, 1.0)
+        # 중장갑 강화 금속 및 방화문 색상 (원색/초록색 배제, 칠흑의 어둠 속 실제 철문 질감)
+        dark_metal_frame = LColor(0.12, 0.12, 0.14, 1.0)
+        steel_door_plate = LColor(0.24, 0.25, 0.28, 1.0)
+        lock_reinforce_col = LColor(0.38, 0.39, 0.43, 1.0)
+        hazard_dim_stripe = LColor(0.45, 0.38, 0.12, 1.0)
 
-        # 1. 비상구 게이트 프레임 (너비 2.6m, 높이 3.4m)
-        make_cube_to(self.escape_portal_np, 0.22, 0.30, 3.4, emerald_dark, -1.3, 0, 1.7)
-        make_cube_to(self.escape_portal_np, 0.22, 0.30, 3.4, emerald_dark, 1.3, 0, 1.7)
-        make_cube_to(self.escape_portal_np, 2.8, 0.30, 0.25, emerald_dark, 0, 0, 3.4)
+        # 1. 육중한 강철 문틀 (너비 2.8m, 높이 3.6m)
+        make_cube_to(self.escape_portal_np, 0.28, 0.35, 3.6, dark_metal_frame, -1.35, 0, 1.8)
+        make_cube_to(self.escape_portal_np, 0.28, 0.35, 3.6, dark_metal_frame, 1.35, 0, 1.8)
+        make_cube_to(self.escape_portal_np, 2.98, 0.35, 0.30, dark_metal_frame, 0, 0, 3.6)
 
-        # 2. 발광 EXIT 비상탈출 간판
-        sign = make_cube_to(self.escape_portal_np, 1.8, 0.18, 0.45, emerald_bright, 0, 0, 3.8)
-        sign.setLightOff()
+        # 2. 비상구 철제 방화문 (색상 없음, 차가운 강철 도어 패널)
+        self.door_panel = make_cube_to(self.escape_portal_np, 2.42, 0.12, 3.42, steel_door_plate, 0, 0, 1.71)
 
-        # 3. 신비로운 초록빛 탈출 포탈 면
-        portal_plane = make_cube_to(self.escape_portal_np, 2.3, 0.08, 3.2, emerald_bright, 0, 0, 1.6)
-        portal_plane.setLightOff()
+        # 3. 3단 강화 잠금 빗장 및 중앙 전자 도어록 핸들
+        make_cube_to(self.escape_portal_np, 2.1, 0.18, 0.15, lock_reinforce_col, 0, 0, 1.0)
+        make_cube_to(self.escape_portal_np, 2.1, 0.18, 0.15, lock_reinforce_col, 0, 0, 2.0)
+        make_cube_to(self.escape_portal_np, 2.1, 0.18, 0.15, lock_reinforce_col, 0, 0, 2.9)
+        make_cube_to(self.escape_portal_np, 0.14, 0.24, 0.42, lock_reinforce_col, 0.85, 0, 1.7)
 
-        # 4. 13m 천장까지 솟구치는 빛기둥
-        pillar = make_cube_to(self.escape_portal_np, 0.16, 0.16, WALL_HEIGHT, emerald_bright, 0, 0, WALL_HEIGHT * 0.5)
-        pillar.setLightOff()
+        # 4. 하단 미세 주의 띠 (퇴색된 산업용 안전 줄무늬)
+        make_cube_to(self.escape_portal_np, 2.3, 0.14, 0.20, hazard_dim_stripe, 0, 0, 0.30)
 
-        # 5. 에메랄드 원거리 비콘 라이트 (벽체 반사로 원거리 복도에서 유인)
-        exit_light = PointLight('exit_beacon')
-        exit_light.setColor((0.35, 2.4, 0.8, 1.0))
-        exit_light.setAttenuation((1.0, 0.035, 0.0035))
-        self.exit_light_np = self.escape_portal_np.attachNewNode(exit_light)
-        self.exit_light_np.setPos(0, 0, 1.8)
-        self.render.setLight(self.exit_light_np)
+        # 5. 문 상단 소형 보안 상태 표시 램프 (평상시 희미한 황색, 홀드아웃 시 점멸, 완료 시 녹색)
+        make_cube_to(self.escape_portal_np, 0.40, 0.18, 0.16, dark_metal_frame, 0, 0, 3.9)
+        self.door_lamp = make_cube_to(self.escape_portal_np, 0.28, 0.08, 0.10, LColor(0.35, 0.25, 0.08, 1.0), 0, 0, 3.9)
+        self.door_lamp.setLightOff()
 
     def setup_viewmodel(self):
         """1인칭 듀얼 뷰모델: 왼손 손전등 & 오른손 12발 권총"""
@@ -324,6 +342,33 @@ class LiminalInfiniteLoop(ShowBase):
             self.skeleton.stun(0.5)
             self.show_hit_marker("적중! 해골 괴물 0.5초 기절!", (0.4, 0.95, 1.0, 1.0))
 
+        # 발광 총알 궤적 (Bullet Tracer) 생성
+        cam_pos = self.camera.getPos()
+        cam_quat = self.camera.getQuat()
+        cam_fwd = cam_quat.getForward()
+        cam_right = cam_quat.getRight()
+        cam_up = cam_quat.getUp()
+
+        muzzle_world = cam_pos + cam_fwd * 0.70 + cam_right * 0.26 - cam_up * 0.18
+        tracer_dist = 55.0
+        if hit_s:
+            tracer_dist = min(tracer_dist, dist_s)
+        elif hit_k:
+            tracer_dist = min(tracer_dist, dist_k)
+
+        impact_world = cam_pos + ray_dir * tracer_dist
+
+        ls = LineSegs("bullet_tracer")
+        ls.setThickness(3.6)
+        ls.setColor(1.0, 0.94, 0.35, 1.0)
+        ls.moveTo(muzzle_world)
+        ls.drawTo(impact_world)
+        tracer_node = ls.create()
+        tracer_np = self.world_root.attachNewNode(tracer_node)
+        tracer_np.setLightOff()
+
+        self.active_tracers.append({"np": tracer_np, "life": 0.09})
+
     def show_hit_marker(self, text, color):
         """피격/적중 알림 HUD 일시 표시"""
         self.hit_marker_text.setText(text)
@@ -421,11 +466,6 @@ class LiminalInfiniteLoop(ShowBase):
         # ESC 마우스 커서 해제/잠금 토글
         self.accept("escape", self.toggle_mouse_lock)
 
-        # R 키 재시작
-        self.accept("r", self.restart_game)
-        self.accept("shift-r", self.restart_game)
-        self.accept("R", self.restart_game)
-
     def set_key(self, key, state):
         self.keyMap[key] = state
 
@@ -516,7 +556,7 @@ class LiminalInfiniteLoop(ShowBase):
             **font_kw
         )
         self.guide_text = OnscreenText(
-            text="[WASD] 8방향 이동  |  [Shift] 달리기  |  [좌클릭] 12발 권총 사격 (적중 시 0.5초 기절)  |  [R] 재시작",
+            text="[WASD] 8방향 이동  |  [Shift] 달리기  |  [좌클릭] 12발 권총 사격 (적중 시 0.5초 기절)",
             pos=(0, -0.93),
             scale=0.038,
             fg=(0.9, 0.9, 0.8, 0.85),
@@ -525,7 +565,20 @@ class LiminalInfiniteLoop(ShowBase):
             **font_kw
         )
 
-        # 6. 게임 오버 UI
+        # 6. 비상탈출문 5초 홀드아웃 상태 알림 HUD
+        self.door_status_text = OnscreenText(
+            text="",
+            pos=(0, 0.65),
+            scale=0.048,
+            fg=(1.0, 0.85, 0.2, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **font_kw
+        )
+        self.door_status_text.hide()
+
+        # 7. 게임 오버 UI
         self.game_over_banner = OnscreenText(
             text="사  망",
             pos=(0, 0.25),
@@ -546,18 +599,8 @@ class LiminalInfiniteLoop(ShowBase):
             mayChange=True,
             **font_kw
         )
-        self.game_over_restart = OnscreenText(
-            text="[ R ] 키를 눌러 다시 도전",
-            pos=(0, -0.15),
-            scale=0.05,
-            fg=(1.0, 0.85, 0.2, 1.0),
-            shadow=(0, 0, 0, 0.85),
-            align=TextNode.ACenter,
-            mayChange=False,
-            **font_kw
-        )
 
-        # 7. 탈출 성공(승리) UI
+        # 8. 탈출 성공(승리) UI
         self.victory_banner = OnscreenText(
             text="탈  출  성  공",
             pos=(0, 0.25),
@@ -579,17 +622,304 @@ class LiminalInfiniteLoop(ShowBase):
             **font_kw
         )
 
+        # 9. 게임 종료 시 메인 메뉴 / 랭킹 버튼 (R 재시작 버튼 완전 삭제)
+        btn_font_kw = {"text_font": self.korean_font} if self.korean_font else {}
+        self.btn_game_menu = DirectButton(
+            text="메인 메뉴 (MENU)",
+            pos=(-0.28, 0, -0.22),
+            scale=0.055,
+            relief=DGG.RAISED,
+            frameColor=(0.15, 0.16, 0.22, 0.95),
+            text_fg=(1.0, 1.0, 1.0, 1.0),
+            borderWidth=(0.005, 0.005),
+            pad=(0.35, 0.15),
+            command=self.return_to_intro,
+            **btn_font_kw
+        )
+        self.btn_game_rank = DirectButton(
+            text="기록 랭킹 (RANK)",
+            pos=(0.28, 0, -0.22),
+            scale=0.055,
+            relief=DGG.RAISED,
+            frameColor=(0.18, 0.15, 0.12, 0.95),
+            text_fg=(1.0, 0.9, 0.3, 1.0),
+            borderWidth=(0.005, 0.005),
+            pad=(0.35, 0.15),
+            command=self.show_rank_modal,
+            **btn_font_kw
+        )
+
         self.game_over_banner.hide()
         self.game_over_desc.hide()
-        self.game_over_restart.hide()
         self.victory_banner.hide()
         self.victory_desc.hide()
+        self.btn_game_menu.hide()
+        self.btn_game_rank.hide()
+
+    def setup_intro_ui(self):
+        """인트로 타이틀 및 메인 메뉴 버튼(START, RANK, EXIT) 생성"""
+        font_kw = {"font": self.korean_font} if self.korean_font else {}
+        btn_font_kw = {"text_font": self.korean_font} if self.korean_font else {}
+
+        self.intro_frame = DirectFrame(
+            frameColor=(0, 0, 0, 0),
+            frameSize=(-1.5, 1.5, -1.0, 1.0),
+            pos=(0, 0, 0)
+        )
+
+        self.intro_title = OnscreenText(
+            text="LIMINAL BACKROOMS",
+            parent=self.intro_frame,
+            pos=(0, 0.52),
+            scale=0.11,
+            fg=(0.95, 0.95, 0.95, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            **font_kw
+        )
+
+        self.intro_subtitle = OnscreenText(
+            text="[ 1분 서바이벌 호러 : 비상구 탈출 ]",
+            parent=self.intro_frame,
+            pos=(0, 0.38),
+            scale=0.048,
+            fg=(0.90, 0.25, 0.25, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            **font_kw
+        )
+
+        self.intro_desc = OnscreenText(
+            text="칠흑 같은 미궁에서 비상탈출구를 찾아 5초간 문을 사수하세요.\n오른손 12발 권총으로 접근하는 괴물을 기절(0.5초)시킬 수 있습니다.",
+            parent=self.intro_frame,
+            pos=(0, 0.22),
+            scale=0.038,
+            fg=(0.82, 0.82, 0.85, 0.92),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            **font_kw
+        )
+
+        btn_style = {
+            "relief": DGG.RAISED,
+            "borderWidth": (0.005, 0.005),
+            "pad": (0.45, 0.16),
+            "scale": 0.065
+        }
+
+        self.btn_start = DirectButton(
+            parent=self.intro_frame,
+            text="START",
+            pos=(0, 0, 0.02),
+            frameColor=(0.14, 0.24, 0.16, 0.95),
+            text_fg=(0.35, 1.0, 0.55, 1.0),
+            command=self.start_game,
+            **btn_style,
+            **btn_font_kw
+        )
+
+        self.btn_rank = DirectButton(
+            parent=self.intro_frame,
+            text="RANK",
+            pos=(0, 0, -0.15),
+            frameColor=(0.20, 0.18, 0.12, 0.95),
+            text_fg=(1.0, 0.85, 0.25, 1.0),
+            command=self.show_rank_modal,
+            **btn_style,
+            **btn_font_kw
+        )
+
+        self.btn_exit = DirectButton(
+            parent=self.intro_frame,
+            text="EXIT",
+            pos=(0, 0, -0.32),
+            frameColor=(0.22, 0.12, 0.12, 0.95),
+            text_fg=(1.0, 0.4, 0.4, 1.0),
+            command=self.exit_game,
+            **btn_style,
+            **btn_font_kw
+        )
+
+    def setup_rank_ui(self):
+        """기록 랭킹 팝업 모달창 생성"""
+        font_kw = {"font": self.korean_font} if self.korean_font else {}
+        btn_font_kw = {"text_font": self.korean_font} if self.korean_font else {}
+
+        self.rank_modal = DirectFrame(
+            frameColor=(0.06, 0.07, 0.09, 0.96),
+            frameSize=(-1.10, 1.10, -0.80, 0.80),
+            pos=(0, 0, 0)
+        )
+
+        self.rank_title = OnscreenText(
+            text="[ 생존 & 탈출 기록 랭킹 (RANKING) ]",
+            parent=self.rank_modal,
+            pos=(0, 0.65),
+            scale=0.062,
+            fg=(1.0, 0.85, 0.25, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            **font_kw
+        )
+
+        self.rank_content = OnscreenText(
+            text="기록을 불러오는 중...",
+            parent=self.rank_modal,
+            pos=(-0.95, 0.48),
+            scale=0.034,
+            fg=(0.92, 0.92, 0.92, 0.95),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ALeft,
+            mayChange=True,
+            **font_kw
+        )
+
+        self.btn_close_rank = DirectButton(
+            parent=self.rank_modal,
+            text="닫기 (CLOSE)",
+            pos=(0, 0, -0.68),
+            scale=0.052,
+            relief=DGG.RAISED,
+            frameColor=(0.18, 0.18, 0.22, 0.95),
+            text_fg=(0.95, 0.95, 0.95, 1.0),
+            borderWidth=(0.005, 0.005),
+            pad=(0.35, 0.14),
+            command=self.hide_rank_modal,
+            **btn_font_kw
+        )
+
+        self.rank_modal.hide()
+
+    def show_rank_modal(self):
+        """랭킹 모달창 표시 및 저장된 기록 목록 로드"""
+        records = self.load_rankings()
+        escapes = [r for r in records if r.get("success", False)]
+        escapes.sort(key=lambda r: r.get("time_elapsed", 9999))
+
+        recent = list(reversed(records))[:6]
+
+        lines = []
+        lines.append("=== [ 탈출 성공 명예의 전당 (최단 시간 TOP 5) ] ===")
+        if escapes:
+            for i, r in enumerate(escapes[:5], 1):
+                t_el = r.get('time_elapsed', 0)
+                ammo = r.get('ammo_left', 0)
+                ts = r.get('timestamp', '')
+                lines.append(f"  #{i}위 | 탈출 시간: {t_el:.1f}초 | 남은 탄약: {ammo}/12발 | 일시: {ts}")
+        else:
+            lines.append("  아직 탈출 성공 기록이 없습니다. 최초로 탈출에 성공해보세요!")
+
+        lines.append("\n=== [ 최근 플레이 도전 기록 (최근 6회) ] ===")
+        if recent:
+            for r in recent:
+                res = r.get('result', '기록 없음')
+                t_el = r.get('time_elapsed', 0)
+                ammo = r.get('ammo_left', 0)
+                ts = r.get('timestamp', '')
+                lines.append(f"  • [{res}]  진행: {t_el:.1f}초 | 잔여 탄약: {ammo}/12발 | {ts}")
+        else:
+            lines.append("  플레이 기록이 없습니다.")
+
+        self.rank_content.setText("\n".join(lines))
+        self.rank_modal.show()
+        if self.game_state == "INTRO":
+            self.intro_frame.hide()
+
+    def hide_rank_modal(self):
+        """랭킹 모달창 닫기"""
+        self.rank_modal.hide()
+        if self.game_state == "INTRO":
+            self.intro_frame.show()
+
+    def load_rankings(self):
+        """저장된 랭킹 데이터 불러오기"""
+        if os.path.exists(self.rank_file):
+            try:
+                with open(self.rank_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"랭킹 로드 오류: {e}")
+                return []
+        return []
+
+    def save_rank_record(self, result_type, success, time_elapsed, time_left, ammo_left):
+        """사망 또는 탈출 성공 시 기록 자동 파일 저장"""
+        rec = {
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "result": result_type,
+            "success": success,
+            "time_elapsed": round(time_elapsed, 1),
+            "time_left": round(time_left, 1),
+            "ammo_left": ammo_left,
+            "ammo_used": self.max_ammo - ammo_left
+        }
+        records = self.load_rankings()
+        records.append(rec)
+        try:
+            with open(self.rank_file, "w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"랭킹 저장 실패: {e}")
+
+    def exit_game(self):
+        """게임 종료"""
+        self.destroy()
+        sys.exit(0)
+
+    def show_intro_scene(self):
+        """인트로 화면 전환: 맵 전경 시네마틱 조망, 마우스 커서 해제, 인트로 버튼 표시"""
+        self.game_state = "INTRO"
+        self.lock_mouse(False)
+        self.vm_root.hide()
+        self.render.clearLight(self.pl_np)
+        self.render.clearLight(self.fill_np)
+
+        # 인게임 HUD 숨김
+        self.crosshair.hide()
+        self.timer_text.hide()
+        self.ammo_text.hide()
+        self.hud_text.hide()
+        self.stamina_text.hide()
+        self.guide_text.hide()
+        self.door_status_text.hide()
+        self.game_over_banner.hide()
+        self.game_over_desc.hide()
+        self.victory_banner.hide()
+        self.victory_desc.hide()
+        self.btn_game_menu.hide()
+        self.btn_game_rank.hide()
+        self.hide_rank_modal()
+
+        # 인트로 UI 표시
+        self.intro_frame.show()
+
+    def start_game(self):
+        """START 버튼 클릭 시 1인칭 게임플레이 시작"""
+        self.game_state = "PLAYING"
+        self.hide_rank_modal()
+        self.intro_frame.hide()
+        self.restart_game()
+        self.vm_root.show()
+        self.render.setLight(self.pl_np)
+        self.render.setLight(self.fill_np)
+        self.crosshair.show()
+        self.timer_text.show()
+        self.ammo_text.show()
+        self.hud_text.show()
+        self.stamina_text.show()
+        self.guide_text.show()
+        self.lock_mouse(True)
+
+    def return_to_intro(self):
+        """게임 종료 화면에서 메인 메뉴로 복귀"""
+        self.show_intro_scene()
 
     def restart_game(self):
-        """게임 재시작: 플레이어, 괴물, 탈출구, 60초 타이머, 12발 탄약 초기화"""
+        """게임 초기화: 플레이어, 괴물, 탈출구, 60초 타이머, 5초 홀드아웃, 12발 탄약 초기화"""
         self.game_over = False
         self.game_won = False
         self.time_left = self.time_limit
+        self.door_hold_timer = 5.0
         self.ammo = self.max_ammo
         self.shoot_cooldown = 0.0
         self.recoil_timer = 0.0
@@ -597,6 +927,11 @@ class LiminalInfiniteLoop(ShowBase):
         self.hit_marker_timer = 0.0
         self.bobbing_time = 0.0
         self.keyMap = {k: 0 for k in self.keyMap}
+
+        # 총알 궤적 정리
+        for tr in self.active_tracers:
+            tr["np"].removeNode()
+        self.active_tracers.clear()
 
         spawn_x = 1.5 * CELL_SIZE
         spawn_y = 1.5 * CELL_SIZE
@@ -641,20 +976,23 @@ class LiminalInfiniteLoop(ShowBase):
         # UI 복구
         self.game_over_banner.hide()
         self.game_over_desc.hide()
-        self.game_over_restart.hide()
         self.victory_banner.hide()
         self.victory_desc.hide()
+        self.btn_game_menu.hide()
+        self.btn_game_rank.hide()
+        self.door_status_text.setText("")
+        self.door_status_text.hide()
         self.crosshair.show()
         self.guide_text.show()
         self.hit_marker_text.setText("")
         self.update_ammo_ui()
-        self.lock_mouse(True)
 
     def trigger_victory(self):
-        """탈출구 도착 시 탈출 성공 연출"""
+        """탈출구 5초 홀드아웃 성공 시 승리 연출 및 랭킹 자동 기록"""
         if self.game_over or self.game_won:
             return
         self.game_won = True
+        self.game_state = "VICTORY"
         self.keyMap = {k: 0 for k in self.keyMap}
 
         # 초록빛 승리 조명
@@ -663,21 +1001,33 @@ class LiminalInfiniteLoop(ShowBase):
         self.setBackgroundColor(green_fog)
         self.win.setClearColor(green_fog)
 
+        elapsed = self.time_limit - self.time_left
         remaining = max(0.0, self.time_left)
         self.victory_banner.show()
-        self.victory_desc.setText(f"비상 탈출구를 찾아 악몽에서 탈출했습니다!\n[남은 시간: {remaining:.1f}초  |  남은 탄약: {self.ammo}/12발]")
+        self.victory_desc.setText(f"비상 탈출구를 열고 악몽의 미궁을 탈출했습니다!\n[소요 시간: {elapsed:.1f}초  |  남은 탄약: {self.ammo}/12발]")
         self.victory_desc.show()
-        self.game_over_restart.show()
+        self.btn_game_menu.show()
+        self.btn_game_rank.show()
         self.guide_text.hide()
         self.crosshair.hide()
+        self.door_status_text.hide()
+        self.lock_mouse(False)
+
+        # 랭킹 파일 자동 기록
+        self.save_rank_record("탈출 성공", True, elapsed, remaining, self.ammo)
 
     def trigger_game_over(self, killer=None, reason="killed"):
-        """괴물에게 잡혔거나 제한시간 초과 시 게임 오버 연출"""
+        """괴물에게 잡혔거나 제한시간 초과 시 게임 오버 연출 및 랭킹 자동 기록"""
         if self.game_over or self.game_won:
             return
         self.game_over = True
+        self.game_state = "GAME_OVER"
         self.killer_monster = killer
         self.keyMap = {k: 0 for k in self.keyMap}
+
+        elapsed = self.time_limit - self.time_left
+        remaining = max(0.0, self.time_left)
+        result_desc = ""
 
         if killer is not None:
             # 카메라를 킬러 괴물의 섬뜩한 얼굴로 즉시 강제 응시 (점프스케어 앵글)
@@ -697,8 +1047,10 @@ class LiminalInfiniteLoop(ShowBase):
             self.game_over_banner.setFg((0.95, 0.08, 0.08, 1.0))
             if isinstance(killer, TallSkeletonMonster):
                 self.game_over_desc.setText("쩍 벌어진 입의 거대 해골 괴물에게 영혼을 빼앗겼습니다...")
+                result_desc = "사망 (해골 괴물)"
             else:
                 self.game_over_desc.setText("칠흑의 거대한 뱀에게 온몸을 휘감겨 삼켜졌습니다...")
+                result_desc = "사망 (뱀 괴물)"
 
             blood_fog = LColor(0.22, 0.02, 0.02, 1.0)
             self.liminal_fog.setColor(blood_fog)
@@ -709,6 +1061,7 @@ class LiminalInfiniteLoop(ShowBase):
             self.game_over_banner.setText("탈  출  실  패")
             self.game_over_banner.setFg((0.85, 0.25, 0.95, 1.0))
             self.game_over_desc.setText("제한시간 1분이 모두 지나 미궁의 심연에 영원히 갇혔습니다...")
+            result_desc = "탈출 실패 (시간 초과)"
             purple_fog = LColor(0.08, 0.02, 0.15, 1.0)
             self.liminal_fog.setColor(purple_fog)
             self.setBackgroundColor(purple_fog)
@@ -716,9 +1069,15 @@ class LiminalInfiniteLoop(ShowBase):
 
         self.game_over_banner.show()
         self.game_over_desc.show()
-        self.game_over_restart.show()
+        self.btn_game_menu.show()
+        self.btn_game_rank.show()
         self.guide_text.hide()
         self.crosshair.hide()
+        self.door_status_text.hide()
+        self.lock_mouse(False)
+
+        # 랭킹 파일 자동 기록
+        self.save_rank_record(result_desc, False, elapsed, remaining, self.ammo)
 
     def update_chunks(self, force=False):
         """시야 내 및 이동 방향을 예측하는 비동기 멀티스레드 청크 스트리밍"""
@@ -902,12 +1261,31 @@ class LiminalInfiniteLoop(ShowBase):
         if dt > 0.1:
             dt = 0.1
 
+        # 활성 총알 궤적 수명 관리
+        for tr in self.active_tracers[:]:
+            tr["life"] -= dt
+            if tr["life"] <= 0.0:
+                tr["np"].removeNode()
+                self.active_tracers.remove(tr)
+
+        # --- [INTRO 상태] 맵 전경 시네마틱 회전 및 청크 렌더링 ---
+        if self.game_state == "INTRO":
+            t = globalClock.getFrameTime()
+            cx = getattr(self, 'intro_center_x', 45.0)
+            cy = getattr(self, 'intro_center_y', 45.0)
+            cam_x = cx + math.sin(t * 0.12) * 38.0
+            cam_y = cy + math.cos(t * 0.12) * 38.0
+            self.camera.setPos(cam_x, cam_y, 11.5)
+            self.camera.lookAt(cx, cy, 1.5)
+            self.update_chunks()
+            return task.cont
+
         # --- [승리 상태] 탈출 성공 시: 업데이트 정지 ---
-        if self.game_won:
+        if self.game_won or self.game_state == "VICTORY":
             return task.cont
 
         # --- [게임 오버 상태] 플레이어 사망 시: 시선 강제 고정 및 킬러 괴물 공격 모션 유지 ---
-        if self.game_over:
+        if self.game_over or self.game_state == "GAME_OVER":
             if self.killer_monster is not None:
                 killer = self.killer_monster
                 px, py = self.camera.getX(), self.camera.getY()
@@ -1246,17 +1624,39 @@ class LiminalInfiniteLoop(ShowBase):
             self.trigger_game_over(killer=None, reason="timeout")
             return task.cont
 
-        # 탈출구 비콘 은은한 펄스 발광
-        if hasattr(self, 'exit_light_np') and self.exit_light_np:
-            t = globalClock.getFrameTime()
-            pulse = 1.0 + 0.28 * math.sin(t * 4.5)
-            self.exit_light_np.node().setColor((0.35 * pulse, 2.4 * pulse, 0.8 * pulse, 1.0))
-
-        # 탈출구 도달 판정 (탈출 포탈 2.8m 이내 도달 시 탈출 성공)
+        # 비상탈출문 5초 홀드아웃 방어 판정 (색상 제거 및 난이도 상승)
         dist_exit = math.hypot(px - self.escape_pos[0], py - self.escape_pos[1])
         if dist_exit <= 2.8:
-            self.trigger_victory()
-            return task.cont
+            self.door_hold_timer -= dt
+            hold_time = max(0.0, self.door_hold_timer)
+            progress_sec = 5.0 - hold_time
+            pct = max(0.0, min(1.0, progress_sec / 5.0))
+            bars = int(pct * 16)
+            bar_str = "■" * bars + "□" * (16 - bars)
+            self.door_status_text.setText(f"[ 비상문 개방 중: {progress_sec:.1f}s / 5.0s  [{bar_str}] ]\n[ 경고: 문이 열릴 때까지 괴물의 접근을 저지하세요! ]")
+            self.door_status_text.setFg((1.0, 0.85, 0.2, 1.0))
+            self.door_status_text.show()
+
+            # 도어 상단 램프 점멸 연출
+            if hasattr(self, 'door_lamp') and self.door_lamp:
+                blink = (int(globalClock.getFrameTime() * 8) % 2 == 0)
+                self.door_lamp.setColor(LColor(0.9, 0.15, 0.15, 1.0) if blink else LColor(0.3, 0.05, 0.05, 1.0))
+
+            if self.door_hold_timer <= 0.0:
+                self.door_status_text.setText("[ 비상문 개방 완료! 탈출 성공! ]")
+                self.door_status_text.setFg((0.2, 1.0, 0.4, 1.0))
+                if hasattr(self, 'door_lamp') and self.door_lamp:
+                    self.door_lamp.setColor(LColor(0.2, 1.0, 0.4, 1.0))
+                self.trigger_victory()
+                return task.cont
+        else:
+            if self.door_hold_timer < 5.0:
+                self.door_hold_timer = 5.0
+                self.door_status_text.setText("[ 비상문 개방 중단! 탈출구 앞(2.8m)을 사수하세요! ]")
+                self.door_status_text.setFg((1.0, 0.3, 0.3, 1.0))
+                self.door_status_text.show()
+            elif hasattr(self, 'door_status_text') and self.door_status_text.getText() != "":
+                self.door_status_text.setText("")
 
         # 타이머 HUD 갱신
         mins = int(self.time_left) // 60
