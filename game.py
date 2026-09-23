@@ -1,1427 +1,502 @@
 import os
 import sys
-import json
-import datetime
 import math
 import random
 import concurrent.futures
 from direct.showbase.ShowBase import ShowBase
-from direct.showbase.Audio3DManager import Audio3DManager
-from direct.gui.OnscreenText import OnscreenText
-from direct.gui.DirectGui import DirectButton, DirectFrame, DirectLabel, DGG
 from panda3d.core import (
-    WindowProperties, Vec3, SamplerState, Fog,
-    AmbientLight, PointLight, Spotlight, PerspectiveLens, TextNode, LColor, KeyboardButton,
-    LineSegs, Filename
+    Vec3, SamplerState, Fog, AmbientLight, PointLight, LColor
 )
 import simplepbr
 
-# 모듈화된 하위 시스템 임포트 (PRC 설정은 constants에서 자동 초기화)
 from constants import (
-    CELL_SIZE, CHUNK_SIZE, CHUNK_CELLS, WALL_HEIGHT, PLAYER_RADIUS,
-    PLAYER_EYE_HEIGHT, WALK_SPEED, SPRINT_SPEED, RENDER_RADIUS, FOG_COLOR,
-    MAP_MIN_CHUNK, MAP_MAX_CHUNK, WALL_THICKNESS
+    CELL_SIZE, CHUNK_SIZE, CHUNK_CELLS, WALL_HEIGHT,
+    PLAYER_EYE_HEIGHT, RENDER_RADIUS, FOG_COLOR, BLACKOUT_FOG_COLOR,
+    MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
 from world_gen import find_cell_path, check_line_of_sight, cell_has_pillar
 from chunk import Chunk
-from monster import LongBlackSerpent, TallSkeletonMonster
-from geometry import make_cube_to
+from monster import (
+    LongBlackSerpent, TallSkeletonMonster,
+    AbominableMudOrc, AlluringAshWitch
+)
+from geometry import make_cube_to, make_cube
+
+# 분리된 모듈 임포트
+from collision import get_nearby_colliders, resolve_collision
+from audio_system import AudioManager
+from ui_manager import UIManager
+from combat_system import CombatSystem
+from player_controller import PlayerController
+
+
+class Fireball:
+    """매혹의 잿더미 마녀가 발사하는 타오르는 불꽃 발사체"""
+    def __init__(self, render, start_pos, target_pos):
+        self.render = render
+        self.pos = Vec3(start_pos)
+        self.node = render.attachNewNode("witch_fireball")
+        self.node.setPos(self.pos)
+
+        fire_core = make_cube("fb_core", 0.32, 0.32, 0.32, LColor(1.0, 0.28, 0.05, 1.0))
+        fire_core.setLightOff()
+        fire_core.reparentTo(self.node)
+
+        fire_inner = make_cube("fb_inner", 0.18, 0.18, 0.18, LColor(1.0, 0.90, 0.30, 1.0))
+        fire_inner.setLightOff()
+        fire_inner.reparentTo(self.node)
+
+        pl = PointLight('fb_glow')
+        pl.setColor((1.8, 0.45, 0.10, 1.0))
+        pl.setAttenuation((1.0, 0.22, 0.06))
+        self.light_np = self.node.attachNewNode(pl)
+        render.setLight(self.light_np)
+
+        dx = target_pos[0] - start_pos[0]
+        dy = target_pos[1] - start_pos[1]
+        dz = target_pos[2] - start_pos[2]
+        d = math.hypot(dx, dy, dz)
+        if d > 0.01:
+            self.vel = Vec3(dx / d, dy / d, dz / d) * 14.5
+        else:
+            self.vel = Vec3(0, 1, 0) * 14.5
+
+        self.lifetime = 3.5
+        self.damage = 22.0
+
+    def update(self, dt):
+        self.lifetime -= dt
+        self.pos += self.vel * dt
+        self.node.setPos(self.pos)
+        self.node.setH(self.node.getH() + dt * 400.0)
+        self.node.setP(self.node.getP() + dt * 280.0)
+        return self.lifetime > 0.0
+
+    def destroy(self):
+        if hasattr(self, 'light_np') and not self.light_np.isEmpty():
+            self.render.clearLight(self.light_np)
+            self.light_np.removeNode()
+        if hasattr(self, 'node') and not self.node.isEmpty():
+            self.node.removeNode()
+
+
+class GroundShockwave:
+    """혐오스런 진흙 오크의 땅울림(Ground Slam) 지면 충격파 분진 효과"""
+    def __init__(self, render, x, y):
+        self.render = render
+        self.pos = Vec3(x, y, 0.06)
+        self.node = render.attachNewNode("orc_shockwave")
+        self.node.setPos(self.pos)
+        self.radius = 0.6
+        self.max_radius = 11.5
+        self.timer = 0.0
+        self.duration = 0.70
+
+        self.fragments = []
+        dust_col = LColor(0.28, 0.22, 0.14, 0.9)
+        for i in range(8):
+            ang = i * (math.pi / 4.0)
+            p = make_cube(f"sw_{i}", 0.40, 0.40, 0.16, dust_col)
+            p.reparentTo(self.node)
+            self.fragments.append((p, math.cos(ang), math.sin(ang)))
+
+    def update(self, dt):
+        self.timer += dt
+        pct = min(1.0, self.timer / self.duration)
+        r = self.radius + pct * (self.max_radius - self.radius)
+        z = math.sin(pct * math.pi) * 0.42
+        for part, dx, dy in self.fragments:
+            part.setPos(dx * r, dy * r, z)
+            part.setScale(max(0.1, 1.0 - pct * 0.5))
+        return pct < 1.0
+
+    def destroy(self):
+        if hasattr(self, 'node') and not self.node.isEmpty():
+            self.node.removeNode()
 
 
 class LiminalInfiniteLoop(ShowBase):
     def __init__(self):
         super().__init__()
 
-        # PBR 렌더링 최적화 (직선 손전등 + 근접 필라이트 + 촛불2 + 뱀오라 + 해골오라 등 8개 슬롯 지원)
+        # PBR 렌더링 최적화
         if hasattr(self, 'win') and self.win is not None:
-            simplepbr.init(
+            self.pbr_pipeline = simplepbr.init(
                 max_lights=8,
                 use_normal_maps=False,
                 use_emission_maps=False,
                 use_occlusion_maps=False,
-                enable_shadows=False
+                enable_shadows=False,
+                enable_fog=True
             )
 
-        # 1. 카메라 가시거리 및 안개 설정 (POV 확장: FOV 88도로 넓고 시원한 시야 확보)
+        # 1. 카메라 가시거리 및 안개 설정 (FOV 88도)
         if hasattr(self, 'camLens') and self.camLens is not None:
-            self.camLens.setNearFar(0.2, 65.0)
+            self.camLens.setNearFar(0.15, 85.0)
             self.camLens.setFov(88.0)
         self.rendered_chunk_count = 0
         self.total_chunk_count = 0
-        self.last_hud_text = ""
         self.setup_fog()
 
-        # 2. 백룸 조명 연출 (2단 천장 및 플레이어 조명)
+        # 2. 백룸 기본 조명 연출
         self.setup_lighting()
 
         # 3. 텍스처 로드
         self.load_assets()
 
-        # 4. 키보드 & 마우스 입력 설정
-        self.mouse_locked = False
-        self.setup_input()
-
-        # 5. 무한 청크 관리자 설정 (멀티스레드 비동기 스트리밍 워커 풀)
-        self.chunks = {}  # (cx, cy) -> Chunk 객체
+        # 4. 무한 청크 관리자 설정
+        self.chunks = {}
         self.chunk_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ChunkWorker")
-        self.active_chunk_futures = {}  # (cx, cy) -> Future
-        self.serpent_path_future = None
-        self.skeleton_path_future = None
-        self.killer_monster = None
-        self.last_move_dir = Vec3(0, 0, 0)
+        self.active_chunk_futures = {}
+        self.last_cull_pos = None
         self.world_root = self.render.attachNewNode("world_root")
 
-        # 6. 플레이어 및 추격 괴물 2종 초기 상태
-        self.game_state = "INTRO"  # "INTRO", "PLAYING", "GAME_OVER", "VICTORY"
-        self.rank_file = os.path.join(os.path.dirname(__file__), "rankings.json")
+        # 5. 던전 크롤러 몬스터 군단 관리자 및 발사체
+        self.monsters = []
+        self.corpses = []
+        self.killer_monster = None
+        self.fireballs = []
+        self.shockwaves = []
+
+        # 5-1. 정전 프로토콜 (Blackout & Crimson Protocol) 상태
+        self.blackout_active = False
+        self.blackout_timer = 0.0
+        self.blackout_triggered_this_stage = False
+
+        # 6. 하위 서브시스템 초기화 (오디오, UI, 전투, 플레이어 제어)
+        if not hasattr(self, 'camera') or self.camera is None:
+            self.camera = self.render.attachNewNode("camera")
+        self.audio_mgr = AudioManager(self, self.loader, self.camera, getattr(self, 'sfxManagerList', None))
+
+        self.ui_mgr = UIManager(
+            self, self.loader,
+            on_start=self.start_game,
+            on_return_menu=self.return_to_intro,
+            on_exit=self.exit_game
+        )
+
+        self.combat = CombatSystem(
+            self, self.render, self.camera, self.world_root,
+            self.audio_mgr, self.ui_mgr
+        )
+
+        self.player = PlayerController(
+            self, self.win, self.camera, self.mouseWatcherNode,
+            self.audio_mgr, self.ui_mgr
+        )
+        self.player.setup_input(
+            on_shoot=self.shoot_pistol,
+            on_reload=self.reload_pistol
+        )
+
+        # 7. 게임 상태 및 5분(300초) 타이머 설정
+        self.game_state = "INTRO"  # "INTRO", "PLAYING", "SHOP", "GAME_OVER", "VICTORY"
         self.game_over = False
         self.game_won = False
         self.current_stage = 1
-        self.time_limit = 60.0
+        self.time_limit = 300.0  # 던전 크롤러 모드: 5분(300초)
         self.time_left = self.time_limit
         self.door_hold_timer = 5.0
-        self.door_hold_required = 5.0
-        self.max_ammo = 12
-        self.ammo = self.max_ammo
-        self.reserve_ammo = 0
-        self.is_reloading = False
-        self.reload_timer = 0.0
-        self.ammo_drops = []
-        self.shoot_cooldown = 0.0
-        self.recoil_timer = 0.0
-        self.muzzle_timer = 0.0
-        self.hit_marker_timer = 0.0
         self.stage_banner_timer = 0.0
-        self.bobbing_time = 0.0
-        self.active_tracers = []
 
-        self.heading = 0.0
-        self.pitch = 0.0
+        # 초기 청크 및 인트로 씬 로드
         spawn_x = 1.5 * CELL_SIZE
         spawn_y = 1.5 * CELL_SIZE
-
-        # 인트로 맵 전경 카메라 중심 좌표
-        self.intro_center_x = 45.0
-        self.intro_center_y = 45.0
-        self.camera.setPos(self.intro_center_x, self.intro_center_y - 38.0, 11.5)
-        self.camera.lookAt(self.intro_center_x, self.intro_center_y, 1.5)
-
-        # 달리기 스테미나 시스템 (100% 게이지, 전력질주 시 소모 및 걷기/정지 시 회복)
-        self.max_stamina = 100.0
-        self.stamina = self.max_stamina
-        self.stamina_exhausted = False
-
-        # 적 1 & 적 2: 항상 유효한 복도 구역 중 무작위 랜덤 스폰 (26m~46m 거리 유지)
-        s_spawn = self.get_random_monster_spawn(spawn_x, spawn_y)
-        k_spawn = self.get_random_monster_spawn(spawn_x, spawn_y, exclude_pos=s_spawn)
-
-        self.serpent = LongBlackSerpent(self.render, s_spawn[0], s_spawn[1])
-        self.skeleton = TallSkeletonMonster(self.render, k_spawn[0], k_spawn[1])
-        self.monsters = [self.serpent, self.skeleton]
-
-        # 스폰 지역과 먼 유효 복도에 완전 랜덤 비상 탈출구 생성
-        self.setup_escape_portal()
-
-        # 1인칭 듀얼 뷰모델 (왼손 손전등, 오른손 12발 권총)
-        self.setup_viewmodel()
-
-        # 초기 청크 전체 로드 (멀티스레드 병렬 로딩)
+        self.player.reset_position(spawn_x, spawn_y)
         self.update_chunks(force=True)
 
-        # 6.5. 3D 입체 음향 및 호러 사운드 시스템 초기화
-        self.setup_audio()
-
-        # 7. UI, 인트로 메뉴 및 랭킹 모달 설정
-        self.setup_ui()
-        self.setup_intro_ui()
-        self.setup_rank_ui()
         self.show_intro_scene()
+        self.taskMgr.add(self.update, "update_task")
 
-        # 메인 업데이트 루프 등록
-        self.taskMgr.add(self.update, "updateTask")
-
-        # 8. 셰이더 및 GPU 파이프라인 사전 웜업 (게임 진입 직후 첫 프레임 스터터링 100% 제거)
-        for _ in range(2):
-            self.taskMgr.step()
-
-    def get_random_monster_spawn(self, px, py, min_dist=26.0, max_dist=46.0, exclude_pos=None):
-        """플레이어로부터 min_dist~max_dist 사이의 유효한 복도 셀 중심 랜덤 스폰 좌표 산출"""
-        min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 1
-        max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 2
-        candidates = []
-        for gx in range(min_cell, max_cell + 1):
-            for gy in range(min_cell, max_cell + 1):
-                # 중앙 주 복도(lx=1 또는 ly=1)는 벽체 없이 100% 개방 보장
-                if gx % 3 == 1 or gy % 3 == 1:
-                    cx = (gx + 0.5) * CELL_SIZE
-                    cy = (gy + 0.5) * CELL_SIZE
-                    d = math.hypot(cx - px, cy - py)
-                    if min_dist <= d <= max_dist:
-                        if exclude_pos is not None:
-                            ed = math.hypot(cx - exclude_pos[0], cy - exclude_pos[1])
-                            if ed < 15.0:
-                                continue
-                        candidates.append((cx, cy))
-        if candidates:
-            return random.choice(candidates)
-        return (px + 30.0, py + 30.0)
-
-    def setup_escape_portal(self):
-        """
-        4방향 완전 대칭형 비상탈출문 벙커 챔버
-        - 어떤 방향/각도(동, 서, 남, 북, 대각선)에서 접근하더라도 100% 동일한 외형의 중장갑 방화문이 보이도록 설계
-        - 4개 모서리 구조 기둥 + 상단 육중한 방폭 천장 슬래브 + 4개 면 각각에 동일한 방화문/3단 빗장/전자 도어록/LED 램프 배치
-        """
-        min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 1
-        max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 2
-        candidates = []
-        spawn_x = 1.5 * CELL_SIZE
-        spawn_y = 1.5 * CELL_SIZE
-        for gx in range(min_cell, max_cell + 1):
-            for gy in range(min_cell, max_cell + 1):
-                if gx % 3 == 1 or gy % 3 == 1:
-                    if not cell_has_pillar(gx, gy):
-                        cx = (gx + 0.5) * CELL_SIZE
-                        cy = (gy + 0.5) * CELL_SIZE
-                        d = math.hypot(cx - spawn_x, cy - spawn_y)
-                        if d >= 70.0:
-                            candidates.append((cx, cy))
-        if candidates:
-            self.escape_pos = random.choice(candidates)
-        else:
-            self.escape_pos = (spawn_x + 75.0, spawn_y + 75.0)
-
-        if hasattr(self, 'escape_portal_np') and self.escape_portal_np:
-            self.escape_portal_np.removeNode()
-
-        self.escape_portal_np = self.world_root.attachNewNode("escape_portal")
-        ex, ey = self.escape_pos
-        self.escape_portal_np.setPos(ex, ey, 0)
-
-        # 중장갑 강화 금속 및 방화문 색상 (원색/초록색 배제, 칠흑의 어둠 속 실제 철문 질감)
-        dark_metal_frame = LColor(0.12, 0.12, 0.14, 1.0)
-        steel_door_plate = LColor(0.24, 0.25, 0.28, 1.0)
-        lock_reinforce_col = LColor(0.38, 0.39, 0.43, 1.0)
-        hazard_dim_stripe = LColor(0.45, 0.38, 0.12, 1.0)
-
-        # 4개 모서리 구조 기둥 (Corner Structural Columns)
-        half_w = 1.35
-        for cx_sign in (-1, 1):
-            for cy_sign in (-1, 1):
-                make_cube_to(self.escape_portal_np, 0.30, 0.30, 3.8, dark_metal_frame, cx_sign * half_w, cy_sign * half_w, 1.9)
-
-        # 상단 육중한 방폭 천장 캡 (Heavy Armored Blast Cap)
-        make_cube_to(self.escape_portal_np, 3.0, 3.0, 0.35, dark_metal_frame, 0, 0, 3.8)
-
-        self.door_lamps = []
-        self.door_panels = []
-
-        # 4방향 완전 대칭 (0°=북, 90°=동, 180°=남, 270°=서)
-        for h in (0, 90, 180, 270):
-            face_np = self.escape_portal_np.attachNewNode(f"door_face_{h}")
-            face_np.setH(h)
-
-            # 로컬 좌표계: face_np의 +Y 방향(전방 1.35m)에 도어 페이스 구성
-            # 1. 문틀 상단 인방
-            make_cube_to(face_np, 2.70, 0.28, 0.30, dark_metal_frame, 0, half_w, 3.6)
-
-            # 2. 비상구 철제 방화문 (색상 없음, 차가운 강철 도어 패널)
-            panel = make_cube_to(face_np, 2.40, 0.12, 3.40, steel_door_plate, 0, half_w, 1.70)
-            self.door_panels.append(panel)
-
-            # 3. 3단 강화 잠금 빗장 및 전자 도어록
-            make_cube_to(face_np, 2.1, 0.16, 0.15, lock_reinforce_col, 0, half_w + 0.04, 1.0)
-            make_cube_to(face_np, 2.1, 0.16, 0.15, lock_reinforce_col, 0, half_w + 0.04, 2.0)
-            make_cube_to(face_np, 2.1, 0.16, 0.15, lock_reinforce_col, 0, half_w + 0.04, 2.9)
-            make_cube_to(face_np, 0.14, 0.20, 0.40, lock_reinforce_col, 0.85, half_w + 0.06, 1.7)
-
-            # 4. 하단 미세 주의 띠 (퇴색된 산업용 안전 줄무늬)
-            make_cube_to(face_np, 2.3, 0.14, 0.20, hazard_dim_stripe, 0, half_w + 0.03, 0.30)
-
-            # 5. 문 상단 소형 보안 상태 표시 램프
-            make_cube_to(face_np, 0.40, 0.16, 0.16, dark_metal_frame, 0, half_w + 0.05, 3.9)
-            lamp = make_cube_to(face_np, 0.28, 0.08, 0.10, LColor(0.35, 0.25, 0.08, 1.0), 0, half_w + 0.08, 3.9)
-            lamp.setLightOff()
-            self.door_lamps.append(lamp)
-
-        # 레거시 호환용 단일 참조 유지
-        self.door_lamp = self.door_lamps[0]
-        self.door_panel = self.door_panels[0]
-
-
-    def setup_viewmodel(self):
-        """1인칭 듀얼 뷰모델: 왼손 손전등 & 오른손 12발 권총"""
-        if hasattr(self, 'vm_root') and self.vm_root:
-            self.vm_root.removeNode()
-
-        self.vm_root = self.camera.attachNewNode("viewmodel_root")
-
-        # --- (A) 왼손: 택티컬 손전등 (POV 확장: 카메라에서 더 멀리 배치) ---
-        self.vm_flashlight = self.vm_root.attachNewNode("vm_flashlight")
-        self.vm_flashlight.setPos(-0.32, 0.78, -0.28)
-        self.vm_flashlight.setHpr(-3.5, 2.0, 0)
-
-        fl_body_col = LColor(0.12, 0.12, 0.14, 1.0)
-        fl_ring_col = LColor(0.28, 0.30, 0.34, 1.0)
-        fl_lens_col = LColor(1.0, 0.98, 0.88, 1.0)
-
-        # 손잡이 몸체
-        make_cube_to(self.vm_flashlight, 0.08, 0.28, 0.08, fl_body_col, 0, 0, 0)
-        # 렌즈 베젤 헤드
-        make_cube_to(self.vm_flashlight, 0.11, 0.09, 0.11, fl_ring_col, 0, 0.17, 0)
-        # 발광 렌즈면
-        glass = make_cube_to(self.vm_flashlight, 0.095, 0.02, 0.095, fl_lens_col, 0, 0.22, 0)
-        glass.setLightOff()
-
-        # 손전등 Spotlight: 왼손 손전등 헤드에서 전방으로 직진 빔 방출
-        spotlight = Spotlight('player_flashlight')
-        spotlight.setColor((2.85, 2.70, 2.35, 1.0))
-        spot_lens = PerspectiveLens()
-        spot_lens.setFov(44.0)
-        spot_lens.setNearFar(0.15, 65.0)
-        spotlight.setLens(spot_lens)
-        spotlight.setAttenuation((1.0, 0.015, 0.0006))
-        self.pl_np = self.vm_flashlight.attachNewNode(spotlight)
-        self.pl_np.setPos(0, 0.24, 0)
-        self.render.setLight(self.pl_np)
-
-        # 근거리 보조 조명
-        fill_light = PointLight('player_fill')
-        fill_light.setColor((0.18, 0.16, 0.14, 1.0))
-        fill_light.setAttenuation((1.0, 0.28, 0.08))
-        self.fill_np = self.vm_flashlight.attachNewNode(fill_light)
-        self.fill_np.setPos(0, 0.10, 0)
-        self.render.setLight(self.fill_np)
-
-        # --- (B) 오른손: 12발 권총 (POV 확장: 카메라에서 더 멀리 배치) ---
-        self.vm_pistol = self.vm_root.attachNewNode("vm_pistol")
-        self.vm_pistol.setPos(0.30, 0.74, -0.26)
-        self.vm_pistol.setHpr(3.0, 1.5, 0)
-
-        # 반동 애니메이션 피벗 노드
-        self.recoil_node = self.vm_pistol.attachNewNode("recoil_node")
-
-        steel_dark = LColor(0.10, 0.10, 0.12, 1.0)
-        steel_slide = LColor(0.22, 0.23, 0.26, 1.0)
-        grip_col = LColor(0.06, 0.06, 0.07, 1.0)
-        tritium_green = LColor(0.35, 1.0, 0.40, 1.0)
-
-        # 슬라이드 & 리시버
-        make_cube_to(self.recoil_node, 0.065, 0.30, 0.09, steel_slide, 0, 0.05, 0.04)
-        # 총열 팁
-        make_cube_to(self.recoil_node, 0.045, 0.08, 0.045, steel_dark, 0, 0.22, 0.035)
-        # 권총 그립 (각도 기울임)
-        grip = make_cube_to(self.recoil_node, 0.058, 0.11, 0.20, grip_col, 0, -0.06, -0.09)
-        grip.setP(16)
-        # 방아쇠울 & 방아쇠
-        make_cube_to(self.recoil_node, 0.030, 0.08, 0.06, steel_dark, 0, 0.04, -0.04)
-
-        # 전방 트리튬 가늠쇠 (자체 발광 녹색 도트)
-        front_sight = make_cube_to(self.recoil_node, 0.012, 0.02, 0.02, tritium_green, 0, 0.19, 0.09)
-        front_sight.setLightOff()
-
-        # 후방 가늠자
-        r_sight1 = make_cube_to(self.recoil_node, 0.012, 0.015, 0.02, tritium_green, -0.022, -0.09, 0.09)
-        r_sight2 = make_cube_to(self.recoil_node, 0.012, 0.015, 0.02, tritium_green, 0.022, -0.09, 0.09)
-        r_sight1.setLightOff()
-        r_sight2.setLightOff()
-
-        # 총구 화염 지오메트리 (발사 시 순간 노출)
-        self.muzzle_flash_geom = make_cube_to(self.recoil_node, 0.16, 0.22, 0.16, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.34, 0.04, rot_h=45)
-        self.muzzle_flash_geom.setLightOff()
-        self.muzzle_flash_geom.hide()
-
-        # 총구 화염 동적 조명
-        self.muzzle_light = PointLight('muzzle_light')
-        self.muzzle_light.setColor((2.8, 2.2, 0.9, 1.0))
-        self.muzzle_light.setAttenuation((1.0, 0.08, 0.015))
-        self.muzzle_light_np = self.recoil_node.attachNewNode(self.muzzle_light)
-        self.muzzle_light_np.setPos(0, 0.35, 0.04)
-
-    def shoot_pistol(self):
-        """마우스 좌클릭 시 12발 권총 사격 및 적중 시 0.5초 스턴"""
-        if self.game_over or self.game_won or self.game_state != "PLAYING":
-            return
-        if getattr(self, 'is_reloading', False):
-            return
-        if self.shoot_cooldown > 0.0:
-            return
-
-        if self.ammo <= 0:
-            # 탄약 고갈 (공이치기 찰칵)
-            if getattr(self, 'reserve_ammo', 0) > 0:
-                self.show_hit_marker("탄약 소진! [R] 키를 눌러 재장전하세요!", (1.0, 0.4, 0.4, 1.0))
-            else:
-                self.show_hit_marker("탄약 소진! (맵에서 탄약 상자를 찾으세요)", (1.0, 0.3, 0.3, 1.0))
-            self.shoot_cooldown = 0.35
-            return
-
-        self.ammo -= 1
-        self.shoot_cooldown = 0.22
-        self.recoil_timer = 0.10
-        self.muzzle_timer = 0.04
-        self.muzzle_flash_geom.show()
-        self.render.setLight(self.muzzle_light_np)
-        self.play_gunshot()
-
-        # 탄약 HUD 갱신
-        self.update_ammo_ui()
-
-        # 전방 레이캐스트 히트스캔
-        ray_origin = self.camera.getPos()
-        ray_dir = self.camera.getQuat().getForward()
-
-        hit_s, dist_s = self.serpent.is_hit_by_ray(ray_origin, ray_dir)
-        hit_k, dist_k = self.skeleton.is_hit_by_ray(ray_origin, ray_dir)
-
-        if hit_s and hit_k:
-            if dist_s <= dist_k:
-                hit_k = False
-            else:
-                hit_s = False
-
-        if hit_s:
-            self.serpent.stun(0.5)
-            self.show_hit_marker("적중! 뱀 괴물 0.5초 기절!", (1.0, 0.85, 0.2, 1.0))
-            if getattr(self, 'serpent_hiss_sfx', None):
-                self.serpent_hiss_sfx.setVolume(1.0)
-                self.serpent_hiss_sfx.play()
-        elif hit_k:
-            self.skeleton.stun(0.5)
-            self.show_hit_marker("적중! 해골 괴물 0.5초 기절!", (0.4, 0.95, 1.0, 1.0))
-            if getattr(self, 'skeleton_groan_sfx', None):
-                self.skeleton_groan_sfx.setVolume(1.0)
-                self.skeleton_groan_sfx.play()
-
-        # 발광 총알 궤적 (Bullet Tracer) 생성 (새로운 전방 총구 위치 반영)
-        cam_pos = self.camera.getPos()
-        cam_quat = self.camera.getQuat()
-        cam_fwd = cam_quat.getForward()
-        cam_right = cam_quat.getRight()
-        cam_up = cam_quat.getUp()
-
-        muzzle_world = cam_pos + cam_fwd * 0.86 + cam_right * 0.30 - cam_up * 0.22
-        tracer_dist = 55.0
-        if hit_s:
-            tracer_dist = min(tracer_dist, dist_s)
-        elif hit_k:
-            tracer_dist = min(tracer_dist, dist_k)
-
-        impact_world = cam_pos + ray_dir * tracer_dist
-
-        ls = LineSegs("bullet_tracer")
-        ls.setThickness(3.6)
-        ls.setColor(1.0, 0.94, 0.35, 1.0)
-        ls.moveTo(muzzle_world)
-        ls.drawTo(impact_world)
-        tracer_node = ls.create()
-        tracer_np = self.world_root.attachNewNode(tracer_node)
-        tracer_np.setLightOff()
-
-        self.active_tracers.append({"np": tracer_np, "life": 0.09})
-
-    def setup_audio(self):
-        """
-        Panda3D OpenAL 기반 3D 입체 음향 및 호러 사운드트랙/효과음 초기화
-        - 24초 심리스 루프 어둡고 음산한 앰비언스 BGM
-        - 플레이어 걷기/달리기 발자국 소리 (3종 변주 + 달리기 임팩트)
-        - 2종 괴물(칠흑 뱀, 장신 해골) 3D 공간 음향 (Audio3DManager)
-        - 권총 발사음 및 피격 스턴 사운드
-        """
-        audio_dir = os.path.join(os.path.dirname(__file__), "assets", "audio")
-
-        def p3d_path(fname):
-            full_p = os.path.join(audio_dir, fname)
-            if os.path.exists(full_p):
-                return Filename.fromOsSpecific(os.path.abspath(full_p))
-            return None
-
-        # 1. 3D 오디오 매니저 설정 (거리 감쇠 및 좌우 입체 패닝)
-        if hasattr(self, 'sfxManagerList') and self.sfxManagerList:
-            self.audio3d = Audio3DManager(self.sfxManagerList[0], self.camera)
-            self.audio3d.setDistanceFactor(1.0)
-            self.audio3d.setDropOffFactor(1.1)
-        else:
-            self.audio3d = None
-
-        # 2. 어둡고 음산한 배경음악 (BGM)
-        bgm_p = p3d_path("bgm_horror.wav")
-        if bgm_p:
-            self.bgm = self.loader.loadMusic(bgm_p)
-            if self.bgm:
-                self.bgm.setLoop(True)
-                self.bgm.setVolume(0.35)  # 인트로 모드 기본 볼륨
-                self.bgm.play()
-        else:
-            self.bgm = None
-
-        # 3. 플레이어 발자국 소리 (걷기 변주 3종 + 달리기)
-        self.footstep_sfx = []
-        for name in ["footstep_1.wav", "footstep_2.wav", "footstep_3.wav"]:
-            snd_p = p3d_path(name)
-            if snd_p:
-                snd = self.loader.loadSfx(snd_p)
-                if snd:
-                    self.footstep_sfx.append(snd)
-
-        sprint_p = p3d_path("footstep_sprint.wav")
-        self.footstep_sprint_sfx = self.loader.loadSfx(sprint_p) if sprint_p else None
-        self.footstep_timer = 0.0
-        self.footstep_idx = 0
-
-        # 권총 발사음
-        gunshot_p = p3d_path("gunshot.wav")
-        self.gunshot_sfx = self.loader.loadSfx(gunshot_p) if gunshot_p else None
-
-        # 4. 괴물 2종 3D 입체 음향 부착
-        self.serpent_slither_sfx = None
-        self.serpent_hiss_sfx = None
-        self.skeleton_rattle_sfx = None
-        self.skeleton_groan_sfx = None
-
-        if self.audio3d:
-            # 뱀 괴물 사운드
-            slither_p = p3d_path("serpent_slither.wav")
-            hiss_p = p3d_path("serpent_hiss.wav")
-            if slither_p:
-                self.serpent_slither_sfx = self.audio3d.loadSfx(slither_p)
-                if self.serpent_slither_sfx:
-                    self.serpent_slither_sfx.setLoop(True)
-                    self.serpent_slither_sfx.setVolume(0.0)
-                    self.audio3d.attachSoundToObject(self.serpent_slither_sfx, self.serpent.node)
-                    self.serpent_slither_sfx.play()
-
-            if hiss_p:
-                self.serpent_hiss_sfx = self.audio3d.loadSfx(hiss_p)
-                if self.serpent_hiss_sfx:
-                    self.serpent_hiss_sfx.setVolume(0.8)
-                    self.audio3d.attachSoundToObject(self.serpent_hiss_sfx, self.serpent.node)
-
-            # 해골 괴물 사운드
-            rattle_p = p3d_path("skeleton_rattle.wav")
-            groan_p = p3d_path("skeleton_groan.wav")
-            if rattle_p:
-                self.skeleton_rattle_sfx = self.audio3d.loadSfx(rattle_p)
-                if self.skeleton_rattle_sfx:
-                    self.skeleton_rattle_sfx.setLoop(True)
-                    self.skeleton_rattle_sfx.setVolume(0.0)
-                    self.audio3d.attachSoundToObject(self.skeleton_rattle_sfx, self.skeleton.node)
-                    self.skeleton_rattle_sfx.play()
-
-            if groan_p:
-                self.skeleton_groan_sfx = self.audio3d.loadSfx(groan_p)
-                if self.skeleton_groan_sfx:
-                    self.skeleton_groan_sfx.setVolume(0.8)
-                    self.audio3d.attachSoundToObject(self.skeleton_groan_sfx, self.skeleton.node)
-
-        self.serpent_hiss_cooldown = 3.0
-        self.skeleton_groan_cooldown = 4.0
-
-    def play_footstep(self, is_sprinting=False):
-        """플레이어 이동 시 걷기/달리기 발자국 소리 재생"""
-        if is_sprinting and getattr(self, 'footstep_sprint_sfx', None):
-            self.footstep_sprint_sfx.setVolume(random.uniform(0.65, 0.85))
-            self.footstep_sprint_sfx.play()
-        elif getattr(self, 'footstep_sfx', None):
-            snd = self.footstep_sfx[self.footstep_idx % len(self.footstep_sfx)]
-            self.footstep_idx += 1
-            snd.setVolume(random.uniform(0.38, 0.55))
-            snd.play()
-
-    def play_gunshot(self):
-        """권총 사격음 재생"""
-        if getattr(self, 'gunshot_sfx', None):
-            self.gunshot_sfx.setVolume(0.85)
-            self.gunshot_sfx.play()
-
-    def reload_pistol(self):
-        """R 키 입력 시 권총 재장전 (예비 탄약에서 탄창으로 12발 충전)"""
-        if self.game_over or self.game_won or self.game_state != "PLAYING":
-            return
-        if getattr(self, 'is_reloading', False):
-            return
-        if self.ammo >= self.max_ammo:
-            self.show_hit_marker("이미 탄창이 가득 찼습니다! (12/12)", (0.8, 0.8, 0.8, 1.0))
-            return
-        if getattr(self, 'reserve_ammo', 0) <= 0:
-            self.show_hit_marker("예비 탄약이 없습니다! (맵에서 탄약 상자를 찾으세요)", (1.0, 0.3, 0.3, 1.0))
-            return
-
-        self.is_reloading = True
-        self.reload_timer = 1.2
-        self.show_hit_marker("[ 재장전 중... ]", (1.0, 0.85, 0.2, 1.0))
-
-    def show_hit_marker(self, text, color):
-        """피격/적중 알림 HUD 일시 표시"""
-        self.hit_marker_text.setText(text)
-        self.hit_marker_text.setFg(color)
-        self.hit_marker_timer = 0.75
-
-    def update_ammo_ui(self):
-        """탄약 HUD 게이지 갱신 (탄창 탄약 / 예비 탄약 표시)"""
-        res = getattr(self, 'reserve_ammo', 0)
-        self.ammo_text.setText(f"[ 탄약: {self.ammo} / {self.max_ammo}  |  예비: {res} ]")
-        if self.ammo <= 3:
-            self.ammo_text.setFg((1.0, 0.25, 0.25, 1.0))
-        else:
-            self.ammo_text.setFg((1.0, 0.90, 0.35, 1.0))
-
+    # --- 에셋 및 렌더링 설정 ---
     def setup_fog(self):
-        """칠흑 같은 암흑 안개 및 배경색 설정"""
-        self.liminal_fog = Fog("liminal_fog")
+        self.liminal_fog = Fog("LiminalDepthFog")
         self.liminal_fog.setColor(FOG_COLOR)
-        # 짙은 지수 안개 밀도로 원거리 복도 및 높은 천장이 완전한 암흑에 묻힘
-        self.liminal_fog.setExpDensity(0.048)
+        # 지수 안개(Exponential Fog)로 매끄럽고 몽환적인 자연스러운 거리 감쇠 안개 형성
+        self.liminal_fog.setExpDensity(0.038)
         self.render.setFog(self.liminal_fog)
         self.setBackgroundColor(FOG_COLOR)
-        self.win.setClearColor(FOG_COLOR)
+        if hasattr(self, 'win') and self.win:
+            self.win.setClearColor(FOG_COLOR)
 
     def setup_lighting(self):
-        """완전한 암흑 분위기 (최소 앰비언트 - 촛불 완전 제거)"""
-        alight = AmbientLight('ambient_light')
-        alight.setColor((0.005, 0.005, 0.007, 1.0))
-        alnp = self.render.attachNewNode(alight)
-        self.render.setLight(alnp)
+        amb = AmbientLight('ambient_dim')
+        amb.setColor((0.005, 0.005, 0.006, 1.0))
+        self.amb_np = self.render.attachNewNode(amb)
+        self.render.setLight(self.amb_np)
 
     def load_assets(self):
-        """바닥 및 벽 텍스처 로드 및 반복 모드 설정"""
         try:
             self.wall_tex = self.loader.loadTexture("wall.jpg")
-            self.wall_tex.setWrapU(SamplerState.WM_repeat)
-            self.wall_tex.setWrapV(SamplerState.WM_repeat)
-
             self.floor_tex = self.loader.loadTexture("floor.jpg")
-            self.floor_tex.setWrapU(SamplerState.WM_repeat)
-            self.floor_tex.setWrapV(SamplerState.WM_repeat)
-
             self.sky_tex = self.loader.loadTexture("sky.jpg")
-            self.sky_tex.setWrapU(SamplerState.WM_repeat)
-            self.sky_tex.setWrapV(SamplerState.WM_repeat)
-
-            # GPU 밉맵 생성 및 이방성 필터링으로 텍스처 셰이더 샘플링 성능 및 시각적 선명도 대폭 향상
-            for tex in (self.wall_tex, self.floor_tex, self.sky_tex):
-                tex.setMinfilter(SamplerState.FT_linear_mipmap_linear)
-                tex.setMagfilter(SamplerState.FT_linear)
-                tex.setAnisotropicDegree(2)
+            for t in (self.wall_tex, self.floor_tex, self.sky_tex):
+                if t:
+                    t.setMagfilter(SamplerState.FT_linear_mipmap_linear)
+                    t.setMinfilter(SamplerState.FT_linear_mipmap_linear)
+                    t.setAnisotropicDegree(4)
         except Exception as e:
-            print(f"텍스처 로드 에러: {e}")
+            print(f"텍스처 로드 실패: {e}")
 
-    def setup_input(self):
-        """입력 키 매핑 및 마우스 제어 설정"""
-        self.disableMouse()
-        self.lock_mouse(True)
+    # --- 사용자 액션 포워딩 ---
+    def shoot_pistol(self):
+        self.combat.shoot(self.monsters, self.player, self.game_state)
 
-        self.keyMap = {
-            "w": 0, "s": 0, "a": 0, "d": 0,
-            "shift": 0
-        }
-
-        # WASD 8방향 이동 키
-        for key in ["w", "a", "s", "d"]:
-            self.accept(key, self.set_key, [key, 1])
-            self.accept(f"{key}-up", self.set_key, [key, 0])
-            self.accept(f"shift-{key}", self.set_key, [key, 1])
-            self.accept(f"shift-{key}-up", self.set_key, [key, 0])
-            self.accept(key.upper(), self.set_key, [key, 1])
-            self.accept(f"{key.upper()}-up", self.set_key, [key, 0])
-
-        # 화살표 키 (대체 키)
-        arrow_mappings = {
-            "arrow_up": "w",
-            "arrow_down": "s",
-            "arrow_left": "a",
-            "arrow_right": "d"
-        }
-        for arrow, target in arrow_mappings.items():
-            self.accept(arrow, self.set_key, [target, 1])
-            self.accept(f"{arrow}-up", self.set_key, [target, 0])
-            self.accept(f"shift-{arrow}", self.set_key, [target, 1])
-            self.accept(f"shift-{arrow}-up", self.set_key, [target, 0])
-
-        # Shift 달리기
-        for s_key in ["shift", "lshift", "rshift"]:
-            self.accept(s_key, self.set_key, ["shift", 1])
-            self.accept(f"{s_key}-up", self.set_key, ["shift", 0])
-
-        # 마우스 좌클릭: 12발 권총 사격 (적중 시 0.5초 스턴)
-        self.accept("mouse1", self.shoot_pistol)
-
-        # R 키: 재장전 (예비 탄약에서 12발 충전)
-        self.accept("r", self.reload_pistol)
-        self.accept("shift-r", self.reload_pistol)
-        self.accept("R", self.reload_pistol)
-
-        # ESC 마우스 커서 해제/잠금 토글
-        self.accept("escape", self.toggle_mouse_lock)
-
-    def set_key(self, key, state):
-        self.keyMap[key] = state
-
-    def lock_mouse(self, lock):
-        self.mouse_locked = lock
-        props = WindowProperties()
-        props.setCursorHidden(lock)
-        props.setMouseMode(WindowProperties.M_confined if lock else WindowProperties.M_absolute)
-        if hasattr(self.win, 'requestProperties'):
-            self.win.requestProperties(props)
-
-    def toggle_mouse_lock(self):
-        self.lock_mouse(not self.mouse_locked)
-
-    def setup_ui(self):
-        """FPS 정보 표시 HUD, 타이머, 탄약, 조준점 및 게임 오버/승리 UI 설정"""
-        try:
-            self.korean_font = self.loader.loadFont('/c/Windows/Fonts/malgun.ttf')
-        except Exception:
-            self.korean_font = None
-
-        font_kw = {"font": self.korean_font} if self.korean_font else {}
-
-        # 1. 화면 중앙 조준점 (Crosshair)
-        self.crosshair = OnscreenText(
-            text="+",
-            pos=(0, -0.015),
-            scale=0.065,
-            fg=(1.0, 1.0, 1.0, 0.85),
-            shadow=(0, 0, 0, 0.9),
-            align=TextNode.ACenter,
-            mayChange=False
-        )
-
-        # 2. 상단 중앙 60초 탈출 카운트다운 타이머 HUD
-        self.timer_text = OnscreenText(
-            text="[ 탈출 제한시간: 01:00 ]",
-            pos=(0, 0.91),
-            scale=0.052,
-            fg=(0.25, 0.95, 0.45, 1.0),
-            shadow=(0, 0, 0, 0.9),
-            align=TextNode.ACenter,
-            mayChange=True,
-            **font_kw
-        )
-
-        # 3. 우측 하단 12발 권총 탄약 HUD
-        self.ammo_text = OnscreenText(
-            text="[ 탄약: 12 / 12 ]",
-            pos=(1.28, -0.85),
-            scale=0.048,
-            fg=(1.0, 0.90, 0.35, 1.0),
-            shadow=(0, 0, 0, 0.9),
-            align=TextNode.ARight,
-            mayChange=True,
-            **font_kw
-        )
-
-        # 4. 중앙 피격/적중 알림 HUD
-        self.hit_marker_text = OnscreenText(
-            text="",
-            pos=(0, -0.16),
-            scale=0.046,
-            fg=(1.0, 0.85, 0.2, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
-            mayChange=True,
-            **font_kw
-        )
-
-        # 5. 좌상단 위치 좌표 HUD
-        self.hud_text = OnscreenText(
-            text="위치: X=0.0, Y=0.0",
-            pos=(-1.3, 0.92),
-            scale=0.045,
-            fg=(1, 1, 1, 0.9),
-            align=TextNode.ALeft,
-            mayChange=True,
-            **font_kw
-        )
-        self.stamina_text = OnscreenText(
-            text="스테미나: [|||||||||||||||] 100%",
-            pos=(-1.3, 0.86),
-            scale=0.04,
-            fg=(0.35, 0.95, 0.5, 0.95),
-            align=TextNode.ALeft,
-            mayChange=True,
-            **font_kw
-        )
-        self.guide_text = OnscreenText(
-            text="[WASD] 8방향 이동  |  [Shift] 달리기  |  [좌클릭] 사격  |  [R] 재장전",
-            pos=(0, -0.93),
-            scale=0.038,
-            fg=(0.9, 0.9, 0.8, 0.85),
-            align=TextNode.ACenter,
-            mayChange=False,
-            **font_kw
-        )
-
-        # 6. 스테이지 클리어 안내 배너
-        self.stage_clear_banner = OnscreenText(
-            text="",
-            pos=(0, 0.42),
-            scale=0.08,
-            fg=(0.3, 1.0, 0.5, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
-            mayChange=True,
-            **font_kw
-        )
-        self.stage_clear_banner.hide()
-
-        # 6. 비상탈출문 5초 홀드아웃 상태 알림 HUD
-        self.door_status_text = OnscreenText(
-            text="",
-            pos=(0, 0.65),
-            scale=0.048,
-            fg=(1.0, 0.85, 0.2, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
-            mayChange=True,
-            **font_kw
-        )
-        self.door_status_text.hide()
-
-        # 7. 게임 오버 UI
-        self.game_over_banner = OnscreenText(
-            text="사  망",
-            pos=(0, 0.25),
-            scale=0.14,
-            fg=(0.95, 0.08, 0.08, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
-            mayChange=True,
-            **font_kw
-        )
-        self.game_over_desc = OnscreenText(
-            text="기괴한 괴물에게 영혼을 잠식당했습니다...",
-            pos=(0, 0.05),
-            scale=0.055,
-            fg=(0.88, 0.88, 0.88, 0.95),
-            shadow=(0, 0, 0, 0.85),
-            align=TextNode.ACenter,
-            mayChange=True,
-            **font_kw
-        )
-
-        # 8. 탈출 성공(승리) UI
-        self.victory_banner = OnscreenText(
-            text="탈  출  성  공",
-            pos=(0, 0.25),
-            scale=0.14,
-            fg=(0.20, 0.95, 0.45, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
-            mayChange=False,
-            **font_kw
-        )
-        self.victory_desc = OnscreenText(
-            text="비상 탈출구를 찾아 악몽의 미궁을 탈출했습니다!",
-            pos=(0, 0.05),
-            scale=0.055,
-            fg=(0.92, 0.98, 0.92, 0.95),
-            shadow=(0, 0, 0, 0.85),
-            align=TextNode.ACenter,
-            mayChange=True,
-            **font_kw
-        )
-
-        # 9. 게임 종료 시 메인 메뉴 / 랭킹 버튼 (R 재시작 버튼 완전 삭제)
-        btn_font_kw = {"text_font": self.korean_font} if self.korean_font else {}
-        self.btn_game_menu = DirectButton(
-            text="메인 메뉴 (MENU)",
-            pos=(-0.28, 0, -0.22),
-            scale=0.055,
-            relief=DGG.RAISED,
-            frameColor=(0.15, 0.16, 0.22, 0.95),
-            text_fg=(1.0, 1.0, 1.0, 1.0),
-            borderWidth=(0.005, 0.005),
-            pad=(0.35, 0.15),
-            command=self.return_to_intro,
-            **btn_font_kw
-        )
-        self.btn_game_rank = DirectButton(
-            text="기록 랭킹 (RANK)",
-            pos=(0.28, 0, -0.22),
-            scale=0.055,
-            relief=DGG.RAISED,
-            frameColor=(0.18, 0.15, 0.12, 0.95),
-            text_fg=(1.0, 0.9, 0.3, 1.0),
-            borderWidth=(0.005, 0.005),
-            pad=(0.35, 0.15),
-            command=self.show_rank_modal,
-            **btn_font_kw
-        )
-
-        self.game_over_banner.hide()
-        self.game_over_desc.hide()
-        self.victory_banner.hide()
-        self.victory_desc.hide()
-        self.btn_game_menu.hide()
-        self.btn_game_rank.hide()
-
-    def setup_intro_ui(self):
-        """인트로 타이틀 및 메인 메뉴 버튼(START, RANK, EXIT) 생성"""
-        font_kw = {"font": self.korean_font} if self.korean_font else {}
-        btn_font_kw = {"text_font": self.korean_font} if self.korean_font else {}
-
-        self.intro_frame = DirectFrame(
-            frameColor=(0, 0, 0, 0),
-            frameSize=(-1.5, 1.5, -1.0, 1.0),
-            pos=(0, 0, 0)
-        )
-
-        self.intro_title = OnscreenText(
-            text="LIMINAL BACKROOMS",
-            parent=self.intro_frame,
-            pos=(0, 0.52),
-            scale=0.11,
-            fg=(0.95, 0.95, 0.95, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
-            **font_kw
-        )
-
-        self.intro_subtitle = OnscreenText(
-            text="[ 1분 서바이벌 호러 : 비상구 탈출 ]",
-            parent=self.intro_frame,
-            pos=(0, 0.38),
-            scale=0.048,
-            fg=(0.90, 0.25, 0.25, 1.0),
-            shadow=(0, 0, 0, 0.9),
-            align=TextNode.ACenter,
-            **font_kw
-        )
-
-        self.intro_desc = OnscreenText(
-            text="칠흑 같은 미궁에서 비상탈출구를 찾아 5초간 문을 사수하세요.\n오른손 12발 권총으로 접근하는 괴물을 기절(0.5초)시킬 수 있습니다.",
-            parent=self.intro_frame,
-            pos=(0, 0.22),
-            scale=0.038,
-            fg=(0.82, 0.82, 0.85, 0.92),
-            shadow=(0, 0, 0, 0.9),
-            align=TextNode.ACenter,
-            **font_kw
-        )
-
-        btn_style = {
-            "relief": DGG.RAISED,
-            "borderWidth": (0.005, 0.005),
-            "pad": (0.45, 0.16),
-            "scale": 0.065
-        }
-
-        self.btn_start = DirectButton(
-            parent=self.intro_frame,
-            text="START",
-            pos=(0, 0, 0.02),
-            frameColor=(0.14, 0.24, 0.16, 0.95),
-            text_fg=(0.35, 1.0, 0.55, 1.0),
-            command=self.start_game,
-            **btn_style,
-            **btn_font_kw
-        )
-
-        self.btn_rank = DirectButton(
-            parent=self.intro_frame,
-            text="RANK",
-            pos=(0, 0, -0.15),
-            frameColor=(0.20, 0.18, 0.12, 0.95),
-            text_fg=(1.0, 0.85, 0.25, 1.0),
-            command=self.show_rank_modal,
-            **btn_style,
-            **btn_font_kw
-        )
-
-        self.btn_exit = DirectButton(
-            parent=self.intro_frame,
-            text="EXIT",
-            pos=(0, 0, -0.32),
-            frameColor=(0.22, 0.12, 0.12, 0.95),
-            text_fg=(1.0, 0.4, 0.4, 1.0),
-            command=self.exit_game,
-            **btn_style,
-            **btn_font_kw
-        )
-
-    def setup_rank_ui(self):
-        """기록 랭킹 팝업 모달창 생성"""
-        font_kw = {"font": self.korean_font} if self.korean_font else {}
-        btn_font_kw = {"text_font": self.korean_font} if self.korean_font else {}
-
-        self.rank_modal = DirectFrame(
-            frameColor=(0.06, 0.07, 0.09, 0.96),
-            frameSize=(-1.10, 1.10, -0.80, 0.80),
-            pos=(0, 0, 0)
-        )
-
-        self.rank_title = OnscreenText(
-            text="[ 생존 & 탈출 기록 랭킹 (RANKING) ]",
-            parent=self.rank_modal,
-            pos=(0, 0.65),
-            scale=0.062,
-            fg=(1.0, 0.85, 0.25, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
-            **font_kw
-        )
-
-        self.rank_content = OnscreenText(
-            text="기록을 불러오는 중...",
-            parent=self.rank_modal,
-            pos=(-0.95, 0.48),
-            scale=0.034,
-            fg=(0.92, 0.92, 0.92, 0.95),
-            shadow=(0, 0, 0, 0.9),
-            align=TextNode.ALeft,
-            mayChange=True,
-            **font_kw
-        )
-
-        self.btn_close_rank = DirectButton(
-            parent=self.rank_modal,
-            text="닫기 (CLOSE)",
-            pos=(0, 0, -0.68),
-            scale=0.052,
-            relief=DGG.RAISED,
-            frameColor=(0.18, 0.18, 0.22, 0.95),
-            text_fg=(0.95, 0.95, 0.95, 1.0),
-            borderWidth=(0.005, 0.005),
-            pad=(0.35, 0.14),
-            command=self.hide_rank_modal,
-            **btn_font_kw
-        )
-
-        self.rank_modal.hide()
-
-    def show_rank_modal(self):
-        """랭킹 모달창 표시 및 저장된 기록 목록 로드"""
-        records = self.load_rankings()
-        escapes = [r for r in records if r.get("success", False)]
-        escapes.sort(key=lambda r: r.get("time_elapsed", 9999))
-
-        recent = list(reversed(records))[:6]
-
-        lines = []
-        lines.append("=== [ 탈출 성공 명예의 전당 (최단 시간 TOP 5) ] ===")
-        if escapes:
-            for i, r in enumerate(escapes[:5], 1):
-                stg = r.get('stage', 1)
-                t_el = r.get('time_elapsed', 0)
-                ammo = r.get('ammo_left', 0)
-                res = r.get('reserve_ammo', 0)
-                ts = r.get('timestamp', '')
-                lines.append(f"  #{i}위 | STAGE {stg} | 탈출 시간: {t_el:.1f}초 | 탄약: {ammo}/12 (예비: {res}) | {ts}")
-        else:
-            lines.append("  아직 탈출 성공 기록이 없습니다. 최초로 탈출에 성공해보세요!")
-
-        lines.append("\n=== [ 최근 플레이 도전 기록 (최근 6회) ] ===")
-        if recent:
-            for r in recent:
-                stg = r.get('stage', 1)
-                res_desc = r.get('result', '기록 없음')
-                t_el = r.get('time_elapsed', 0)
-                ammo = r.get('ammo_left', 0)
-                res_am = r.get('reserve_ammo', 0)
-                ts = r.get('timestamp', '')
-                lines.append(f"  • [STAGE {stg} | {res_desc}]  진행: {t_el:.1f}초 | 탄약: {ammo}/12 (예비: {res_am}) | {ts}")
-        else:
-            lines.append("  플레이 기록이 없습니다.")
-
-        self.rank_content.setText("\n".join(lines))
-        self.rank_modal.show()
-        if self.game_state == "INTRO":
-            self.intro_frame.hide()
-
-    def hide_rank_modal(self):
-        """랭킹 모달창 닫기"""
-        self.rank_modal.hide()
-        if self.game_state == "INTRO":
-            self.intro_frame.show()
-
-    def load_rankings(self):
-        """저장된 랭킹 데이터 불러오기"""
-        if os.path.exists(self.rank_file):
-            try:
-                with open(self.rank_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"랭킹 로드 오류: {e}")
-                return []
-        return []
-
-    def save_rank_record(self, result_type, success, time_elapsed, time_left, ammo_left):
-        """사망 또는 탈출 성공 시 기록 자동 파일 저장 (스테이지 정보 포함)"""
-        rec = {
-            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "stage": getattr(self, 'current_stage', 1),
-            "result": result_type,
-            "success": success,
-            "time_elapsed": round(time_elapsed, 1),
-            "time_left": round(time_left, 1),
-            "ammo_left": ammo_left,
-            "reserve_ammo": getattr(self, 'reserve_ammo', 0),
-            "ammo_used": self.max_ammo - ammo_left
-        }
-        records = self.load_rankings()
-        records.append(rec)
-        try:
-            with open(self.rank_file, "w", encoding="utf-8") as f:
-                json.dump(records, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"랭킹 저장 실패: {e}")
+    def reload_pistol(self):
+        self.combat.reload(self.game_state)
 
     def exit_game(self):
-        """게임 종료"""
         self.destroy()
         sys.exit(0)
 
+    def clear_projectiles(self):
+        """남아있는 파이어볼 및 충격파 엔티티 즉시 해제"""
+        for fb in self.fireballs:
+            fb.destroy()
+        self.fireballs.clear()
+        for sw in self.shockwaves:
+            sw.destroy()
+        self.shockwaves.clear()
+
+    # --- 씬 및 게임 라이프사이클 관리 ---
     def show_intro_scene(self):
-        """인트로 화면 전환: 맵 전경 시네마틱 조망, 마우스 커서 해제, 인트로 버튼 표시"""
+        """인트로 화면 전환"""
+        self.clear_projectiles()
+        for m in self.monsters:
+            m.destroy()
+        self.monsters = []
+        for c in self.corpses:
+            c.destroy()
+        self.corpses = []
+        self.blackout_active = False
+        self.blackout_timer = 0.0
+        self.blackout_triggered_this_stage = False
+        self.ui_mgr.hide_blackout_warning()
         self.game_state = "INTRO"
-        self.lock_mouse(False)
-        self.vm_root.hide()
-        self.render.clearLight(self.pl_np)
-        self.render.clearLight(self.fill_np)
-
-        # 인게임 HUD 숨김
-        self.crosshair.hide()
-        self.timer_text.hide()
-        self.ammo_text.hide()
-        self.hud_text.hide()
-        self.stamina_text.hide()
-        self.guide_text.hide()
-        self.door_status_text.hide()
-        self.game_over_banner.hide()
-        self.game_over_desc.hide()
-        self.victory_banner.hide()
-        self.victory_desc.hide()
-        self.btn_game_menu.hide()
-        self.btn_game_rank.hide()
-        self.hide_rank_modal()
-
-        # 인트로 UI 표시
-        self.intro_frame.show()
-
-        # 오디오 볼륨 인트로 상태로 전환
-        if getattr(self, 'bgm', None):
-            self.bgm.setVolume(0.35)
-        if getattr(self, 'serpent_slither_sfx', None):
-            self.serpent_slither_sfx.setVolume(0.0)
-        if getattr(self, 'skeleton_rattle_sfx', None):
-            self.skeleton_rattle_sfx.setVolume(0.0)
+        self.player.lock_mouse(False)
+        self.combat.vm_root.hide()
+        if hasattr(self.combat, 'mist_root') and self.combat.mist_root:
+            self.combat.mist_root.hide()
+        self.combat.set_blackout_mode(False)
+        self.amb_np.node().setColor((0.005, 0.005, 0.006, 1.0))
+        self.render.clearLight(self.combat.pl_np)
+        self.render.clearLight(self.combat.fill_np)
+        self.ui_mgr.show_intro()
+        self.audio_mgr.set_bgm_mode("INTRO")
 
     def start_game(self):
-        """START 버튼 클릭 시 1인칭 게임플레이 시작"""
+        """START 버튼 클릭 시 1인칭 던전 크롤러 게임플레이 시작"""
         self.game_state = "PLAYING"
-        self.hide_rank_modal()
-        self.intro_frame.hide()
         self.restart_game()
-        self.vm_root.show()
-        self.render.setLight(self.pl_np)
-        self.render.setLight(self.fill_np)
-        self.crosshair.show()
-        self.timer_text.show()
-        self.ammo_text.show()
-        self.hud_text.show()
-        self.stamina_text.show()
-        self.guide_text.show()
-        self.lock_mouse(True)
-
-        # 게임플레이 모드 BGM 볼륨 상향
-        if getattr(self, 'bgm', None):
-            self.bgm.setVolume(0.55)
-        self.footstep_timer = 0.0
+        self.combat.vm_root.show()
+        if hasattr(self.combat, 'mist_root') and self.combat.mist_root:
+            self.combat.mist_root.show()
+        self.render.setLight(self.combat.pl_np)
+        self.render.setLight(self.combat.fill_np)
+        self.ui_mgr.start_game_ui()
+        self.player.lock_mouse(True)
+        self.audio_mgr.set_bgm_mode("PLAYING")
 
     def return_to_intro(self):
-        """게임 종료 화면에서 메인 메뉴로 복귀"""
         self.show_intro_scene()
 
-    def setup_ammo_drops(self):
-        """스테이지 2부터 맵 복도에 3D 밀리터리 탄약 상자 드랍 (4~6개)"""
-        # 기존 탄약 드랍 정리
-        for d in getattr(self, 'ammo_drops', []):
-            if d.get("light_np") and not d["light_np"].isEmpty():
-                self.render.clearLight(d["light_np"])
-            if d.get("node") and not d["node"].isEmpty():
-                d["node"].removeNode()
-        self.ammo_drops = []
+    def spawn_monsters(self, stage=1):
+        """스테이지별 다중 몬스터 군단 스폰 (진흙 오크, 잿더미 마녀, 칠흑 뱀, 거대 해골)"""
+        for m in self.monsters:
+            m.destroy()
+        self.monsters = []
+        for c in self.corpses:
+            c.destroy()
+        self.corpses = []
 
-        if self.current_stage < 2:
-            return
-
-        min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 1
-        max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 2
-        candidates = []
         spawn_x = 1.5 * CELL_SIZE
         spawn_y = 1.5 * CELL_SIZE
 
+        # 스폰 가능한 복도 후보 셀 산출
+        min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 1
+        max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 2
+        candidates = []
         for gx in range(min_cell, max_cell + 1):
             for gy in range(min_cell, max_cell + 1):
-                if (gx % 3 == 1 or gy % 3 == 1) and not cell_has_pillar(gx, gy):
+                if gx % 3 == 1 or gy % 3 == 1:
+                    if cell_has_pillar(gx, gy):
+                        continue
                     cx = (gx + 0.5) * CELL_SIZE
                     cy = (gy + 0.5) * CELL_SIZE
-                    d = math.hypot(cx - spawn_x, cy - spawn_y)
-                    if d >= 20.0:
+                    if math.hypot(cx - spawn_x, cy - spawn_y) >= 22.0:
                         candidates.append((cx, cy))
 
-        if not candidates:
-            return
+        random.shuffle(candidates)
 
-        drop_count = min(6, len(candidates))
-        chosen_positions = random.sample(candidates, drop_count)
+        # 몬스터 조합 산출: 오크, 마녀를 기본 다수 배치하고 뱀과 해골을 섞음
+        spawn_plan = [
+            AbominableMudOrc, AbominableMudOrc,
+            AlluringAshWitch, AlluringAshWitch,
+            LongBlackSerpent, TallSkeletonMonster
+        ]
+        # 스테이지가 올라갈수록 오크와 마녀 추가 스폰
+        for _ in range(stage - 1):
+            spawn_plan.append(AbominableMudOrc)
+            spawn_plan.append(AlluringAshWitch)
 
-        olive_box = LColor(0.20, 0.32, 0.18, 1.0)
-        steel_latch = LColor(0.28, 0.28, 0.32, 1.0)
-        brass_bullet = LColor(0.95, 0.82, 0.22, 1.0)
+        for i, cls in enumerate(spawn_plan):
+            pos = candidates[i % len(candidates)] if candidates else (spawn_x + 30.0 + i * 10, spawn_y + 30.0)
+            monster = cls(self.render, pos[0], pos[1])
+            self.monsters.append(monster)
 
-        for x, y in chosen_positions:
-            drop_np = self.world_root.attachNewNode("ammo_crate")
-            drop_np.setPos(x, y, 0.18)
+        # 오디오 관리자에 첫 번째 뱀/해골 부착
+        first_serpent = next((m for m in self.monsters if isinstance(m, LongBlackSerpent)), None)
+        first_skel = next((m for m in self.monsters if isinstance(m, TallSkeletonMonster)), None)
+        if first_serpent and first_skel:
+            self.audio_mgr.attach_monsters(first_serpent, first_skel)
 
-            # 올리브 그린 철제 탄약통 본체 (폭 0.50m, 깊이 0.32m, 높이 0.28m)
-            make_cube_to(drop_np, 0.50, 0.32, 0.28, olive_box, 0, 0, 0)
-            # 상단 커버 덮개 & 잠금 힌지
-            make_cube_to(drop_np, 0.52, 0.34, 0.05, steel_latch, 0, 0, 0.16)
-            make_cube_to(drop_np, 0.08, 0.36, 0.08, steel_latch, 0, 0, 0)
-            # 황동 탄피 데코 (상단 노출)
-            b1 = make_cube_to(drop_np, 0.06, 0.06, 0.14, brass_bullet, -0.12, 0, 0.22)
-            b2 = make_cube_to(drop_np, 0.06, 0.06, 0.14, brass_bullet, 0.12, 0, 0.22)
-            b1.setLightOff()
-            b2.setLightOff()
+    def restart_game(self):
+        """던전 게임 초기화 (체력, 몬스터 군단, 5분 타이머, 탈출구)"""
+        self.clear_projectiles()
+        self.game_over = False
+        self.game_won = False
+        self.current_stage = 1
+        self.time_limit = 300.0  # 5분 제한시간
+        self.time_left = self.time_limit
+        self.door_hold_timer = 5.0
+        self.stage_banner_timer = 0.0
 
-            # 어둠 속에서 은은하게 반짝이는 황금빛 유인 앰비언트 라이트
-            drop_light = PointLight('ammo_glow')
-            drop_light.setColor((0.65, 0.55, 0.18, 1.0))
-            drop_light.setAttenuation((1.0, 0.15, 0.04))
-            drop_light_np = drop_np.attachNewNode(drop_light)
-            drop_light_np.setPos(0, 0, 0.3)
-            self.render.setLight(drop_light_np)
+        # 플레이어 위치 및 스탯 초기화
+        spawn_x = 1.5 * CELL_SIZE
+        spawn_y = 1.5 * CELL_SIZE
+        self.player.reset_position(spawn_x, spawn_y)
+        self.player.level = 1
+        self.player.exp = 0
+        self.player.exp_to_next = 100
+        self.player.max_hp = 100.0
+        self.player.hp = self.player.max_hp
+        self.player.attack_power = 35.0
+        self.player.speed_mult = 1.0
+        self.player.relics = []
+        self.ui_mgr.update_relic_badges(self.player.relics)
 
-            self.ammo_drops.append({
-                "node": drop_np,
-                "light_np": drop_light_np,
-                "pos": (x, y)
-            })
+        # 정전 프로토콜 리셋
+        self.blackout_active = False
+        self.blackout_timer = 0.0
+        self.blackout_triggered_this_stage = False
+        self.ui_mgr.hide_blackout_warning()
+
+        # 전투 서브시스템 리셋
+        self.combat.reset_state(self.current_stage, keep_ammo=False)
+
+        # 비동기 작업 정리
+        for fut in self.active_chunk_futures.values():
+            fut.cancel()
+        self.active_chunk_futures.clear()
+        self.killer_monster = None
+
+        # 다중 몬스터 군단 스폰
+        self.spawn_monsters(self.current_stage)
+
+        # 탈출구 생성
+        self.setup_escape_portal()
+
+        # 안개 복구
+        self.liminal_fog.setColor(FOG_COLOR)
+        self.liminal_fog.setExpDensity(0.038)
+        self.setBackgroundColor(FOG_COLOR)
+        if hasattr(self, 'win') and self.win:
+            self.win.setClearColor(FOG_COLOR)
+        self.amb_np.node().setColor((0.005, 0.005, 0.006, 1.0))
+        self.combat.set_blackout_mode(False)
+
+        self.ui_mgr.update_hp_exp(self.player.hp, self.player.max_hp, self.player.exp, self.player.exp_to_next, self.player.level)
 
     def advance_to_next_stage(self):
-        """스테이지 클리어 시 다음 스테이지로 진입 및 난이도(적 속도) 상향"""
+        """스탯 분배 후 다음 스테이지로 진입"""
+        self.clear_projectiles()
         prev_stage = self.current_stage
         self.current_stage += 1
         self.time_left = self.time_limit
         self.door_hold_timer = 5.0
-        self.is_reloading = False
-        self.reload_timer = 0.0
-        self.keyMap = {k: 0 for k in self.keyMap}
 
-        # 총알 궤적 정리
-        for tr in self.active_tracers:
-            tr["np"].removeNode()
-        self.active_tracers.clear()
+        # 정전 프로토콜 리셋
+        self.blackout_active = False
+        self.blackout_timer = 0.0
+        self.blackout_triggered_this_stage = False
+        self.ui_mgr.hide_blackout_warning()
 
         spawn_x = 1.5 * CELL_SIZE
         spawn_y = 1.5 * CELL_SIZE
-        self.camera.setPos(spawn_x, spawn_y, PLAYER_EYE_HEIGHT)
-        self.heading = 0.0
-        self.pitch = 0.0
-        self.camera.setHpr(0, 0, 0)
-
-        # 뷰모델 리셋
-        self.recoil_node.setPos(0, 0, 0)
-        self.recoil_node.setP(0)
-
-        # 스테미나 리셋
-        self.stamina = self.max_stamina
-        self.stamina_exhausted = False
+        self.player.reset_position(spawn_x, spawn_y)
 
         # 비동기 작업 정리
         for fut in self.active_chunk_futures.values():
             fut.cancel()
         self.active_chunk_futures.clear()
-        self.serpent_path_future = None
-        self.skeleton_path_future = None
         self.killer_monster = None
-        self.last_move_dir = Vec3(0, 0, 0)
 
-        # 괴물 2종 새 랜덤 스폰
-        s_spawn = self.get_random_monster_spawn(spawn_x, spawn_y)
-        k_spawn = self.get_random_monster_spawn(spawn_x, spawn_y, exclude_pos=s_spawn)
-        self.serpent.reset_pos(s_spawn[0], s_spawn[1])
-        self.skeleton.reset_pos(k_spawn[0], k_spawn[1])
+        # 다중 몬스터 군단 재배치
+        self.spawn_monsters(self.current_stage)
 
-        # 새 원거리 탈출구 무작위 생성
+        # 새 탈출구
         self.setup_escape_portal()
 
-        # 스테이지 2 이상부터 탄약 상자 드랍 생성
-        self.setup_ammo_drops()
-
-        # 오디오 쿨다운 리셋
-        self.footstep_timer = 0.0
-        self.serpent_hiss_cooldown = 3.0
-        self.skeleton_groan_cooldown = 4.0
-
-        # 스테이지 전환 보상: 탄약 지급 (탄창 완충 12발 + 예비 탄약 24발 추가)
-        self.ammo = self.max_ammo
-        self.reserve_ammo += 24
-        self.update_ammo_ui()
+        # 전투 서브시스템: 탄약 보급
+        self.combat.ammo = self.combat.max_ammo
+        self.combat.reserve_ammo += 24
+        self.combat.reset_state(self.current_stage, keep_ammo=True)
 
         # 안개 복구
         self.liminal_fog.setColor(FOG_COLOR)
+        self.liminal_fog.setExpDensity(0.038)
         self.setBackgroundColor(FOG_COLOR)
-        self.win.setClearColor(FOG_COLOR)
+        if hasattr(self, 'win') and self.win:
+            self.win.setClearColor(FOG_COLOR)
+        self.amb_np.node().setColor((0.005, 0.005, 0.006, 1.0))
+        self.combat.set_blackout_mode(False)
 
-        self.door_status_text.setText("")
-        self.door_status_text.hide()
+        # 배너 알림
+        self.ui_mgr.show_stage_banner(f"[ STAGE {self.current_stage} START! ]\n던전 심연 진입: 몬스터 증가 & 탄약 완충!")
+        self.stage_banner_timer = 3.0
 
-        # 스테이지 클리어 축하 및 보급 알림 배너 (3.5초 표시)
-        if hasattr(self, 'stage_clear_banner') and self.stage_clear_banner:
-            self.stage_clear_banner.setText(f"[ STAGE {self.current_stage} START! ]\n보급 지급 완료: 탄약 완충(12발) & 예비탄 +24발!")
-            self.stage_clear_banner.show()
-            self.stage_banner_timer = 3.5
-
-        # 스테이지 클리어 및 진입 알림
-        speed_bonus = int((self.current_stage - 1) * 18)
-        self.show_hit_marker(
-            f"[ STAGE {prev_stage} CLEAR! ] -> [ STAGE {self.current_stage} 진입! (괴물 속도 +{speed_bonus}%) ]",
-            (0.35, 1.0, 0.5, 1.0)
-        )
-
-    def restart_game(self):
-        """게임 초기화: 플레이어, 괴물, 탈출구, 60초 타이머, 5초 홀드아웃, 12발 탄약 초기화"""
-        self.game_over = False
-        self.game_won = False
-        self.current_stage = 1
-        self.time_left = self.time_limit
-        self.door_hold_timer = 5.0
-        self.ammo = self.max_ammo
-        self.reserve_ammo = 0
-        self.is_reloading = False
-        self.reload_timer = 0.0
-        self.shoot_cooldown = 0.0
-        self.recoil_timer = 0.0
-        self.muzzle_timer = 0.0
-        self.hit_marker_timer = 0.0
-        self.bobbing_time = 0.0
-        self.keyMap = {k: 0 for k in self.keyMap}
-
-        # 탄약 상자 정리 및 재생성 (스테이지 1은 0개)
-        self.setup_ammo_drops()
-
-        # 총알 궤적 정리
-        for tr in self.active_tracers:
-            tr["np"].removeNode()
-        self.active_tracers.clear()
-
-        spawn_x = 1.5 * CELL_SIZE
-        spawn_y = 1.5 * CELL_SIZE
-        self.camera.setPos(spawn_x, spawn_y, PLAYER_EYE_HEIGHT)
-        self.heading = 0.0
-        self.pitch = 0.0
-        self.camera.setHpr(0, 0, 0)
-
-        # 뷰모델 리셋
-        self.recoil_node.setPos(0, 0, 0)
-        self.recoil_node.setP(0)
-        self.muzzle_flash_geom.hide()
-        self.render.clearLight(self.muzzle_light_np)
-
-        # 스테미나 리셋
-        self.stamina = self.max_stamina
-        self.stamina_exhausted = False
-
-        # 비동기 작업 정리
-        for fut in self.active_chunk_futures.values():
-            fut.cancel()
-        self.active_chunk_futures.clear()
-        self.serpent_path_future = None
-        self.skeleton_path_future = None
-        self.killer_monster = None
-        self.last_move_dir = Vec3(0, 0, 0)
-
-        # 괴물 2종 위치 랜덤 리셋
-        s_spawn = self.get_random_monster_spawn(spawn_x, spawn_y)
-        k_spawn = self.get_random_monster_spawn(spawn_x, spawn_y, exclude_pos=s_spawn)
-        self.serpent.reset_pos(s_spawn[0], s_spawn[1])
-        self.skeleton.reset_pos(k_spawn[0], k_spawn[1])
-
-        # 원거리 탈출구 신규 랜덤 재배치
-        self.setup_escape_portal()
-
-        # 안개 및 배경색 복구
-        self.liminal_fog.setColor(FOG_COLOR)
-        self.setBackgroundColor(FOG_COLOR)
-        self.win.setClearColor(FOG_COLOR)
-
-        # UI 복구
-        self.game_over_banner.hide()
-        self.game_over_desc.hide()
-        self.victory_banner.hide()
-        self.victory_desc.hide()
-        self.btn_game_menu.hide()
-        self.btn_game_rank.hide()
-        self.door_status_text.setText("")
-        self.door_status_text.hide()
-        self.crosshair.show()
-        self.guide_text.show()
-        self.hit_marker_text.setText("")
-        self.update_ammo_ui()
-
-        # 오디오 상태 리셋
-        if getattr(self, 'bgm', None):
-            self.bgm.setVolume(0.55)
-        self.footstep_timer = 0.0
-        self.serpent_hiss_cooldown = 3.0
-        self.skeleton_groan_cooldown = 4.0
+    def on_shop_closed(self):
+        """스탯 분배 및 상점 완료 후 다음 스테이지 진입"""
+        self.advance_to_next_stage()
+        self.game_state = "PLAYING"
+        self.ui_mgr.start_game_ui()
+        self.player.lock_mouse(True)
 
     def trigger_victory(self):
-        """탈출구 5초 홀드아웃 성공 시 승리 연출 및 랭킹 자동 기록"""
+        """탈출구 방어 성공 시 승리"""
         if self.game_over or self.game_won:
             return
         self.game_won = True
         self.game_state = "VICTORY"
-        self.keyMap = {k: 0 for k in self.keyMap}
 
-        # 초록빛 승리 조명
         green_fog = LColor(0.02, 0.20, 0.07, 1.0)
         self.liminal_fog.setColor(green_fog)
         self.setBackgroundColor(green_fog)
-        self.win.setClearColor(green_fog)
+        if hasattr(self, 'win') and self.win:
+            self.win.setClearColor(green_fog)
 
-        # 오디오 정리
-        if getattr(self, 'bgm', None):
-            self.bgm.setVolume(0.25)
-        if getattr(self, 'serpent_slither_sfx', None):
-            self.serpent_slither_sfx.setVolume(0.0)
-        if getattr(self, 'skeleton_rattle_sfx', None):
-            self.skeleton_rattle_sfx.setVolume(0.0)
+        if self.audio_mgr.bgm:
+            self.audio_mgr.bgm.setVolume(0.25)
 
         elapsed = self.time_limit - self.time_left
         remaining = max(0.0, self.time_left)
-        self.victory_banner.show()
-        self.victory_desc.setText(f"비상 탈출구를 열고 악몽의 미궁을 탈출했습니다!\n[소요 시간: {elapsed:.1f}초  |  남은 탄약: {self.ammo}/12발]")
-        self.victory_desc.show()
-        self.btn_game_menu.show()
-        self.btn_game_rank.show()
-        self.guide_text.hide()
-        self.crosshair.hide()
-        self.door_status_text.hide()
-        self.lock_mouse(False)
+        self.ui_mgr.show_victory(f"비상 탈출구를 열고 악몽의 미궁을 탈출했습니다!\n[소요 시간: {elapsed:.1f}초  |  남은 탄약: {self.combat.ammo}/12발]")
+        self.player.lock_mouse(False)
 
-        # 랭킹 파일 자동 기록
-        self.save_rank_record("탈출 성공", True, elapsed, remaining, self.ammo)
+        self.ui_mgr.save_rank_record("탈출 성공", True, elapsed, remaining, self.combat.ammo, self.current_stage, self.combat.reserve_ammo)
 
     def trigger_game_over(self, killer=None, reason="killed"):
-        """괴물에게 잡혔거나 제한시간 초과 시 게임 오버 연출 및 랭킹 자동 기록"""
+        """사망 또는 시간 초과 시 게임 오버"""
         if self.game_over or self.game_won:
             return
         self.game_over = True
         self.game_state = "GAME_OVER"
         self.killer_monster = killer
-        self.keyMap = {k: 0 for k in self.keyMap}
 
         elapsed = self.time_limit - self.time_left
         remaining = max(0.0, self.time_left)
-        result_desc = ""
 
         if killer is not None:
-            # 카메라를 킬러 괴물의 섬뜩한 얼굴로 즉시 강제 응시 (점프스케어 앵글)
             px, py = self.camera.getX(), self.camera.getY()
             kx, ky = killer.pos.x, killer.pos.y
             kz = getattr(killer.pos, 'z', 0.0)
@@ -1429,63 +504,93 @@ class LiminalInfiniteLoop(ShowBase):
             dy = ky - py
             h = math.degrees(math.atan2(-dx, dy))
             dist = max(0.2, math.hypot(dx, dy))
-            target_eye_z = kz + (3.85 if isinstance(killer, TallSkeletonMonster) else 0.45)
+            target_eye_z = kz + 1.8
             p = math.degrees(math.atan2(target_eye_z - PLAYER_EYE_HEIGHT, dist))
             self.camera.setHpr(h, p, 0)
             killer.update(0.016, is_moving=False, is_attacking=True)
 
-            self.game_over_banner.setText("사  망")
-            self.game_over_banner.setFg((0.95, 0.08, 0.08, 1.0))
-            if isinstance(killer, TallSkeletonMonster):
-                self.game_over_desc.setText("쩍 벌어진 입의 거대 해골 괴물에게 영혼을 빼앗겼습니다...")
-                result_desc = "사망 (해골 괴물)"
-                if getattr(self, 'skeleton_groan_sfx', None):
-                    self.skeleton_groan_sfx.setVolume(1.0)
-                    self.skeleton_groan_sfx.play()
-            else:
-                self.game_over_desc.setText("칠흑의 거대한 뱀에게 온몸을 휘감겨 삼켜졌습니다...")
-                result_desc = "사망 (뱀 괴물)"
-                if getattr(self, 'serpent_hiss_sfx', None):
-                    self.serpent_hiss_sfx.setVolume(1.0)
-                    self.serpent_hiss_sfx.play()
+            k_name = getattr(killer, 'name', '괴물')
+            desc = f"{k_name}에게 무자비하게 습격당해 생명을 잃었습니다..."
+            res_desc = f"사망 ({k_name})"
 
-            blood_fog = LColor(0.22, 0.02, 0.02, 1.0)
+            blood_fog = LColor(0.025, 0.003, 0.003, 1.0)
             self.liminal_fog.setColor(blood_fog)
             self.setBackgroundColor(blood_fog)
-            self.win.setClearColor(blood_fog)
+            if hasattr(self, 'win') and self.win:
+                self.win.setClearColor(blood_fog)
         else:
-            # 1분 제한시간 초과
-            self.game_over_banner.setText("탈  출  실  패")
-            self.game_over_banner.setFg((0.85, 0.25, 0.95, 1.0))
-            self.game_over_desc.setText("제한시간 1분이 모두 지나 미궁의 심연에 영원히 갇혔습니다...")
-            result_desc = "탈출 실패 (시간 초과)"
-            purple_fog = LColor(0.08, 0.02, 0.15, 1.0)
+            desc = "제한시간 5분이 모두 지나 미궁의 심연에 영원히 갇혔습니다..."
+            res_desc = "탈출 실패 (시간 초과)"
+            purple_fog = LColor(0.012, 0.003, 0.020, 1.0)
             self.liminal_fog.setColor(purple_fog)
             self.setBackgroundColor(purple_fog)
-            self.win.setClearColor(purple_fog)
+            if hasattr(self, 'win') and self.win:
+                self.win.setClearColor(purple_fog)
 
-        # 게임 오버 시 오디오 제어
-        if getattr(self, 'bgm', None):
-            self.bgm.setVolume(0.20)
-        if getattr(self, 'serpent_slither_sfx', None):
-            self.serpent_slither_sfx.setVolume(0.0)
-        if getattr(self, 'skeleton_rattle_sfx', None):
-            self.skeleton_rattle_sfx.setVolume(0.0)
+        if self.audio_mgr.bgm:
+            self.audio_mgr.bgm.setVolume(0.20)
 
-        self.game_over_banner.show()
-        self.game_over_desc.show()
-        self.btn_game_menu.show()
-        self.btn_game_rank.show()
-        self.guide_text.hide()
-        self.crosshair.hide()
-        self.door_status_text.hide()
-        self.lock_mouse(False)
+        self.ui_mgr.show_game_over(desc)
+        self.player.lock_mouse(False)
 
-        # 랭킹 파일 자동 기록
-        self.save_rank_record(result_desc, False, elapsed, remaining, self.ammo)
+        self.ui_mgr.save_rank_record(res_desc, False, elapsed, remaining, self.combat.ammo, self.current_stage, self.combat.reserve_ammo)
 
+    # --- 탈출구 및 스폰 계산 ---
+    def setup_escape_portal(self):
+        """4방향 완전 대칭형 비상탈출문 벙커 챔버 생성"""
+        min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 1
+        max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 2
+        candidates = []
+        spawn_x = 1.5 * CELL_SIZE
+        spawn_y = 1.5 * CELL_SIZE
+        for gx in range(min_cell, max_cell + 1):
+            for gy in range(min_cell, max_cell + 1):
+                if (gx % 3 == 1 or gy % 3 == 1) and not cell_has_pillar(gx, gy):
+                    cx = (gx + 0.5) * CELL_SIZE
+                    cy = (gy + 0.5) * CELL_SIZE
+                    if math.hypot(cx - spawn_x, cy - spawn_y) >= 70.0:
+                        candidates.append((cx, cy))
+
+        self.escape_pos = random.choice(candidates) if candidates else (spawn_x + 75.0, spawn_y + 75.0)
+
+        if hasattr(self, 'escape_portal_np') and self.escape_portal_np:
+            self.escape_portal_np.removeNode()
+
+        self.escape_portal_np = self.world_root.attachNewNode("escape_portal")
+        self.escape_portal_np.setPos(self.escape_pos[0], self.escape_pos[1], 0)
+
+        dark_metal_frame = LColor(0.12, 0.12, 0.14, 1.0)
+        steel_door_plate = LColor(0.24, 0.25, 0.28, 1.0)
+        lock_reinforce_col = LColor(0.38, 0.39, 0.43, 1.0)
+        hazard_dim_stripe = LColor(0.45, 0.38, 0.12, 1.0)
+
+        half_w = 1.35
+        for cx_sign in (-1, 1):
+            for cy_sign in (-1, 1):
+                make_cube_to(self.escape_portal_np, 0.30, 0.30, 3.8, dark_metal_frame, cx_sign * half_w, cy_sign * half_w, 1.9)
+
+        make_cube_to(self.escape_portal_np, 3.0, 3.0, 0.35, dark_metal_frame, 0, 0, 3.8)
+
+        self.door_lamps = []
+        for h in (0, 90, 180, 270):
+            face_np = self.escape_portal_np.attachNewNode(f"door_face_{h}")
+            face_np.setH(h)
+
+            make_cube_to(face_np, 2.70, 0.28, 0.30, dark_metal_frame, 0, half_w, 3.6)
+            make_cube_to(face_np, 2.40, 0.12, 3.40, steel_door_plate, 0, half_w, 1.70)
+            make_cube_to(face_np, 2.1, 0.16, 0.15, lock_reinforce_col, 0, half_w + 0.04, 1.0)
+            make_cube_to(face_np, 2.1, 0.16, 0.15, lock_reinforce_col, 0, half_w + 0.04, 2.0)
+            make_cube_to(face_np, 2.1, 0.16, 0.15, lock_reinforce_col, 0, half_w + 0.04, 2.9)
+            make_cube_to(face_np, 0.14, 0.20, 0.40, lock_reinforce_col, 0.85, half_w + 0.06, 1.7)
+            make_cube_to(face_np, 2.3, 0.14, 0.20, hazard_dim_stripe, 0, half_w + 0.03, 0.30)
+
+            make_cube_to(face_np, 0.40, 0.16, 0.16, dark_metal_frame, 0, half_w + 0.05, 3.9)
+            lamp = make_cube_to(face_np, 0.28, 0.08, 0.10, LColor(0.35, 0.25, 0.08, 1.0), 0, half_w + 0.08, 3.9)
+            lamp.setLightOff()
+            self.door_lamps.append(lamp)
+
+    # --- 청크 스트리밍 및 컬링 최적화 ---
     def update_chunks(self, force=False):
-        """시야 내 및 이동 방향을 예측하는 비동기 멀티스레드 청크 스트리밍"""
         px, py = self.camera.getX(), self.camera.getY()
         player_cx = int(math.floor(px / CHUNK_SIZE))
         player_cy = int(math.floor(py / CHUNK_SIZE))
@@ -1494,47 +599,34 @@ class LiminalInfiniteLoop(ShowBase):
             return
 
         self.last_chunk = (player_cx, player_cy)
-
-        # 5x5 활성 청크 영역 (반경 2, 7x7 맵 경계 MAP_MIN_CHUNK ~ MAP_MAX_CHUNK 내부로 제한)
         needed_chunks = set()
         for dx in range(-RENDER_RADIUS, RENDER_RADIUS + 1):
             for dy in range(-RENDER_RADIUS, RENDER_RADIUS + 1):
-                cx = player_cx + dx
-                cy = player_cy + dy
+                cx, cy = player_cx + dx, player_cy + dy
                 if MAP_MIN_CHUNK <= cx <= MAP_MAX_CHUNK and MAP_MIN_CHUNK <= cy <= MAP_MAX_CHUNK:
                     needed_chunks.add((cx, cy))
 
-        # 이동 벡터 기반 전방 예측 청크 (Lookahead Pre-caching)
-        if hasattr(self, 'last_move_dir') and self.last_move_dir.lengthSquared() > 0.01:
-            pred_x = px + self.last_move_dir.x * 24.0
-            pred_y = py + self.last_move_dir.y * 24.0
-            pred_cx = int(math.floor(pred_x / CHUNK_SIZE))
-            pred_cy = int(math.floor(pred_y / CHUNK_SIZE))
+        if self.player.last_move_dir.lengthSquared() > 0.01:
+            pred_x = px + self.player.last_move_dir.x * 24.0
+            pred_y = py + self.player.last_move_dir.y * 24.0
+            pred_cx, pred_cy = int(math.floor(pred_x / CHUNK_SIZE)), int(math.floor(pred_y / CHUNK_SIZE))
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
-                    cx = pred_cx + dx
-                    cy = pred_cy + dy
+                    cx, cy = pred_cx + dx, pred_cy + dy
                     if MAP_MIN_CHUNK <= cx <= MAP_MAX_CHUNK and MAP_MIN_CHUNK <= cy <= MAP_MAX_CHUNK:
                         needed_chunks.add((cx, cy))
 
-        # 가시거리 밖으로 벗어난 청크 안전 해제
-        chunks_to_remove = [coord for coord in self.chunks if coord not in needed_chunks]
-        for coord in chunks_to_remove:
+        for coord in [c for c in self.chunks if c not in needed_chunks]:
             self.chunks[coord].destroy()
             del self.chunks[coord]
 
-        # 벗어난 미완료 비동기 태스크 취소
-        futures_to_cancel = [coord for coord in self.active_chunk_futures if coord not in needed_chunks]
-        for coord in futures_to_cancel:
-            fut = self.active_chunk_futures.pop(coord)
-            fut.cancel()
+        for coord in [c for c in self.active_chunk_futures if c not in needed_chunks]:
+            self.active_chunk_futures.pop(coord).cancel()
 
-        missing = [coord for coord in needed_chunks if coord not in self.chunks and coord not in self.active_chunk_futures]
+        missing = [c for c in needed_chunks if c not in self.chunks and c not in self.active_chunk_futures]
         if missing:
-            # 플레이어와의 거리순으로 정렬하여 가까운 청크부터 우선 처리
             missing.sort(key=lambda c: (c[0] - player_cx)**2 + (c[1] - player_cy)**2)
             if force:
-                # 초기 부팅 시에는 멀티스레드로 병렬 동시 빌드 후 메인 씬에 일괄 마운트
                 futs = [self.chunk_executor.submit(Chunk, None, cx, cy, self.floor_tex, self.wall_tex, self.sky_tex) for cx, cy in missing]
                 for fut in futs:
                     try:
@@ -1543,32 +635,29 @@ class LiminalInfiniteLoop(ShowBase):
                         self.chunks[(chunk.cx, chunk.cy)] = chunk
                     except Exception as e:
                         print(f"초기 청크 로딩 에러: {e}")
-                self.cull_chunks_to_view()
+                self.cull_chunks_to_view(force=True)
             else:
-                # 게임 진행 중에는 백그라운드 워커 스레드 풀에 비동기 디스패치 (메인 스레드 블로킹 0ms)
                 for cx, cy in missing:
-                    fut = self.chunk_executor.submit(Chunk, None, cx, cy, self.floor_tex, self.wall_tex, self.sky_tex)
-                    self.active_chunk_futures[(cx, cy)] = fut
+                    self.active_chunk_futures[(cx, cy)] = self.chunk_executor.submit(
+                        Chunk, None, cx, cy, self.floor_tex, self.wall_tex, self.sky_tex
+                    )
 
-    def cull_chunks_to_view(self):
-        """
-        안개 가시거리 기준 장거리 청크만 선택적 가시화 (거리 컬링).
-        근거리 시야 내 청크는 Panda3D C++ 하드웨어 뷰포트 절두체 컬링에 위임하여 씬그래프 오버헤드 0% 달성.
-        """
+    def cull_chunks_to_view(self, force=False):
+        """이동 거리 임계치(2.0m) 기반 청크 가시거리 컬링 최적화"""
         px, py = self.camera.getX(), self.camera.getY()
+        if not force and self.last_cull_pos is not None:
+            if math.hypot(px - self.last_cull_pos[0], py - self.last_cull_pos[1]) < 2.0:
+                return
+
+        self.last_cull_pos = (px, py)
         chunk_rad = (CHUNK_SIZE / 2.0) * math.sqrt(2)
-        max_view_dist = 68.0  # 안개 완전 암흑 한계 거리 (68m 밖은 100% 암흑)
-        max_dist_sq = (max_view_dist + chunk_rad) ** 2
+        max_dist_sq = (72.0 + chunk_rad) ** 2
 
         visible_count = 0
         for (cx, cy), chunk in self.chunks.items():
             ccx = (cx + 0.5) * CHUNK_SIZE
             ccy = (cy + 0.5) * CHUNK_SIZE
-            dx = ccx - px
-            dy = ccy - py
-            d_sq = dx * dx + dy * dy
-
-            # 안개 한계 거리 초과 시에만 렌더링 제외, 그 외는 C++ 네이티브 컬링에 맡김
+            d_sq = (ccx - px) ** 2 + (ccy - py) ** 2
             is_visible = (d_sq <= max_dist_sq)
             chunk.set_visible(is_visible)
             if is_visible:
@@ -1577,151 +666,17 @@ class LiminalInfiniteLoop(ShowBase):
         self.rendered_chunk_count = visible_count
         self.total_chunk_count = len(self.chunks)
 
-    def get_nearby_colliders(self, px, py, search_dist=2.5):
-        """그리드 셀 해시 기반 즉시 충돌체 추출 (600개 전수검사 -> 8~12개 즉시 반환으로 연산량 98% 절감)"""
-        min_gx = int(math.floor((px - search_dist) / CELL_SIZE))
-        max_gx = int(math.floor((px + search_dist) / CELL_SIZE))
-        min_gy = int(math.floor((py - search_dist) / CELL_SIZE))
-        max_gy = int(math.floor((py + search_dist) / CELL_SIZE))
-
-        nearby = []
-        for gx in range(min_gx, max_gx + 1):
-            for gy in range(min_gy, max_gy + 1):
-                cx = gx // CHUNK_CELLS
-                cy = gy // CHUNK_CELLS
-                chunk = self.chunks.get((cx, cy))
-                if chunk and hasattr(chunk, 'cell_colliders'):
-                    cols = chunk.cell_colliders.get((gx, gy))
-                    if cols:
-                        nearby.extend(cols)
-        return nearby
-
-    def resolve_collision(self, curr_x, curr_y, dx, dy, radius=PLAYER_RADIUS):
-        """
-        정밀 원형-AABB 최단거리 밀어내기(Push-out) 및 연속 벽면 슬라이딩 해결
-        - 공간 분할 인덱스로 현재 위치 주변 충돌체만 즉각 필터링
-        - 3회 완화(Relaxation) 반복 적용으로 벽 파고들기 및 끼임 완벽 차단
-        """
-        max_d = max(abs(dx), abs(dy))
-        margin = radius + max_d + 0.6
-        colliders = self.get_nearby_colliders(curr_x, curr_y, search_dist=margin)
-        px = curr_x + dx
-        py = curr_y + dy
-        r = radius
-
-        min_xb = min(curr_x, px) - margin
-        max_xb = max(curr_x, px) + margin
-        min_yb = min(curr_y, py) - margin
-        max_yb = max(curr_y, py) + margin
-
-        active_colliders = [
-            c for c in colliders
-            if not (c[2] < min_xb or c[0] > max_xb or c[3] < min_yb or c[1] > max_yb)
-        ]
-        if not active_colliders:
-            return px, py
-
-        for _ in range(3):
-            hit = False
-            for min_x, min_y, max_x, max_y in active_colliders:
-                cx = max(min_x, min(px, max_x))
-                cy = max(min_y, min(py, max_y))
-                vx = px - cx
-                vy = py - cy
-                d_sq = vx * vx + vy * vy
-                if d_sq < r * r:
-                    hit = True
-                    if d_sq > 1e-8:
-                        d = math.sqrt(d_sq)
-                        push = r - d
-                        px += (vx / d) * push
-                        py += (vy / d) * push
-                    else:
-                        d_l = px - (min_x - r)
-                        d_r = (max_x + r) - px
-                        d_d = py - (min_y - r)
-                        d_u = (max_y + r) - py
-                        m = min(d_l, d_r, d_d, d_u)
-                        if m == d_l:
-                            px = min_x - r
-                        elif m == d_r:
-                            px = max_x + r
-                        elif m == d_d:
-                            py = min_y - r
-                        else:
-                            py = max_y + r
-            if not hit:
-                break
-
-        # 맵 외곽 절대 경계 내부로 클램핑 (252m x 252m 경계 밖 추락/탈출 100% 차단)
-        min_bound = MAP_MIN_CHUNK * CHUNK_SIZE + WALL_THICKNESS * 0.5 + radius
-        max_bound = (MAP_MAX_CHUNK + 1) * CHUNK_SIZE - WALL_THICKNESS * 0.5 - radius
-        px = max(min_bound, min(max_bound, px))
-        py = max(min_bound, min(max_bound, py))
-
-        return px, py
-
-    def update(self, task):
-        dt = globalClock.getDt()
-        if dt > 0.1:
-            dt = 0.1
-
-        # 활성 총알 궤적 수명 관리
-        for tr in self.active_tracers[:]:
-            tr["life"] -= dt
-            if tr["life"] <= 0.0:
-                tr["np"].removeNode()
-                self.active_tracers.remove(tr)
-
-        # 3D 입체 음향 갱신 (OpenAL 리스너 위치 및 방향 자동 동기화)
-        if getattr(self, 'audio3d', None):
-            self.audio3d.update()
-
-        # --- [INTRO 상태] 맵 전경 시네마틱 회전 및 청크 렌더링 ---
-        if self.game_state == "INTRO":
-            t = globalClock.getFrameTime()
-            cx = getattr(self, 'intro_center_x', 45.0)
-            cy = getattr(self, 'intro_center_y', 45.0)
-            cam_x = cx + math.sin(t * 0.12) * 38.0
-            cam_y = cy + math.cos(t * 0.12) * 38.0
-            self.camera.setPos(cam_x, cam_y, 11.5)
-            self.camera.lookAt(cx, cy, 1.5)
-            self.update_chunks()
-            return task.cont
-
-        # --- [승리 상태] 탈출 성공 시: 업데이트 정지 ---
-        if self.game_won or self.game_state == "VICTORY":
-            return task.cont
-
-        # --- [게임 오버 상태] 플레이어 사망 시: 시선 강제 고정 및 킬러 괴물 공격 모션 유지 ---
-        if self.game_over or self.game_state == "GAME_OVER":
-            if self.killer_monster is not None:
-                killer = self.killer_monster
-                px, py = self.camera.getX(), self.camera.getY()
-                kx, ky = killer.pos.x, killer.pos.y
-                kz = getattr(killer.pos, 'z', 0.0)
-                dx = kx - px
-                dy = ky - py
-                h = math.degrees(math.atan2(-dx, dy))
-                dist = max(0.2, math.hypot(dx, dy))
-                target_eye_z = kz + (3.85 if isinstance(killer, TallSkeletonMonster) else 0.45)
-                p = math.degrees(math.atan2(target_eye_z - PLAYER_EYE_HEIGHT, dist))
-                self.camera.setHpr(h, p, 0)
-                killer.update(dt, is_moving=False, is_attacking=True)
-            return task.cont
-
-        # --- 0. 비동기 백그라운드 스레드 청크 마운트 (메인 스레드 지연 제로) ---
+    def _mount_async_chunks(self):
+        """백그라운드 스레드에서 생성 완료된 청크 마운트"""
         chunk_created = False
         if self.active_chunk_futures:
             cur_px, cur_py = self.camera.getX(), self.camera.getY()
-            cur_cx = int(math.floor(cur_px / CHUNK_SIZE))
-            cur_cy = int(math.floor(cur_py / CHUNK_SIZE))
+            cur_cx, cur_cy = int(math.floor(cur_px / CHUNK_SIZE)), int(math.floor(cur_py / CHUNK_SIZE))
             done_coords = [coord for coord, fut in self.active_chunk_futures.items() if fut.done()]
             for coord in done_coords:
                 fut = self.active_chunk_futures.pop(coord)
                 try:
                     chunk = fut.result()
-                    # 청크가 아직 유효 렌더 범위 내에 있는지 확인 후 마운트 (이동으로 벗어난 청크는 즉시 파기)
                     if abs(coord[0] - cur_cx) <= RENDER_RADIUS + 1 and abs(coord[1] - cur_cy) <= RENDER_RADIUS + 1:
                         chunk.attach_to(self.world_root)
                         self.chunks[coord] = chunk
@@ -1730,478 +685,351 @@ class LiminalInfiniteLoop(ShowBase):
                         chunk.destroy()
                 except Exception as e:
                     print(f"청크 마운트 예외: {e}")
+        return chunk_created
 
-        # --- 1. 마우스 시선 제어 ---
-        view_changed = False
-        if self.mouse_locked and self.mouseWatcherNode and self.mouseWatcherNode.hasMouse():
-            md = self.win.getPointer(0)
-            center_x, center_y = self.win.getXSize() // 2, self.win.getYSize() // 2
+    # --- 몬스터 AI 제어 (다중 군단) ---
+    def _update_monsters(self, dt, px, py):
+        closest_dist = 999.0
+        stage_mult = 1.0 + (self.current_stage - 1) * 0.15
+        if self.blackout_active:
+            stage_mult *= 1.25  # 정전 프로토콜: 몬스터 이동속도 25% 가속 (폭주 상태)
 
-            delta_x = md.getX() - center_x
-            delta_y = md.getY() - center_y
+        for m in self.monsters[:]:
+            if getattr(m, 'hp', 1) <= 0:
+                # 사망한 몬스터: 시체로 전환하고 활성 몬스터 목록에서 제외하여 시체 목록으로 이전
+                if not getattr(m, 'is_corpse', False) and hasattr(m, 'turn_into_corpse'):
+                    m.turn_into_corpse()
+                self.monsters.remove(m)
+                self.corpses.append(m)
+                continue
 
-            if delta_x != 0 or delta_y != 0:
-                mouse_sens = 0.13
-                self.heading -= delta_x * mouse_sens
-                self.pitch -= delta_y * mouse_sens
-                self.pitch = max(-89.0, min(89.0, self.pitch))
+            mx, my = m.pos.x, m.pos.y
+            dist = math.hypot(px - mx, py - my)
+            if dist < closest_dist:
+                closest_dist = dist
 
-                self.camera.setHpr(self.heading, self.pitch, 0)
-                self.win.movePointer(0, center_x, center_y)
-                view_changed = True
+            # 1. 근접 공격 판정
+            attack_range = 1.95 if isinstance(m, (TallSkeletonMonster, AbominableMudOrc)) else 1.45
+            if dist <= attack_range and m.stun_timer <= 0.0:
+                is_dead = self.player.take_damage(m.attack_damage)
+                m.update(dt, is_moving=False, is_attacking=True)
+                if is_dead:
+                    self.trigger_game_over(killer=m, reason="killed")
+                    return True, closest_dist
+                continue
 
-        # --- 2. 8방향 키보드 이동 및 스테미나 기반 달리기 처리 ---
-        base_mouse_watcher = self.mouseWatcherNode
-        shift_held = bool(self.keyMap["shift"])
-        if base_mouse_watcher:
-            shift_held = shift_held or (
-                base_mouse_watcher.isButtonDown(KeyboardButton.shift()) or
-                base_mouse_watcher.isButtonDown(KeyboardButton.lshift()) or
-                base_mouse_watcher.isButtonDown(KeyboardButton.rshift())
-            )
+            # 2. 스턴 상태 처리
+            if m.stun_timer > 0.0:
+                m.update_pos(mx, my, dt, 0, 0)
+                continue
 
-        w_held = bool(self.keyMap["w"]) or (base_mouse_watcher and base_mouse_watcher.isButtonDown(KeyboardButton.ascii_key("w")))
-        s_held = bool(self.keyMap["s"]) or (base_mouse_watcher and base_mouse_watcher.isButtonDown(KeyboardButton.ascii_key("s")))
-        a_held = bool(self.keyMap["a"]) or (base_mouse_watcher and base_mouse_watcher.isButtonDown(KeyboardButton.ascii_key("a")))
-        d_held = bool(self.keyMap["d"]) or (base_mouse_watcher and base_mouse_watcher.isButtonDown(KeyboardButton.ascii_key("d")))
+            # 3. 진흙 오크: 땅을 울려서 플레이어 이동방해 (Ground Slam)
+            if isinstance(m, AbominableMudOrc):
+                m.slam_cooldown -= dt
+                if dist <= 12.0 and m.slam_cooldown <= 0.0 and not m.is_slamming and m.stun_timer <= 0.0:
+                    m.is_slamming = True
+                    m.slam_timer = 0.0
+                    m.slam_has_impacted = False
+                    m.slam_cooldown = 5.5
 
-        move_dir = Vec3(0, 0, 0)
-        heading_rad = math.radians(self.heading)
-        forward = Vec3(-math.sin(heading_rad), math.cos(heading_rad), 0)
-        right = Vec3(math.cos(heading_rad), math.sin(heading_rad), 0)
+                if m.is_slamming:
+                    impact = m.slam_ground(dt)
+                    if impact:
+                        self.shockwaves.append(GroundShockwave(self.render, mx, my))
+                        self.audio_mgr.play_skeleton_hit()
+                        if dist <= 11.5:
+                            self.player.apply_slow(duration=2.8, factor=0.40)
+                            self.player.trigger_quake_shake(intensity=2.6, duration=0.85)
+                    continue
 
-        is_moving = False
-        if w_held:
-            move_dir += forward
-            is_moving = True
-        if s_held:
-            move_dir -= forward
-            is_moving = True
-        if a_held:
-            move_dir -= right
-            is_moving = True
-        if d_held:
-            move_dir += right
-            is_moving = True
+            # 4. 시선 검사 (Line of Sight)
+            has_los = False
+            if dist <= 28.0:
+                mid_x, mid_y = (mx + px) * 0.5, (my + py) * 0.5
+                cols = get_nearby_colliders(self.chunks, mid_x, mid_y, dist * 0.5 + 1.2)
+                has_los = check_line_of_sight(mx, my, px, py, cols)
 
-        # 스테미나 시스템 갱신
-        wants_to_sprint = shift_held and is_moving
-        if self.stamina_exhausted:
-            if self.stamina >= 25.0:
-                self.stamina_exhausted = False
-            self.is_sprinting = False
-        else:
-            self.is_sprinting = wants_to_sprint and (self.stamina > 0.0)
+            # 5. 잿더미 마녀: 파이어볼 투척 (Fireball Cast)
+            if isinstance(m, AlluringAshWitch):
+                m.cast_cooldown -= dt
+                if has_los and dist <= 24.0 and m.cast_cooldown <= 0.0 and not m.is_casting and m.stun_timer <= 0.0:
+                    m.is_casting = True
+                    m.cast_timer = 0.0
+                    m._fireball_fired = False
+                    m.cast_cooldown = 3.2
 
-        if self.is_sprinting:
-            self.stamina -= 22.0 * dt  # 약 4.5초 전력질주 가능
-            if self.stamina <= 0.0:
-                self.stamina = 0.0
-                self.stamina_exhausted = True
-                self.is_sprinting = False
-        else:
-            recovery_rate = 14.0 if not is_moving else 8.0
-            self.stamina = min(self.max_stamina, self.stamina + recovery_rate * dt)
+                if m.is_casting:
+                    fire = m.cast_fireball(dt)
+                    if fire:
+                        orb_pos = (mx, my, m.pos.z + 1.5)
+                        target_pos = (px, py, PLAYER_EYE_HEIGHT)
+                        self.fireballs.append(Fireball(self.render, orb_pos, target_pos))
+                        self.audio_mgr.play_serpent_hit()
 
-        # 이동 처리
-        if is_moving:
-            move_dir.normalize()
-            self.last_move_dir = move_dir
-            speed = SPRINT_SPEED if self.is_sprinting else WALK_SPEED
-            disp = move_dir * speed * dt
+                    dx = px - mx
+                    dy = py - my
+                    target_h = math.degrees(math.atan2(-dx, dy))
+                    m.node.setH(target_h)
+                    continue
 
-            # 발자국 소리 타이머 갱신 (달리기: 0.26초, 걷기: 0.42초 주기)
-            step_interval = 0.26 if self.is_sprinting else 0.42
-            self.footstep_timer += dt
-            if self.footstep_timer >= step_interval:
-                self.footstep_timer = 0.0
-                self.play_footstep(self.is_sprinting)
-
-            # --- 3. 정밀 벽 충돌 판정 및 매끄러운 슬라이딩 처리 ---
-            curr_pos = self.camera.getPos()
-            new_x, new_y = self.resolve_collision(curr_pos.x, curr_pos.y, disp.x, disp.y, radius=PLAYER_RADIUS)
-            self.camera.setPos(new_x, new_y, PLAYER_EYE_HEIGHT)
-
-            # 플레이어 이동에 따라 주변 청크 실시간 갱신
-            self.update_chunks()
-            view_changed = True
-        else:
-            self.last_move_dir = Vec3(0, 0, 0)
-            self.footstep_timer = 0.35  # 다음 이동 시 즉각 반응하도록 설정
-
-        # --- 괴물 2종 지능형 추격 AI (검은 뱀 & 키 큰 해골 괴물) ---
-        px, py = self.camera.getX(), self.camera.getY()
-        pgx = int(math.floor(px / CELL_SIZE))
-        pgy = int(math.floor(py / CELL_SIZE))
-
-        dist_serpent = math.hypot(px - self.serpent.pos.x, py - self.serpent.pos.y)
-        dist_skeleton = math.hypot(px - self.skeleton.pos.x, py - self.skeleton.pos.y)
-
-        # 잡힘 판정 (뱀: 1.45m, 해골: 1.85m) - 스턴 중인 적은 플레이어를 공격하지 못함
-        if dist_serpent <= 1.45 and self.serpent.stun_timer <= 0.0:
-            self.trigger_game_over(self.serpent)
-            return task.cont
-        if dist_skeleton <= 1.85 and self.skeleton.stun_timer <= 0.0:
-            self.trigger_game_over(self.skeleton)
-            return task.cont
-
-        # ====================================================================
-        # [적 1: 몸통이 긴 검은색 뱀 (LongBlackSerpent) 추격 및 벽 타기]
-        # ====================================================================
-        sx, sy = self.serpent.pos.x, self.serpent.pos.y
-        s_los = False
-        if dist_serpent <= 22.0:
-            mid_x = (sx + px) * 0.5
-            mid_y = (sy + py) * 0.5
-            los_colliders = self.get_nearby_colliders(mid_x, mid_y, search_dist=dist_serpent * 0.5 + 1.2)
-            s_los = check_line_of_sight(sx, sy, px, py, los_colliders)
-        self.serpent.has_los = s_los
-
-        if s_los:
-            s_tx, s_ty = px, py
-            s_speed = 10.6 if dist_serpent > 5.0 else 11.4
-        else:
-            sgx = int(math.floor(sx / CELL_SIZE))
-            sgy = int(math.floor(sy / CELL_SIZE))
-            if self.serpent_path_future is not None and self.serpent_path_future.done():
-                try:
-                    new_path = self.serpent_path_future.result()
-                    if new_path:
-                        self.serpent.path = new_path
-                except Exception:
-                    pass
-                self.serpent_path_future = None
-
-            self.serpent.path_timer -= dt
-            if (self.serpent.path_timer <= 0.0 or not self.serpent.path) and self.serpent_path_future is None:
-                self.serpent_path_future = self.chunk_executor.submit(find_cell_path, (sgx, sgy), (pgx, pgy), 20)
-                self.serpent.path_timer = 0.20
-
-            if len(self.serpent.path) >= 2:
-                cur_c = self.serpent.path[0]
-                nxt_c = self.serpent.path[1]
-                if nxt_c[1] == cur_c[1] + 1:
-                    s_tx, s_ty = (cur_c[0] + 0.5) * CELL_SIZE, (cur_c[1] + 1.0) * CELL_SIZE
-                elif nxt_c[1] == cur_c[1] - 1:
-                    s_tx, s_ty = (cur_c[0] + 0.5) * CELL_SIZE, cur_c[1] * CELL_SIZE
-                elif nxt_c[0] == cur_c[0] + 1:
-                    s_tx, s_ty = (cur_c[0] + 1.0) * CELL_SIZE, (cur_c[1] + 0.5) * CELL_SIZE
-                else:
-                    s_tx, s_ty = cur_c[0] * CELL_SIZE, (cur_c[1] + 0.5) * CELL_SIZE
-
-                if math.hypot(sx - s_tx, sy - s_ty) < 1.2 or (sgx == nxt_c[0] and sgy == nxt_c[1]):
-                    self.serpent.path.pop(0)
+            # 6. 길찾기 (Pathfinding)
+            m.path_timer -= dt
+            if has_los:
+                tx, ty = px, py
+                m.path = []
             else:
-                s_tx, s_ty = px, py
+                mgx = int(math.floor(mx / CELL_SIZE))
+                mgy = int(math.floor(my / CELL_SIZE))
+                pgx = int(math.floor(px / CELL_SIZE))
+                pgy = int(math.floor(py / CELL_SIZE))
 
-            s_speed = 8.8 if dist_serpent > 15.0 else 9.6
-
-        # 스테이지별 단계적 괴물 이동 속도 승수 (+18% per stage)
-        stage_speed_mult = 1.0 + (getattr(self, 'current_stage', 1) - 1) * 0.18
-        s_speed *= stage_speed_mult
-
-        # 뱀 벽면 검출 및 벽 타기(Wall Crawling) 판정
-        s_tdx, s_tdy = s_tx - sx, s_ty - sy
-        s_tdist = math.hypot(s_tdx, s_tdy)
-
-        serpent_walls = [
-            c for c in self.get_nearby_colliders(sx, sy, search_dist=2.4)
-            if (c[2] - c[0]) >= 0.5 or (c[3] - c[1]) >= 0.5
-        ]
-        s_closest_wall = 999.0
-        s_wall_norm = None
-        for min_x, min_y, max_x, max_y in serpent_walls:
-            cx = max(min_x, min(sx, max_x))
-            cy = max(min_y, min(sy, max_y))
-            vx, vy = sx - cx, sy - cy
-            d = math.hypot(vx, vy)
-            if d < s_closest_wall:
-                s_closest_wall = d
-                if d > 0.05:
-                    s_wall_norm = Vec3(vx / d, vy / d, 0)
-
-        if s_closest_wall < 2.2 and s_wall_norm is not None:
-            s_climb_z = 4.2 if dist_serpent > 4.0 else 0.45
-        else:
-            s_climb_z = 0.45
-
-        if s_tdist > 0.05:
-            sndx, sndy = s_tdx / s_tdist, s_tdy / s_tdist
-            s_disp_x = sndx * s_speed * dt
-            s_disp_y = sndy * s_speed * dt
-            new_sx, new_sy = self.resolve_collision(sx, sy, s_disp_x, s_disp_y, radius=0.42)
-            self.serpent.update_pos(new_sx, new_sy, dt, sndx, sndy, wall_norm=s_wall_norm, climb_target_z=s_climb_z)
-        else:
-            self.serpent.update(dt, is_moving=False)
-
-        # ====================================================================
-        # [적 2: 키 크고 팔 긴 해골 괴물 (TallSkeletonMonster) 성큼성큼 추격]
-        # ====================================================================
-        kx, ky = self.skeleton.pos.x, self.skeleton.pos.y
-        k_los = False
-        if dist_skeleton <= 26.0:
-            mid_x = (kx + px) * 0.5
-            mid_y = (ky + py) * 0.5
-            los_colliders = self.get_nearby_colliders(mid_x, mid_y, search_dist=dist_skeleton * 0.5 + 1.2)
-            k_los = check_line_of_sight(kx, ky, px, py, los_colliders)
-        self.skeleton.has_los = k_los
-
-        if k_los:
-            k_tx, k_ty = px, py
-            k_speed = 10.8 if dist_skeleton > 6.0 else 11.6  # 긴 팔을 뻗으며 전력 질주
-        else:
-            kgx = int(math.floor(kx / CELL_SIZE))
-            kgy = int(math.floor(ky / CELL_SIZE))
-            if self.skeleton_path_future is not None and self.skeleton_path_future.done():
-                try:
-                    new_path = self.skeleton_path_future.result()
-                    if new_path:
-                        self.skeleton.path = new_path
-                except Exception:
-                    pass
-                self.skeleton_path_future = None
-
-            self.skeleton.path_timer -= dt
-            if (self.skeleton.path_timer <= 0.0 or not self.skeleton.path) and self.skeleton_path_future is None:
-                self.skeleton_path_future = self.chunk_executor.submit(find_cell_path, (kgx, kgy), (pgx, pgy), 20)
-                self.skeleton.path_timer = 0.22
-
-            if len(self.skeleton.path) >= 2:
-                cur_c = self.skeleton.path[0]
-                nxt_c = self.skeleton.path[1]
-                if nxt_c[1] == cur_c[1] + 1:
-                    k_tx, k_ty = (cur_c[0] + 0.5) * CELL_SIZE, (cur_c[1] + 1.0) * CELL_SIZE
-                elif nxt_c[1] == cur_c[1] - 1:
-                    k_tx, k_ty = (cur_c[0] + 0.5) * CELL_SIZE, cur_c[1] * CELL_SIZE
-                elif nxt_c[0] == cur_c[0] + 1:
-                    k_tx, k_ty = (cur_c[0] + 1.0) * CELL_SIZE, (cur_c[1] + 0.5) * CELL_SIZE
+                if (mgx, mgy) == (pgx, pgy):
+                    tx, ty = px, py
                 else:
-                    k_tx, k_ty = cur_c[0] * CELL_SIZE, (cur_c[1] + 0.5) * CELL_SIZE
+                    if m.path_timer <= 0.0 or not m.path:
+                        m.path_timer = 0.35 + random.random() * 0.1
+                        m.path = find_cell_path((mgx, mgy), (pgx, pgy), max_depth=24)
 
-                if math.hypot(kx - k_tx, ky - k_ty) < 1.2 or (kgx == nxt_c[0] and kgy == nxt_c[1]):
-                    self.skeleton.path.pop(0)
+                    while len(m.path) > 1 and m.path[0] != (mgx, mgy):
+                        if (mgx, mgy) == m.path[1]:
+                            m.path.pop(0)
+                        else:
+                            break
+
+                    if len(m.path) >= 2:
+                        c1 = m.path[0]
+                        c2 = m.path[1]
+                        tx = (c1[0] + c2[0] + 1.0) * 0.5 * CELL_SIZE
+                        ty = (c1[1] + c2[1] + 1.0) * 0.5 * CELL_SIZE
+                        if math.hypot(mx - tx, my - ty) < 0.9:
+                            m.path.pop(0)
+                            if len(m.path) >= 2:
+                                c1 = m.path[0]
+                                c2 = m.path[1]
+                                tx = (c1[0] + c2[0] + 1.0) * 0.5 * CELL_SIZE
+                                ty = (c1[1] + c2[1] + 1.0) * 0.5 * CELL_SIZE
+                            else:
+                                tx, ty = px, py
+                    else:
+                        tx, ty = px, py
+
+            dx = tx - mx
+            dy = ty - my
+            d = math.hypot(dx, dy)
+            if d > 0.05:
+                ndx, ndy = dx / d, dy / d
+                speed = getattr(m, 'speed', 8.5) * stage_mult
+                col_radius = 0.40
+                new_x, new_y = resolve_collision(self.chunks, mx, my, ndx * speed * dt, ndy * speed * dt, radius=col_radius)
+                m.update_pos(new_x, new_y, dt, ndx, ndy)
             else:
-                k_tx, k_ty = px, py
+                m.update(dt, is_moving=False)
 
-            k_speed = 8.5 if dist_skeleton > 16.0 else 9.5
+        return False, closest_dist
 
-        k_speed *= stage_speed_mult
+    def _update_projectiles(self, dt, px, py, pz):
+        """파이어볼 비행/벽체 및 플레이어 피격 충돌, 땅울림 분진 갱신"""
+        # 1. 파이어볼 갱신
+        for fb in self.fireballs[:]:
+            alive = fb.update(dt)
+            if not alive:
+                fb.destroy()
+                self.fireballs.remove(fb)
+                continue
 
-        k_tdx, k_tdy = k_tx - kx, k_ty - ky
-        k_tdist = math.hypot(k_tdx, k_tdy)
-        if k_tdist > 0.05:
-            kndx, kndy = k_tdx / k_tdist, k_tdy / k_tdist
-            k_disp_x = kndx * k_speed * dt
-            k_disp_y = kndy * k_speed * dt
-            new_kx, new_ky = self.resolve_collision(kx, ky, k_disp_x, k_disp_y, radius=0.48)
-            self.skeleton.update_pos(new_kx, new_ky, dt, kndx, kndy)
-        else:
-            self.skeleton.update(dt, is_moving=False)
+            # 벽체 충돌 검사
+            cols = get_nearby_colliders(self.chunks, fb.pos.x, fb.pos.y, search_dist=0.6)
+            hit_wall = False
+            for min_x, min_y, max_x, max_y in cols:
+                if min_x <= fb.pos.x <= max_x and min_y <= fb.pos.y <= max_y:
+                    hit_wall = True
+                    break
+            if hit_wall:
+                fb.destroy()
+                self.fireballs.remove(fb)
+                continue
 
-        # --- 괴물 2종 3D 입체 음향 실시간 거리 감쇠 및 포효/신음 트리거 ---
-        if getattr(self, 'serpent_slither_sfx', None):
-            vol_s = max(0.0, min(1.0, (32.0 - dist_serpent) / 24.0)) * 0.75
-            self.serpent_slither_sfx.setVolume(vol_s)
+            # 플레이어 충돌 검사
+            dist_p = math.hypot(fb.pos.x - px, fb.pos.y - py)
+            dz = abs(fb.pos.z - pz)
+            if dist_p < 0.95 and dz < 1.6:
+                is_dead = self.player.take_damage(fb.damage)
+                self.audio_mgr.play_serpent_hit()
+                fb.destroy()
+                self.fireballs.remove(fb)
+                if is_dead:
+                    first_witch = next((m for m in self.monsters if isinstance(m, AlluringAshWitch)), None)
+                    self.trigger_game_over(killer=first_witch, reason="killed")
+                    return True
 
-        if dist_serpent < 18.0 or s_los:
-            self.serpent_hiss_cooldown -= dt
-            if self.serpent_hiss_cooldown <= 0.0:
-                if getattr(self, 'serpent_hiss_sfx', None):
-                    h_vol = max(0.35, min(1.0, (22.0 - dist_serpent) / 18.0))
-                    self.serpent_hiss_sfx.setVolume(h_vol)
-                    self.serpent_hiss_sfx.play()
-                self.serpent_hiss_cooldown = random.uniform(3.5, 6.5)
+        # 2. 땅울림 충격파 분진 갱신
+        for sw in self.shockwaves[:]:
+            if not sw.update(dt):
+                sw.destroy()
+                self.shockwaves.remove(sw)
 
-        if getattr(self, 'skeleton_rattle_sfx', None):
-            vol_k = max(0.0, min(1.0, (34.0 - dist_skeleton) / 26.0)) * 0.75
-            self.skeleton_rattle_sfx.setVolume(vol_k)
+        return False
 
-        if dist_skeleton < 20.0 or k_los:
-            self.skeleton_groan_cooldown -= dt
-            if self.skeleton_groan_cooldown <= 0.0:
-                if getattr(self, 'skeleton_groan_sfx', None):
-                    g_vol = max(0.35, min(1.0, (24.0 - dist_skeleton) / 20.0))
-                    self.skeleton_groan_sfx.setVolume(g_vol)
-                    self.skeleton_groan_sfx.play()
-                self.skeleton_groan_cooldown = random.uniform(4.0, 7.5)
-
-        # --- 4. 안개 가시거리 컬링 (청크 생성 또는 대폭 이동 시에만 갱신) ---
-        if chunk_created or (view_changed and is_moving):
-            self.cull_chunks_to_view()
-
-        # --- 4.5. FPS 뷰모델 (반동, 총구화염, 흔들림) & 타이머/탈출구 로직 ---
-        # 권총 발사 쿨다운 & 총구 화염 처리
-        if self.shoot_cooldown > 0.0:
-            self.shoot_cooldown = max(0.0, self.shoot_cooldown - dt)
-
-        if self.muzzle_timer > 0.0:
-            self.muzzle_timer -= dt
-            if self.muzzle_timer <= 0.0:
-                self.muzzle_flash_geom.hide()
-                self.render.clearLight(self.muzzle_light_np)
-
-        # 권총 재장전 및 반동 애니메이션
-        if getattr(self, 'is_reloading', False):
-            self.reload_timer -= dt
-            t_rel = max(0.0, self.reload_timer / 1.2)
-            tilt = math.sin(t_rel * math.pi)
-            self.recoil_node.setPos(0, -0.07 * tilt, -0.10 * tilt)
-            self.recoil_node.setP(-26.0 * tilt)
-
-            if self.reload_timer <= 0.0:
-                self.is_reloading = False
-                self.recoil_node.setPos(0, 0, 0)
-                self.recoil_node.setP(0)
-                needed = self.max_ammo - self.ammo
-                transferred = min(needed, getattr(self, 'reserve_ammo', 0))
-                self.ammo += transferred
-                self.reserve_ammo -= transferred
-                self.update_ammo_ui()
-                self.show_hit_marker(f"재장전 완료! (+{transferred}발)", (0.35, 1.0, 0.5, 1.0))
-        elif self.recoil_timer > 0.0:
-            self.recoil_timer -= dt
-            t_norm = max(0.0, self.recoil_timer / 0.10)
-            self.recoil_node.setPos(0, -0.05 * t_norm, 0.02 * t_norm)
-            self.recoil_node.setP(12.0 * t_norm)
-        else:
-            self.recoil_node.setPos(0, 0, 0)
-            self.recoil_node.setP(0)
-
-        # 피격 알림 타이머
-        if self.hit_marker_timer > 0.0:
-            self.hit_marker_timer -= dt
-            if self.hit_marker_timer <= 0.0:
-                self.hit_marker_text.setText("")
-
-        # 스테이지 시작/클리어 배너 타이머
-        if self.stage_banner_timer > 0.0:
-            self.stage_banner_timer -= dt
-            if self.stage_banner_timer <= 0.0 and hasattr(self, 'stage_clear_banner') and self.stage_clear_banner:
-                self.stage_clear_banner.hide()
-
-        # 스테이지 2+ 탄약 상자 수거 판정 (플레이어 1.8m 이내 접근 시 예비 탄약 12발 획득)
-        if getattr(self, 'ammo_drops', None):
-            for drop in self.ammo_drops[:]:
-                dx = px - drop["pos"][0]
-                dy = py - drop["pos"][1]
-                if math.hypot(dx, dy) <= 1.8:
-                    self.reserve_ammo += 12
-                    self.show_hit_marker("탄약 상자 획득! (+12발 예비탄)", (0.35, 1.0, 0.5, 1.0))
-                    if "light_np" in drop and drop["light_np"] and not drop["light_np"].isEmpty():
-                        self.render.clearLight(drop["light_np"])
-                    if "node" in drop and drop["node"] and not drop["node"].isEmpty():
-                        drop["node"].removeNode()
-                    self.ammo_drops.remove(drop)
-                    self.update_ammo_ui()
-
-        # 뷰모델 보행 밥빙(Bobbing) & 정지 호흡 스웨이
-        if is_moving:
-            self.bobbing_time += dt * (14.0 if (hasattr(self, 'is_sprinting') and self.is_sprinting) else 8.5)
-            bob_x = math.sin(self.bobbing_time * 0.5) * 0.012
-            bob_y = abs(math.cos(self.bobbing_time)) * 0.014
-            self.vm_root.setPos(bob_x, 0, -bob_y)
-        else:
-            self.bobbing_time += dt * 2.0
-            sway_z = math.sin(self.bobbing_time) * 0.003
-            self.vm_root.setPos(0, 0, sway_z)
-
-        # 60초 탈출 제한시간 카운트다운
-        self.time_left -= dt
-        if self.time_left <= 0.0:
-            self.time_left = 0.0
-            self.trigger_game_over(killer=None, reason="timeout")
-            return task.cont
-
-        # 비상탈출문 5초 홀드아웃 방어 판정 (색상 제거 및 난이도 상승)
+    def _update_door_defense(self, dt, px, py):
+        """탈출구 앞 2.8m 방어 판정 (5초 사수 시 상점 모달 팝업)"""
         dist_exit = math.hypot(px - self.escape_pos[0], py - self.escape_pos[1])
         if dist_exit <= 2.8:
             self.door_hold_timer -= dt
-            hold_time = max(0.0, self.door_hold_timer)
-            progress_sec = 5.0 - hold_time
+            progress_sec = 5.0 - max(0.0, self.door_hold_timer)
             pct = max(0.0, min(1.0, progress_sec / 5.0))
             bars = int(pct * 16)
             bar_str = "■" * bars + "□" * (16 - bars)
-            self.door_status_text.setText(f"[ 비상문 개방 중: {progress_sec:.1f}s / 5.0s  [{bar_str}] ]\n[ 경고: 문이 열릴 때까지 괴물의 접근을 저지하세요! ]")
-            self.door_status_text.setFg((1.0, 0.85, 0.2, 1.0))
-            self.door_status_text.show()
 
-            # 도어 상단 램프 점멸 연출 (4방향 모든 램프 동시 점멸)
             blink = (int(globalClock.getFrameTime() * 8) % 2 == 0)
             blink_col = LColor(0.9, 0.15, 0.15, 1.0) if blink else LColor(0.3, 0.05, 0.05, 1.0)
-            if hasattr(self, 'door_lamps') and self.door_lamps:
-                for lamp in self.door_lamps:
-                    lamp.setColor(blink_col)
-            elif hasattr(self, 'door_lamp') and self.door_lamp:
-                self.door_lamp.setColor(blink_col)
+            for lamp in self.door_lamps:
+                lamp.setColor(blink_col)
 
             if self.door_hold_timer <= 0.0:
-                self.door_status_text.setText("[ 비상문 개방 완료! 다음 스테이지로 진입합니다! ]")
-                self.door_status_text.setFg((0.2, 1.0, 0.4, 1.0))
-                if hasattr(self, 'door_lamps') and self.door_lamps:
-                    for lamp in self.door_lamps:
-                        lamp.setColor(LColor(0.2, 1.0, 0.4, 1.0))
-                elif hasattr(self, 'door_lamp') and self.door_lamp:
-                    self.door_lamp.setColor(LColor(0.2, 1.0, 0.4, 1.0))
-                self.advance_to_next_stage()
-                return task.cont
+                for lamp in self.door_lamps:
+                    lamp.setColor(LColor(0.2, 1.0, 0.4, 1.0))
+                self.door_hold_timer = 5.0
+                # 던전 크롤러: 스탯 분배 및 상점 모달 팝업 & 다음 스테이지 준비
+                self.game_state = "SHOP"
+                self.player.lock_mouse(False)
+                self.ui_mgr.show_stage_clear_shop(self.current_stage, self.player, self.combat, self.on_shop_closed)
+                return True
+            else:
+                msg = f"[ 비상문 개방 중: {progress_sec:.1f}s / 5.0s  [{bar_str}] ]\n[ 경고: 문이 열릴 때까지 괴물의 접근을 저지하세요! ]"
+                self.ui_mgr.update_door_status(msg, fg=(1.0, 0.85, 0.2, 1.0))
         else:
             if self.door_hold_timer < 5.0:
                 self.door_hold_timer = 5.0
                 idle_col = LColor(0.35, 0.25, 0.08, 1.0)
-                if hasattr(self, 'door_lamps') and self.door_lamps:
-                    for lamp in self.door_lamps:
-                        lamp.setColor(idle_col)
-                elif hasattr(self, 'door_lamp') and self.door_lamp:
-                    self.door_lamp.setColor(idle_col)
-                self.door_status_text.setText("[ 비상문 개방 중단! 탈출구 앞(2.8m)을 사수하세요! ]")
-                self.door_status_text.setFg((1.0, 0.3, 0.3, 1.0))
-                self.door_status_text.show()
-            elif hasattr(self, 'door_status_text') and self.door_status_text.getText() != "":
-                self.door_status_text.setText("")
+                for lamp in self.door_lamps:
+                    lamp.setColor(idle_col)
+                self.ui_mgr.update_door_status("[ 비상문 개방 중단! 탈출구 앞(2.8m)을 사수하세요! ]", fg=(1.0, 0.3, 0.3, 1.0))
+            else:
+                self.ui_mgr.update_door_status("", show=False)
+        return False
 
-        # 타이머 HUD 갱신 (스테이지 번호 표시)
-        mins = int(self.time_left) // 60
-        secs = int(self.time_left) % 60
-        t_str = f"{mins:02d}:{secs:02d}"
-        stg_str = f"[ STAGE {getattr(self, 'current_stage', 1)} ]  "
-        if self.time_left <= 10.0:
-            flash_col = (1.0, 0.2, 0.2, 1.0) if int(self.time_left * 4) % 2 == 0 else (1.0, 0.8, 0.8, 1.0)
-            self.timer_text.setText(f"{stg_str}[ ! 탈출 제한시간: {t_str} (서두르세요!) ]")
-            self.timer_text.setFg(flash_col)
-        elif self.time_left <= 25.0:
-            self.timer_text.setText(f"{stg_str}[ 탈출 제한시간: {t_str} ]")
-            self.timer_text.setFg((1.0, 0.85, 0.2, 1.0))
-        else:
-            self.timer_text.setText(f"{stg_str}[ 탈출 제한시간: {t_str} ]")
-            self.timer_text.setFg((0.25, 0.95, 0.45, 1.0))
+    # --- 메인 틱 루프 (Main Update Loop) ---
+    def update(self, task):
+        dt = min(0.1, globalClock.getDt())
+        cont = task.cont if task is not None else 1
 
-        # --- 5. HUD 업데이트 (괴물 거리 및 위치 표시 완전 금지 - 순수 미지의 공포감 유지) ---
-        new_hud = f"위치: X={px:.1f}, Y={py:.1f} | 활성: {self.rendered_chunk_count}/{self.total_chunk_count} 청크"
-        if new_hud != self.last_hud_text:
-            self.hud_text.setText(new_hud)
-            self.hud_text.setFg((0.95, 0.95, 0.95, 0.9))
-            self.last_hud_text = new_hud
+        # 1. 인트로 시네마틱 카메라 회전
+        if self.game_state == "INTRO":
+            t = globalClock.getFrameTime()
+            cam_x = 45.0 + math.sin(t * 0.12) * 38.0
+            cam_y = 45.0 + math.cos(t * 0.12) * 38.0
+            self.camera.setPos(cam_x, cam_y, 11.5)
+            self.camera.lookAt(45.0, 45.0, 1.5)
+            self.update_chunks()
+            return cont
 
-        # --- 6. 스테미나 게이지 실시간 갱신 ---
-        bars = int((self.stamina / self.max_stamina) * 15)
-        bar_str = "|" * bars + "." * (15 - bars)
-        if self.stamina_exhausted:
-            stamina_msg = f"스테미나: [{bar_str}] {int(self.stamina)}% (탈진! 회복 대기...)"
-            stamina_fg = (1.0, 0.25, 0.25, 1.0)
-        elif hasattr(self, 'is_sprinting') and self.is_sprinting:
-            stamina_msg = f"스테미나: [{bar_str}] {int(self.stamina)}% (전력질주 중!)"
-            stamina_fg = (1.0, 0.85, 0.2, 1.0)
-        else:
-            stamina_msg = f"스테미나: [{bar_str}] {int(self.stamina)}%"
-            stamina_fg = (0.35, 0.95, 0.5, 0.95)
+        # 2. 상점 모달 상태 시 업데이트 정지
+        if self.game_state == "SHOP":
+            return cont
 
-        self.stamina_text.setText(stamina_msg)
-        self.stamina_text.setFg(stamina_fg)
+        # 3. 승리 및 게임 오버 상태 처리
+        if self.game_won or self.game_state == "VICTORY":
+            return cont
 
-        return task.cont
+        if self.game_over or self.game_state == "GAME_OVER":
+            self.ui_mgr.update(dt)
+            if self.killer_monster is not None:
+                killer = self.killer_monster
+                px, py = self.camera.getX(), self.camera.getY()
+                dx, dy = killer.pos.x - px, killer.pos.y - py
+                h = math.degrees(math.atan2(-dx, dy))
+                p = math.degrees(math.atan2(1.8 - PLAYER_EYE_HEIGHT, max(0.2, math.hypot(dx, dy))))
+                self.camera.setHpr(h, p, 0)
+                killer.update(dt, is_moving=False, is_attacking=True)
+            return cont
+
+        # 4. 비동기 청크 마운트
+        chunk_created = self._mount_async_chunks()
+
+        # 5. 플레이어 시선 및 이동/충돌 처리
+        is_moving, is_sprinting, view_changed = self.player.update(dt, self.chunks)
+        if is_moving:
+            self.update_chunks()
+
+        # 6. 괴물 군단 AI 및 공격 판정
+        px, py = self.camera.getX(), self.camera.getY()
+        game_ended, closest_dist = self._update_monsters(dt, px, py)
+        if game_ended:
+            return cont
+
+        # 6-1. 마녀 파이어볼 및 진흙오크 충격파 갱신
+        if self._update_projectiles(dt, px, py, PLAYER_EYE_HEIGHT):
+            return cont
+
+        # 7. 오디오 3D 위치 및 감쇠
+        self.audio_mgr.update(dt, closest_dist, closest_dist, False, False)
+
+        # 8. 안개 가시거리 컬링 (임계치 2.0m 이동 또는 신규 청크 마운트 시만 실행)
+        if chunk_created or is_moving:
+            self.cull_chunks_to_view(force=chunk_created)
+
+        # 9. 전투 및 뷰모델 갱신 (반동, 재장전, 탄약 습득, 밥빙)
+        self.combat.update(dt, px, py, is_moving, is_sprinting)
+
+        # 10. 배너 타이머
+        if self.stage_banner_timer > 0.0:
+            self.stage_banner_timer -= dt
+            if self.stage_banner_timer <= 0.0:
+                self.ui_mgr.hide_stage_banner()
+
+        # 10-1. 정전 프로토콜 (Blackout & Crimson Protocol) 발동 및 타이머 갱신
+        if self.time_left <= 200.0 and not self.blackout_triggered_this_stage:
+            self.blackout_triggered_this_stage = True
+            self.blackout_active = True
+            b_duration = 18.0
+            if "abyssal_reaper" in getattr(self.player, 'relics', []):
+                b_duration += 10.0  # 심연의 수확자 유물: 정전 지속시간 10초 증가
+            self.blackout_timer = b_duration
+            self.audio_mgr.play_siren_alarm()
+            self.ui_mgr.show_blackout_warning()
+            self.liminal_fog.setColor(BLACKOUT_FOG_COLOR)
+            self.liminal_fog.setExpDensity(0.052)  # 짙고 자욱한 핏빛 미스트 안개
+            self.setBackgroundColor(BLACKOUT_FOG_COLOR)
+            if hasattr(self, 'win') and self.win:
+                self.win.setClearColor(BLACKOUT_FOG_COLOR)
+            self.amb_np.node().setColor((0.012, 0.002, 0.002, 1.0))
+            self.combat.set_blackout_mode(True)
+
+        if self.blackout_active:
+            self.blackout_timer -= dt
+            if self.blackout_timer <= 0.0:
+                self.blackout_active = False
+                self.audio_mgr.play_power_restored()
+                self.ui_mgr.hide_blackout_warning()
+                self.liminal_fog.setColor(FOG_COLOR)
+                self.liminal_fog.setExpDensity(0.038)
+                self.setBackgroundColor(FOG_COLOR)
+                if hasattr(self, 'win') and self.win:
+                    self.win.setClearColor(FOG_COLOR)
+                self.amb_np.node().setColor((0.005, 0.005, 0.006, 1.0))
+                self.combat.set_blackout_mode(False)
+                self.ui_mgr.show_stage_banner("[ 전력 복구 완료 ]\n비상 조명 해제 및 기지 전력 정상화", color=(0.4, 0.9, 1.0, 1.0))
+                self.stage_banner_timer = 2.5
+
+        # 11. 5분 탈출 제한시간 카운트다운
+        self.time_left -= dt
+        if self.time_left <= 0.0:
+            self.time_left = 0.0
+            self.trigger_game_over(killer=None, reason="timeout")
+            return cont
+
+        # 12. 비상탈출문 5초 방어 판정 (성공 시 상점 모달 오픈)
+        if self._update_door_defense(dt, px, py):
+            return cont
+
+        # 13. HUD 텍스트 캐싱 및 실시간 피격 효과 애니메이션 갱신
+        self.ui_mgr.update(dt)
+        self.ui_mgr.update_timer(self.time_left, self.current_stage)
+        self.ui_mgr.update_hud(px, py, self.rendered_chunk_count, self.total_chunk_count)
+
+        return cont
 
     def destroy(self):
-        """게임 종료 시 백그라운드 스레드 풀 리소스 안전 해제"""
         if hasattr(self, 'chunk_executor'):
             self.chunk_executor.shutdown(wait=False, cancel_futures=True)
         super().destroy()

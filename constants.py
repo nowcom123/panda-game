@@ -39,3 +39,48 @@ FOG_COLOR = LColor(0.002, 0.002, 0.003, 1.0) # 칠흑 같은 암흑 톤 (완전�
 MAP_MIN_CHUNK = -3
 MAP_MAX_CHUNK = 3
 
+BLACKOUT_FOG_COLOR = LColor(0.018, 0.003, 0.003, 1.0) # 정전 프로토콜 발동 시 핏빛 붉은 비상등 미스트 안개
+
+CURSED_RELICS = {
+    "glass_cannon": {
+        "id": "glass_cannon",
+        "name": "유리의 총열",
+        "icon": "[유리]",
+        "pro": "사격 공격력 +80%",
+        "con": "받는 피해 +40%",
+        "desc": "위험을 대가로 압도적인 화력을 얻습니다."
+    },
+    "blood_thirst": {
+        "id": "blood_thirst",
+        "name": "피의 갈증",
+        "icon": "[흡혈]",
+        "pro": "적 처치 시 체력 12 흡혈",
+        "con": "최대 체력 25 영구 감소",
+        "desc": "피를 갈망하며 살아있는 상태를 유지합니다."
+    },
+    "frenzy_drive": {
+        "id": "frenzy_drive",
+        "name": "광기의 가속",
+        "icon": "[가속]",
+        "pro": "이동 및 질주 속도 +30%",
+        "con": "초당 체력 0.4 지속 감소",
+        "desc": "생명을 불태워 초인적인 속도를 얻습니다."
+    },
+    "iron_colossus": {
+        "id": "iron_colossus",
+        "name": "철갑의 거인",
+        "icon": "[철갑]",
+        "pro": "최대 체력 +60 & 지진 면역",
+        "con": "기본 이동 속도 15% 감소",
+        "desc": "무거운 철갑으로 견고한 육체를 얻습니다."
+    },
+    "abyssal_reaper": {
+        "id": "abyssal_reaper",
+        "name": "심연의 수확자",
+        "icon": "[심연]",
+        "pro": "정전 중 공격력 2.5배",
+        "con": "정전 지속 시간 10초 증가",
+        "desc": "어둠이 짙어질수록 진정한 사신이 됩니다."
+    }
+}
+
