@@ -11,21 +11,9 @@ import random
 import datetime
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectGui import DirectButton, DirectFrame, DirectWaitBar, DGG
-from panda3d.core import TextNode, CardMaker, TransparencyAttrib, LineSegs, LColor, NodePath
+from panda3d.core import TextNode
 from constants import CURSED_RELICS
-from stage_config import get_stage_profile
-from compass_ui import CompassHUD
 
-
-
-class _DummyUIElement:
-    """하위 호환성을 위한 비활성 더미 UI 요소 (좌표/정크/도움말 제거용)"""
-    def show(self): pass
-    def hide(self): pass
-    def setText(self, text): pass
-    def setFg(self, fg): pass
-    def setScale(self, scale): pass
-    def isHidden(self): return True
 
 class UIManager:
     def __init__(self, base, loader, on_start, on_return_menu, on_exit):
@@ -37,23 +25,11 @@ class UIManager:
 
         self.rank_file = os.path.join(os.path.dirname(__file__), "rankings.json")
 
-                # 다크 판타지 고딕/세리프 폰트 로드 (Noto Serif KR, Batang 등)
-        self.korean_font = None
-        for font_candidate in [
-            '/c/Windows/Fonts/NotoSerifKR-VF.ttf',
-            '/c/Windows/Fonts/batang.ttc',
-            '/c/Windows/Fonts/HANBatangB.ttf',
-            '/c/Windows/Fonts/malgunbd.ttf',
-            '/c/Windows/Fonts/malgun.ttf'
-        ]:
-            try:
-                loaded = self.loader.loadFont(font_candidate)
-                if loaded:
-                    loaded.setPixelsPerUnit(60)
-                    self.korean_font = loaded
-                    break
-            except Exception:
-                continue
+        # 폰트 로드
+        try:
+            self.korean_font = self.loader.loadFont('/c/Windows/Fonts/malgun.ttf')
+        except Exception:
+            self.korean_font = None
 
         self.font_kw = {"font": self.korean_font} if self.korean_font else {}
         self.btn_font_kw = {"text_font": self.korean_font} if self.korean_font else {}
@@ -105,8 +81,8 @@ class UIManager:
 
         self.timer_text = OnscreenText(
             text="[ 탈출 제한시간: 01:00 ]",
-            pos=(0, 0.95),
-            scale=0.036,
+            pos=(0, 0.91),
+            scale=0.052,
             fg=(0.25, 0.95, 0.45, 1.0),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ACenter,
@@ -116,17 +92,14 @@ class UIManager:
 
         self.altar_status_text = OnscreenText(
             text="[ 룬 봉인: 0 / 3 ]  > 제단 탐색 중...",
-            pos=(0, 0.735),
-            scale=0.034,
+            pos=(0, 0.835),
+            scale=0.038,
             fg=(0.92, 0.85, 1.0, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
         )
-
-        self.compass = CompassHUD(self.base.aspect2d, self.font_kw)
-        self.altar_status_text.hide()
 
         self.quickslot_text = OnscreenText(
             text="[1] 성수: 1/3  |  [2] 향로: 1/2  |  [3] 화약병: 1/3",
@@ -161,213 +134,56 @@ class UIManager:
             **self.font_kw
         )
 
-        # [모던 다크 판타지 RPG 그래픽 HUD (체력, 스테미나, 경험치, 레벨)]
-        # base.a2dTopLeft를 부모로 삼아 해상도에 상관없이 정확히 화면 좌측 최상단에 고정
-        if hasattr(self.base, 'a2dTopLeft') and self.base.a2dTopLeft:
-            self.player_hud_root = self.base.a2dTopLeft.attachNewNode("player_hud_root")
-            self.player_hud_root.setPos(0.035, 0, -0.035)
-        else:
-            self.player_hud_root = self.base.aspect2d.attachNewNode("player_hud_root")
-            self.player_hud_root.setPos(-1.70, 0, 0.94)
-
-        panel_w = 0.64
-        panel_h = 0.285
-        x1, x2 = 0.0, panel_w
-        y1, y2 = 0.0, -panel_h
-
-        # 1. 흑요석 반투명 배경 패널
-        cm = CardMaker("hud_bg")
-        cm.setFrame(x1, x2, y2, y1)
-        bg_panel = self.player_hud_root.attachNewNode(cm.generate())
-        bg_panel.setColor(0.03, 0.025, 0.04, 0.88)
-        bg_panel.setTransparency(TransparencyAttrib.MAlpha)
-
-        # 2. 고딕 더블 골드 테두리 (LineSegs)
-        lines = LineSegs("hud_border")
-        lines.setThickness(2.0)
-        lines.setColor(0.55, 0.45, 0.26, 0.95)
-        lines.moveTo(x1, 0, y1)
-        lines.drawTo(x2, 0, y1)
-        lines.drawTo(x2, 0, y2)
-        lines.drawTo(x1, 0, y2)
-        lines.drawTo(x1, 0, y1)
-
-        # 내부 은은한 골드 악센트 라인
-        lines.setColor(0.78, 0.65, 0.35, 0.65)
-        lines.setThickness(1.2)
-        in_pad = 0.005
-        lines.moveTo(x1 + in_pad, 0, y1 - in_pad)
-        lines.drawTo(x2 - in_pad, 0, y1 - in_pad)
-        lines.drawTo(x2 - in_pad, 0, y2 + in_pad)
-        lines.drawTo(x1 + in_pad, 0, y2 + in_pad)
-        lines.drawTo(x1 + in_pad, 0, y1 - in_pad)
-
-        # 레벨 타이틀 구분선
-        sep_y = -0.048
-        lines.setColor(0.65, 0.52, 0.28, 0.75)
-        lines.moveTo(x1 + 0.015, 0, sep_y)
-        lines.drawTo(x2 - 0.015, 0, sep_y)
-
-        self.player_hud_root.attachNewNode(lines.create())
-
-        # 레벨 텍스트 헤더 (다크 판타지 세리프)
-        self.level_badge_text = OnscreenText(
-            text="[ LV. 1 ]  다크 소울 탈출자",
-            parent=self.player_hud_root,
-            pos=(0.02, -0.036),
-            scale=0.034,
-            fg=(1.0, 0.88, 0.40, 1.0),
-            shadow=(0, 0, 0, 0.95),
+        self.hud_text = OnscreenText(
+            text="위치: X=0.0, Y=0.0",
+            pos=(-1.3, 0.92),
+            scale=0.045,
+            fg=(1, 1, 1, 0.9),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
 
-        def _make_bar(parent, name, x, y, w, h, bg_col, fill_col, border_col):
-            bnode = parent.attachNewNode(name)
-            bnode.setPos(x, 0, y)
-
-            blines = LineSegs(f"{name}_border")
-            blines.setThickness(1.8)
-            blines.setColor(border_col)
-            blines.moveTo(-0.002, 0, 0.002)
-            blines.drawTo(w + 0.002, 0, 0.002)
-            blines.drawTo(w + 0.002, 0, -h - 0.002)
-            blines.drawTo(-0.002, 0, -h - 0.002)
-            blines.drawTo(-0.002, 0, 0.002)
-            bnode.attachNewNode(blines.create())
-
-            cm_bg = CardMaker(f"{name}_bg")
-            cm_bg.setFrame(0, w, -h, 0)
-            bg = bnode.attachNewNode(cm_bg.generate())
-            bg.setColor(bg_col)
-            bg.setTransparency(TransparencyAttrib.MAlpha)
-
-            cm_fill = CardMaker(f"{name}_fill")
-            cm_fill.setFrame(0, w, -h, 0)
-            fill = bnode.attachNewNode(cm_fill.generate())
-            fill.setColor(fill_col)
-            fill.setTransparency(TransparencyAttrib.MAlpha)
-
-            cm_shine = CardMaker(f"{name}_shine")
-            cm_shine.setFrame(0, w, -h * 0.30, 0)
-            shine = fill.attachNewNode(cm_shine.generate())
-            shine.setColor(1.0, 1.0, 1.0, 0.28)
-            shine.setTransparency(TransparencyAttrib.MAlpha)
-
-            return bnode, fill
-
-        bar_w = 0.50
-
-        # 체력 (HP Bar)
-        self.bar_node_hp, self.bar_fill_hp = _make_bar(
-            self.player_hud_root, "bar_hp",
-            x=0.08, y=-0.068, w=bar_w, h=0.040,
-            bg_col=LColor(0.12, 0.015, 0.015, 0.95),
-            fill_col=LColor(0.85, 0.10, 0.12, 1.0),
-            border_col=LColor(0.55, 0.24, 0.24, 0.95)
-        )
-        self.label_hp = OnscreenText(
-            text="HP",
-            parent=self.player_hud_root,
-            pos=(0.018, -0.096),
-            scale=0.028,
-            fg=(1.0, 0.35, 0.35, 1.0),
-            shadow=(0, 0, 0, 0.95),
+        self.stamina_text = OnscreenText(
+            text="스테미나: [|||||||||||||||] 100%",
+            pos=(-1.3, 0.86),
+            scale=0.04,
+            fg=(0.35, 0.95, 0.5, 0.95),
             align=TextNode.ALeft,
-            **self.font_kw
-        )
-        self.bar_text_hp = OnscreenText(
-            text="100 / 100",
-            parent=self.bar_node_hp,
-            pos=(bar_w * 0.5, -0.028),
-            scale=0.024,
-            fg=(1.0, 1.0, 1.0, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
         )
 
-        # 스테미나 (Stamina Bar)
-        self.bar_node_stm, self.bar_fill_stm = _make_bar(
-            self.player_hud_root, "bar_stm",
-            x=0.08, y=-0.122, w=bar_w, h=0.032,
-            bg_col=LColor(0.02, 0.09, 0.03, 0.95),
-            fill_col=LColor(0.18, 0.85, 0.42, 1.0),
-            border_col=LColor(0.24, 0.48, 0.28, 0.95)
-        )
-        self.label_stm = OnscreenText(
-            text="STM",
-            parent=self.player_hud_root,
-            pos=(0.014, -0.146),
-            scale=0.025,
-            fg=(0.4, 1.0, 0.55, 1.0),
-            shadow=(0, 0, 0, 0.95),
+        # 5.5. 플레이어 체력(HP) & 경험치(EXP) HUD
+        self.hp_text = OnscreenText(
+            text="체  력: [|||||||||||||||] 100/100",
+            pos=(-1.3, 0.80),
+            scale=0.04,
+            fg=(0.20, 0.95, 0.40, 1.0),
             align=TextNode.ALeft,
-            **self.font_kw
-        )
-        self.bar_text_stm = OnscreenText(
-            text="100%",
-            parent=self.bar_node_stm,
-            pos=(bar_w * 0.5, -0.023),
-            scale=0.022,
-            fg=(1.0, 1.0, 1.0, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
         )
 
-        # 경험치 (EXP Bar)
-        self.bar_node_exp, self.bar_fill_exp = _make_bar(
-            self.player_hud_root, "bar_exp",
-            x=0.08, y=-0.168, w=bar_w, h=0.024,
-            bg_col=LColor(0.04, 0.02, 0.08, 0.95),
-            fill_col=LColor(0.45, 0.55, 1.0, 0.95),
-            border_col=LColor(0.32, 0.32, 0.55, 0.90)
-        )
-        self.label_exp = OnscreenText(
-            text="EXP",
-            parent=self.player_hud_root,
-            pos=(0.014, -0.186),
-            scale=0.022,
-            fg=(0.55, 0.70, 1.0, 0.95),
-            shadow=(0, 0, 0, 0.95),
+        self.exp_text = OnscreenText(
+            text="[LV. 1] EXP: [...............] 0/100",
+            pos=(-1.3, 0.74),
+            scale=0.038,
+            fg=(0.35, 0.85, 1.0, 1.0),
             align=TextNode.ALeft,
-            **self.font_kw
-        )
-        self.bar_text_exp = OnscreenText(
-            text="0 / 100 (0%)",
-            parent=self.bar_node_exp,
-            pos=(bar_w * 0.5, -0.017),
-            scale=0.019,
-            fg=(0.88, 0.92, 1.0, 0.95),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
         )
 
-        # 저주 유물 뱃지 (패널 하단)
         self.relic_badge_text = OnscreenText(
-            text="[보유 유물] 없음 (성소 상점에서 획득)",
-            parent=self.player_hud_root,
-            pos=(0.02, -0.228),
-            scale=0.025,
-            fg=(0.80, 0.72, 0.95, 0.85),
-            shadow=(0, 0, 0, 0.95),
+            text="[보유 유물] 없음",
+            pos=(-1.3, 0.68),
+            scale=0.034,
+            fg=(0.85, 0.70, 1.0, 0.95),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
-
-        # 하위 호환성 더미 (좌표/청크 삭제, 가운데 아래 도움말 삭제)
-        self.hud_text = _DummyUIElement()
-        self.guide_text = _DummyUIElement()
-        self.hp_text = self.bar_text_hp
-        self.stamina_text = self.bar_text_stm
-        self.exp_text = self.bar_text_exp
 
         self.blackout_banner = OnscreenText(
             text="[ ! 심층 이계화 발동 : ABYSSAL INVERSION ! ]\n촛불이 꺼지며 그림자 포식자가 깨어납니다! (우클릭 밀치기로 심장 노출)",
@@ -382,7 +198,16 @@ class UIManager:
         self.blackout_banner.hide()
         self.blackout_pulse_timer = 0.0
 
-        self.guide_text = _DummyUIElement()
+        self.guide_text = OnscreenText(
+            text="[WASD] 이동  |  [Shift] 질주  |  [1~3] 소비 아이템  |  [좌클릭] 사격  |  [우클릭] 근접 밀치기  |  [E] 룬 각인  |  [R] 장전",
+            pos=(0, -0.94),
+            scale=0.035,
+            fg=(0.85, 0.88, 0.92, 0.85),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=False,
+            **self.font_kw
+        )
 
         self.stage_clear_banner = OnscreenText(
             text="",
@@ -407,8 +232,8 @@ class UIManager:
             **self.font_kw
         )
         self.door_status_text.hide()
-        if hasattr(self, 'player_hud_root'):
-            self.player_hud_root.hide()
+        if hasattr(self, 'relic_badge_text'):
+            self.relic_badge_text.hide()
 
     def _setup_end_game_ui(self):
         """사망 및 승리 화면 UI"""
@@ -626,7 +451,6 @@ class UIManager:
         self.btn_game_rank.hide()
         self.rank_modal.hide()
         self.intro_frame.show()
-        self.shop_modal.hide()
 
     def start_game_ui(self):
         """게임 시작 시 인게임 HUD 표시"""
@@ -641,29 +465,25 @@ class UIManager:
 
         self.crosshair.show()
         self.timer_text.show()
-        self.compass.root.show()
-        self.altar_status_text.show()
         self.ammo_text.show()
-        if hasattr(self, 'player_hud_root'):
-            self.player_hud_root.show()
+        self.hud_text.show()
+        self.stamina_text.show()
+        self.hp_text.show()
+        self.exp_text.show()
+        self.guide_text.show()
+        if hasattr(self, 'relic_badge_text'):
+            self.relic_badge_text.show()
 
     def hide_all_ingame(self):
         """인게임 HUD 전체 숨김"""
-        self.damage_flash_alpha = 0.0
-        self.damage_flash['frameColor'] = (0.85, 0.05, 0.05, 0.0)
-        self.crosshair_hit_timer = 0.0
-        self.crosshair.setText("+")
-        self.crosshair.setScale(0.065)
-        self.crosshair.setFg((1.0, 1.0, 1.0, 0.85))
-        self.hide_blackout_warning()
         self.crosshair.hide()
         self.timer_text.hide()
-        self.compass.root.hide()
-        self.compass.clear()
-        self.altar_status_text.hide()
         self.ammo_text.hide()
-        if hasattr(self, 'player_hud_root'):
-            self.player_hud_root.hide()
+        self.hud_text.hide()
+        self.stamina_text.hide()
+        self.hp_text.hide()
+        self.exp_text.hide()
+        self.guide_text.hide()
         self.door_status_text.hide()
         self.hit_marker_text.setText("")
         self.stage_clear_banner.hide()
@@ -722,16 +542,14 @@ class UIManager:
         self.blackout_banner.hide()
 
     def update_relic_badges(self, relic_ids):
-        """플레이어가 획득한 저주 유물 HUD 텍스트 갱신"""
-        if not hasattr(self, 'relic_badge_text') or not self.relic_badge_text:
-            return
+        """플레이어가 획득한 저주받은 유물 목록 HUD 텍스트 갱신"""
         if not relic_ids:
-            self.relic_badge_text.setText("[보유 유물] 없음 (성소 상점에서 획득)")
-            self.relic_badge_text.setFg((0.80, 0.72, 0.95, 0.85))
+            self.relic_badge_text.setText("[보유 유물] 없음")
+            self.relic_badge_text.setFg((0.6, 0.6, 0.6, 0.8))
         else:
             names = [f"{CURSED_RELICS[rid]['icon']} {CURSED_RELICS[rid]['name']}" for rid in relic_ids if rid in CURSED_RELICS]
             self.relic_badge_text.setText(f"[유물]  {'  '.join(names)}")
-            self.relic_badge_text.setFg((1.0, 0.85, 0.40, 1.0))
+            self.relic_badge_text.setFg((0.95, 0.75, 1.0, 1.0))
 
     def show_stage_banner(self, text, color=(0.3, 1.0, 0.5, 1.0)):
         """스테이지 클리어/시작 배너 표시"""
@@ -812,16 +630,6 @@ class UIManager:
                 pass
             self._cached_ammo_str = msg
 
-    def update_navigation(self, heading, px, py, altars, gate):
-        target = self.compass.update(heading, px, py, altars, gate)
-        activated = sum(1 for altar in altars if altar['activated'])
-        message = '제단 탐색 중...'
-        if target:
-            behind = ' · 뒤쪽' if abs(self.compass.target_delta) > 90 else ''
-            message = f"{target['name']} · {int(target['distance'])}m{behind}"
-        self.update_altar_tracker(activated, len(altars), message,
-                                  is_all_active=bool(gate and gate.get('opened', False)))
-
     def update_altar_tracker(self, activated_count, total_count, compass_msg, is_all_active=False):
         if is_all_active:
             msg = f"[ >> 관문 개방! ]  {compass_msg}"
@@ -836,28 +644,32 @@ class UIManager:
         self.altar_status_text.show()
 
     def update_stamina(self, stamina, max_stamina, is_sprinting=False, is_exhausted=False):
-        ratio = max(0.0, min(1.0, stamina / max(1.0, max_stamina)))
+        bars = int((stamina / max_stamina) * 15)
+        bar_str = "|" * bars + "." * (15 - bars)
         stamina_pct = int(stamina)
 
-        if hasattr(self, 'bar_fill_stm') and self.bar_fill_stm:
-            self.bar_fill_stm.setScale(max(0.0001, ratio), 1.0, 1.0)
-            if is_exhausted:
-                self.bar_fill_stm.setColor(0.95, 0.25, 0.15, 1.0)
-                msg = f"{stamina_pct}% (탈진!)"
-            elif is_sprinting:
-                self.bar_fill_stm.setColor(1.0, 0.82, 0.18, 1.0)
-                msg = f"{stamina_pct}% (질주)"
-            else:
-                self.bar_fill_stm.setColor(0.18, 0.85, 0.42, 1.0)
-                msg = f"{stamina_pct}%"
+        if is_exhausted:
+            msg = f"스테미나: [{bar_str}] {stamina_pct}% (탈진! 회복 대기...)"
+            col = (1.0, 0.25, 0.25, 1.0)
+        elif is_sprinting:
+            msg = f"스테미나: [{bar_str}] {stamina_pct}% (전력질주 중!)"
+            col = (1.0, 0.85, 0.2, 1.0)
+        else:
+            msg = f"스테미나: [{bar_str}] {stamina_pct}%"
+            col = (0.35, 0.95, 0.5, 0.95)
 
-            if msg != self._cached_stamina_str:
-                self.bar_text_stm.setText(msg)
-                self._cached_stamina_str = msg
+        if msg != self._cached_stamina_str:
+            self.stamina_text.setText(msg)
+            self._cached_stamina_str = msg
+        if col != self._cached_stamina_col:
+            self.stamina_text.setFg(col)
+            self._cached_stamina_col = col
 
     def update_hud(self, px, py, rendered_count, total_count):
-        """정크 및 좌표 삭제 완료"""
-        pass
+        msg = f"위치: X={px:.1f}, Y={py:.1f} | 활성: {rendered_count}/{total_count} 청크"
+        if msg != self._cached_hud_str:
+            self.hud_text.setText(msg)
+            self._cached_hud_str = msg
 
     def update_door_status(self, msg, fg=None, show=True):
         if show:
@@ -947,34 +759,32 @@ class UIManager:
 
     # --- 플레이어 체력 및 경험치 HUD 업데이트 ---
     def update_hp_exp(self, hp, max_hp, exp, exp_to_next, level=1, stat_points=0):
-        ratio_hp = max(0.0, min(1.0, hp / max(1.0, max_hp)))
-        if hasattr(self, 'bar_fill_hp') and self.bar_fill_hp:
-            self.bar_fill_hp.setScale(max(0.0001, ratio_hp), 1.0, 1.0)
-            if ratio_hp <= 0.25:
-                self.bar_fill_hp.setColor(1.0, 0.15, 0.15, 1.0)
-            elif ratio_hp <= 0.50:
-                self.bar_fill_hp.setColor(0.95, 0.40, 0.15, 1.0)
+        pct_hp = max(0.0, min(1.0, hp / max(1.0, max_hp)))
+        bars_hp = int(pct_hp * 15)
+        bar_hp_str = "|" * bars_hp + "." * (15 - bars_hp)
+        msg_hp = f"체  력: [{bar_hp_str}] {int(hp)}/{int(max_hp)}"
+
+        if msg_hp != self._cached_hp_str:
+            self.hp_text.setText(msg_hp)
+            if pct_hp <= 0.25:
+                self.hp_text.setFg((1.0, 0.2, 0.2, 1.0))
+            elif pct_hp <= 0.55:
+                self.hp_text.setFg((1.0, 0.85, 0.2, 1.0))
             else:
-                self.bar_fill_hp.setColor(0.85, 0.10, 0.12, 1.0)
-            msg_hp = f"{int(hp)} / {int(max_hp)}"
-            if msg_hp != self._cached_hp_str:
-                self.bar_text_hp.setText(msg_hp)
-                self._cached_hp_str = msg_hp
+                self.hp_text.setFg((0.20, 0.95, 0.40, 1.0))
+            self._cached_hp_str = msg_hp
 
-        ratio_exp = max(0.0, min(1.0, exp / max(1.0, exp_to_next)))
-        if hasattr(self, 'bar_fill_exp') and self.bar_fill_exp:
-            self.bar_fill_exp.setScale(max(0.0001, ratio_exp), 1.0, 1.0)
-            msg_exp = f"{int(exp)} / {int(exp_to_next)} ({int(ratio_exp * 100)}%)"
-            if msg_exp != self._cached_exp_str:
-                self.bar_text_exp.setText(msg_exp)
-                self._cached_exp_str = msg_exp
+        pct_exp = max(0.0, min(1.0, exp / max(1.0, exp_to_next)))
+        bars_exp = int(pct_exp * 15)
+        bar_exp_str = "|" * bars_exp + "." * (15 - bars_exp)
+        sp_tag = f" [스탯P +{stat_points}]" if stat_points > 0 else ""
+        msg_exp = f"[LV. {level}{sp_tag}] EXP: [{bar_exp_str}] {int(exp)}/{int(exp_to_next)}"
 
-        sp_tag = f" [스탯 +{stat_points}]" if stat_points > 0 else ""
-        title = f"[ LV. {level} ]  다크 소울 탈출자{sp_tag}"
-        if hasattr(self, 'level_badge_text') and self.level_badge_text:
-            self.level_badge_text.setText(title)
+        if msg_exp != self._cached_exp_str:
+            self.exp_text.setText(msg_exp)
+            self._cached_exp_str = msg_exp
 
-    # --- [상점 클리어: 스탯 분배 및 상점] ---
+    # --- [스테이지 클리어: 스탯 분배 상점 모달] ---
     def _setup_shop_ui(self):
         self.shop_player = None
         self.shop_combat = None
@@ -1242,12 +1052,12 @@ class UIManager:
         atk = int(getattr(self.shop_player, 'attack_power', 35))
         hp = int(getattr(self.shop_player, 'max_hp', 100))
         spd_pct = int(getattr(self.shop_player, 'speed_mult', 1.0) * 100)
-        ammo = self.shop_combat.reserve_ammo if self.shop_combat else 0
+        ammo = self.shop_combat.max_ammo if self.shop_combat else 12
 
         self.stat_label_atk.setText(f"[공격력] 현재: {atk} (+5)")
         self.stat_label_hp.setText(f"[최대 체력] 현재: {hp} (+25)")
         self.stat_label_spd.setText(f"[이동 속도] 현재: {spd_pct}% (+8%)")
-        self.stat_label_ammo.setText(f"[화살통] 예비: {ammo}발 (+10발 / 장전 10% 가속)")
+        self.stat_label_ammo.setText(f"[최대 탄약] 현재: {ammo}발 (+2발)")
 
     def _allocate(self, stat_type):
         """스탯 1개 분배 클릭 이벤트"""
@@ -1423,13 +1233,17 @@ class UIManager:
 
     def show_loading_screen(self, stage=1):
         """로딩 화면 표시 및 초기화"""
-        profile = get_stage_profile(stage)
-        badge = f"[ STAGE {stage} : {profile.name} ]"
+        if stage == 1:
+            badge = "[ STAGE 1 : THE LOBBY - 첫 번째 악몽 ]"
+        elif stage == 2:
+            badge = "[ STAGE 2 : PIPE DREAMS - 미로의 심연 ]"
+        else:
+            badge = f"[ STAGE {stage} : VOID EXTENSION - 차원 붕괴 ]"
         self.loading_badge_text.setText(badge)
         self.loading_bar['value'] = 0
         self.loading_pct_text.setText("0%")
         self.loading_status_text.setText("차원 시드 계산 및 공간 지오메트리 빌드 준비 중...")
-        self.loading_tip_text.setText(f"{profile.summary}\nTIP: {profile.tip}")
+        self.loading_tip_text.setText(random.choice(self.survival_tips))
 
         self.hide_all_ingame()
         self.intro_frame.hide()

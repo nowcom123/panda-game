@@ -25,7 +25,7 @@ CHUNK_SIZE = CELL_SIZE * CHUNK_CELLS  # 청크 한 변 크기 (36.0m)
 # 2단 벽체 구조 (1단: 0~6.5m, 2단: 6.5~13.0m)
 TIER_HEIGHT = 6.5       # 1단 높이 (6.5m)
 WALL_HEIGHT = TIER_HEIGHT * 2.0  # 총 2단 벽 및 천장 높이 (13.0m 초대형 심연 높이)
-DOOR_HEIGHT = 3.0       # 출입문 통로 높이 (3.0m 웅장한 도어)
+DOOR_HEIGHT = 6.2       # 출입문 통로 높이 (6.2m 고딕 웅장한 아치형)
 WALL_THICKNESS = 0.8    # 두꺼운 3D 벽체 두께 (0.8m 콘크리트/석고 보드 마감)
 
 PLAYER_RADIUS = 0.4     # 플레이어 충돌 반경
@@ -79,7 +79,7 @@ CURSED_RELICS = {
         "name": "심연의 수확자",
         "icon": "[심연]",
         "pro": "정전 중 공격력 2.5배",
-        "con": "정전 지속 시간 10초 증가",
+        "con": "정전 지속 시간 8초 증가",
         "desc": "어둠이 짙어질수록 진정한 사신이 됩니다."
     }
 }

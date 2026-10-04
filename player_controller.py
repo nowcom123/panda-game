@@ -58,10 +58,10 @@ class PlayerController:
         # 키보드 입력 상태
         self.key_map = {
             "w": 0, "s": 0, "a": 0, "d": 0,
-            "shift": 0
+            "shift": 0, "e": 0
         }
 
-    def setup_input(self, on_shoot, on_reload):
+    def setup_input(self, on_shoot, on_reload, on_melee=None, on_use_item=None):
         """키보드 및 마우스 조작 이벤트 등록"""
         self.base.disableMouse()
         self.lock_mouse(True)
@@ -93,8 +93,15 @@ class PlayerController:
             self.base.accept(s_key, self._set_key, ["shift", 1])
             self.base.accept(f"{s_key}-up", self._set_key, ["shift", 0])
 
+        # E 상호작용 키 (룬 제단 각인)
+        for e_key in ["e", "E"]:
+            self.base.accept(e_key, self._set_key, ["e", 1])
+            self.base.accept(f"{e_key}-up", self._set_key, ["e", 0])
+
         # 마우스 좌클릭 사격
         self.base.accept("mouse1", on_shoot)
+        if on_melee:
+            self.base.accept("mouse3", on_melee)
 
         # R 키 재장전
         self.base.accept("r", on_reload)
@@ -103,6 +110,26 @@ class PlayerController:
 
         # ESC 마우스 커서 해제/잠금 토글
         self.base.accept("escape", self.toggle_mouse_lock)
+
+        # 1, 2, 3 생존 소비 아이템 퀵슬롯
+        if on_use_item:
+            for k1 in ["1", "&"]:
+                self.base.accept(k1, on_use_item, [1])
+            for k2 in ["2"]:
+                self.base.accept(k2, on_use_item, [2])
+            for k3 in ["3"]:
+                self.base.accept(k3, on_use_item, [3])
+
+    def consume_stamina(self, amount):
+        """스태미나 즉시 소모 (근접 공격 등). 부족 시 False 반환"""
+        if self.stamina < amount or self.stamina_exhausted:
+            return False
+        self.stamina = max(0.0, self.stamina - amount)
+        if self.stamina <= 0.0:
+            self.stamina = 0.0
+            self.stamina_exhausted = True
+        self.ui_mgr.update_stamina(self.stamina, self.max_stamina, self.is_sprinting, self.stamina_exhausted)
+        return True
 
     def _set_key(self, key, state):
         self.key_map[key] = state
@@ -203,12 +230,12 @@ class PlayerController:
             msg = f"[이동 속도 +8%] 현재 속도 배율: {int(self.speed_mult * 100)}%"
         elif stat_type == "AMMO":
             if combat_system:
-                combat_system.max_ammo += 2
-                combat_system.reserve_ammo += 12
-                combat_system.ammo = min(combat_system.max_ammo, combat_system.ammo + 2)
+                combat_system.reserve_ammo += 10
+                if hasattr(combat_system, 'reload_duration'):
+                    combat_system.reload_duration = max(0.65, combat_system.reload_duration * 0.90)
                 if hasattr(combat_system, 'ui_mgr'):
                     combat_system.ui_mgr.update_ammo(combat_system.ammo, combat_system.max_ammo, combat_system.reserve_ammo)
-            msg = f"[최대 탄약 +2] 현재 탄창: {combat_system.max_ammo if combat_system else '증가'}"
+            msg = f"[화살통 확장] 예비 화살 +10발 & 재장전 10% 가속! (보유: {combat_system.reserve_ammo if combat_system else '?'})"
 
         self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
         return True, msg
@@ -250,7 +277,11 @@ class PlayerController:
         self.slow_timer = 0.0
         self.slow_factor = 1.0
         self.shake_timer = 0.0
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
+        self.shake_intensity = 0.0
+        self.last_move_dir = Vec3(0, 0, 0)
+        for key in self.key_map:
+            self.key_map[key] = 0
+        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
 
     def update(self, dt, chunks):
         """마우스 시선 제어, 8방향 이동 및 충돌 슬라이딩 처리"""

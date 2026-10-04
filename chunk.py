@@ -1,82 +1,297 @@
+"""
+Medieval Dark Fantasy Chunk Module (Optimized & Sealed)
+- 3D 폐쇄형 석조 벽체 (Closed Solid Geometry)
+- 맵 4면 외곽 경계벽 완전 밀폐 (0-A 남단, 0-B 서단, 북단 ht=1, 동단 vt=1)
+- 매끄러운 무봉제 월드 정렬 바닥 (Seamless Continuous Floor with World-Aligned UV)
+- 텍스처별 배칭 및 결합된 유기적 물웅덩이 데칼 (Batched Organic Puddle Decals with flattenStrong)
+- 단조 철제 벽걸이 촛대 정적 메쉬 결합 (Batched Sconce Geometry with flattenStrong)
+- 3D 발광 빌보드 불꽃 (Glowing Candle Flame Billboard)
+"""
+
+import os
 import collections
-from panda3d.core import CardMaker, TextureStage, NodePath, LColor
+import math
+from panda3d.core import (
+    CardMaker, TextureStage, NodePath, LColor, Point3, Material, TransparencyAttrib,
+    TexturePool, Filename, SamplerState
+)
 from constants import (
     CELL_SIZE, CHUNK_CELLS, CHUNK_SIZE, TIER_HEIGHT, WALL_HEIGHT, DOOR_HEIGHT, WALL_THICKNESS,
     MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
 from world_gen import zone_hash, get_edge_types, cell_has_pillar
 
+CANDLE_HEIGHT = 1.65
 
+_PUDDLE_TEXTURES = None
+
+def get_puddle_textures():
+    """자연스러운 물웅덩이 데칼 텍스처 풀 (싱글톤 캐싱)"""
+    global _PUDDLE_TEXTURES
+    if _PUDDLE_TEXTURES is None:
+        _PUDDLE_TEXTURES = []
+        base_dir = os.path.dirname(__file__)
+        for i in (1, 2, 3):
+            p = os.path.join(base_dir, f'puddle_decal_{i}.png')
+            if os.path.exists(p):
+                tex = TexturePool.loadTexture(Filename.fromOsSpecific(p))
+                if tex:
+                    tex.setWrapU(SamplerState.WM_clamp)
+                    tex.setWrapV(SamplerState.WM_clamp)
+                    tex.setMagfilter(SamplerState.FT_linear_mipmap_linear)
+                    tex.setMinfilter(SamplerState.FT_linear_mipmap_linear)
+                    _PUDDLE_TEXTURES.append(tex)
+    return _PUDDLE_TEXTURES
+
+
+def add_solid_box(parent, x0, x1, y0, y1, z0, z1, tex, u_unit=3.5, v_unit=2.7, has_baseboard=True):
+    """
+    6면이 모두 닫힌 3D 완전 입체 벽체(Closed Solid Box) 생성.
+    - Front(-Y), Back(+Y), Left(-X), Right(+X), Top(+Z), Bottom(-Z) 6면 완전 밀폐
+    - 바닥면 침투(Z_min = -0.15m)로 바닥과 미세 틈새/들뜸/빛샘 완벽 방지
+    - 벽체 하단부에 18cm 두께의 중세 던전 암석 베이스 기단(Stone Plinth Trim) 추가
+    """
+    dx = x1 - x0
+    dy = y1 - y0
+    dz = z1 - z0
+    box = parent.attachNewNode('solid_box')
+    box.setPos(x0, y0, z0)
+
+    # 1. 6면 완전 밀폐 벽체 지오메트리
+    # South (-Y)
+    cm_s = CardMaker('s'); cm_s.setFrame(0, dx, 0, dz)
+    s = box.attachNewNode(cm_s.generate())
+    s.setTexture(tex)
+    s.setTexScale(TextureStage.getDefault(), dx / u_unit, dz / v_unit)
+    s.setTwoSided(True)
+
+    # North (+Y)
+    cm_n = CardMaker('n'); cm_n.setFrame(0, dx, 0, dz)
+    n = box.attachNewNode(cm_n.generate())
+    n.setPos(dx, dy, 0)
+    n.setH(180)
+    n.setTexture(tex)
+    n.setTexScale(TextureStage.getDefault(), dx / u_unit, dz / v_unit)
+    n.setTwoSided(True)
+
+    # West (-X)
+    cm_w = CardMaker('w'); cm_w.setFrame(0, dy, 0, dz)
+    w = box.attachNewNode(cm_w.generate())
+    w.setPos(0, dy, 0)
+    w.setH(-90)
+    w.setTexture(tex)
+    w.setTexScale(TextureStage.getDefault(), dy / u_unit, dz / v_unit)
+    w.setTwoSided(True)
+
+    # East (+X)
+    cm_e = CardMaker('e'); cm_e.setFrame(0, dy, 0, dz)
+    e = box.attachNewNode(cm_e.generate())
+    e.setPos(dx, 0, 0)
+    e.setH(90)
+    e.setTexture(tex)
+    e.setTexScale(TextureStage.getDefault(), dy / u_unit, dz / v_unit)
+    e.setTwoSided(True)
+
+    # Top (+Z)
+    cm_top = CardMaker('top'); cm_top.setFrame(0, dx, 0, dy)
+    top = box.attachNewNode(cm_top.generate())
+    top.setPos(0, 0, dz)
+    top.setP(-90)
+    top.setTexture(tex)
+    top.setTexScale(TextureStage.getDefault(), dx / u_unit, dy / u_unit)
+    top.setTwoSided(True)
+
+    # Bottom (-Z)
+    cm_bot = CardMaker('bot'); cm_bot.setFrame(0, dx, 0, dy)
+    bot = box.attachNewNode(cm_bot.generate())
+    bot.setPos(0, dy, 0)
+    bot.setP(90)
+    bot.setTexture(tex)
+    bot.setTexScale(TextureStage.getDefault(), dx / u_unit, dy / u_unit)
+    bot.setTwoSided(True)
+
+    # 2. 중세 던전 석재 베이스 기단 (Stone Plinth Trim) - 암회색 풍화 화강암 톤
+    if has_baseboard and z0 < 0.1:
+        bb_h = 0.18 - z0
+        bb_col = LColor(0.13, 0.13, 0.14, 1.0)
+
+        cm_bs = CardMaker('bb_s'); cm_bs.setFrame(0, dx, 0, bb_h)
+        bs = box.attachNewNode(cm_bs.generate())
+        bs.setColor(bb_col)
+        bs.setPos(0, -0.003, 0)
+        bs.setTwoSided(True)
+
+        cm_bn = CardMaker('bb_n'); cm_bn.setFrame(0, dx, 0, bb_h)
+        bn = box.attachNewNode(cm_bn.generate())
+        bn.setColor(bb_col)
+        bn.setPos(dx, dy + 0.003, 0)
+        bn.setH(180)
+        bn.setTwoSided(True)
+
+        cm_bw = CardMaker('bb_w'); cm_bw.setFrame(0, dy, 0, bb_h)
+        bw = box.attachNewNode(cm_bw.generate())
+        bw.setColor(bb_col)
+        bw.setPos(-0.003, dy, 0)
+        bw.setH(-90)
+        bw.setTwoSided(True)
+
+        cm_be = CardMaker('bb_e'); cm_be.setFrame(0, dy, 0, bb_h)
+        be = box.attachNewNode(cm_be.generate())
+        be.setColor(bb_col)
+        be.setPos(dx + 0.003, 0, 0)
+        be.setH(90)
+        be.setTwoSided(True)
+
+        # 상단 돌출 턱
+        cm_br = CardMaker('bb_top'); cm_br.setFrame(0, dx, 0, dy + 0.006)
+        br = box.attachNewNode(cm_br.generate())
+        br.setColor(LColor(0.16, 0.16, 0.17, 1.0))
+        br.setPos(0, -0.003, bb_h)
+        br.setP(-90)
+        br.setTwoSided(True)
+
+    return box
+
+
+def add_wall_candle_optimized(sconces_parent, flames_parent, x, y, z, nx, ny):
+    """
+    최적화된 3D 벽걸이 촛대 생성:
+    - sconces_parent: 정적 메쉬 부품(백플레이트, 암, 받침대, 3D 십자 양초) -> flattenStrong 대상
+    - flames_parent: 동적 빌보드 발광 불꽃 -> 자체 발광 및 카메라 추적
+    반환값: 불꽃 중심 좌표 (Point3)
+    """
+    arm_len = 0.22
+    iron_col = LColor(0.12, 0.12, 0.13, 1.0)
+    wax_col = LColor(0.88, 0.84, 0.74, 1.0)
+
+    # 1. 단조 철제 베이스 플레이트 (벽면 밀착)
+    cm_bp = CardMaker('sconce_bp')
+    cm_bp.setFrame(-0.07, 0.07, -0.12, 0.12)
+    bp = sconces_parent.attachNewNode(cm_bp.generate())
+    bp.setPos(x, y, z)
+    bp.setColor(iron_col)
+    bp.setTwoSided(True)
+    if nx != 0:
+        bp.setH(90 if nx < 0 else -90)
+    else:
+        bp.setH(0 if ny < 0 else 180)
+
+    # 2. 단조 철제 암 (벽면에서 0.22m 돌출)
+    cm_arm = CardMaker('sconce_arm')
+    cm_arm.setFrame(-0.02, 0.02, 0, arm_len)
+    arm = sconces_parent.attachNewNode(cm_arm.generate())
+    arm.setPos(x, y, z - 0.02)
+    arm.setColor(iron_col)
+    arm.setP(-90)
+    arm.setTwoSided(True)
+    if nx != 0:
+        arm.setH(90 if nx > 0 else -90)
+    else:
+        arm.setH(0 if ny > 0 else 180)
+
+    # 3. 촛대 받침 접시 (Drip pan)
+    cup_x = x + nx * arm_len
+    cup_y = y + ny * arm_len
+    cm_cup = CardMaker('drip_pan')
+    cm_cup.setFrame(-0.07, 0.07, -0.07, 0.07)
+    cup = sconces_parent.attachNewNode(cm_cup.generate())
+    cup.setColor(LColor(0.18, 0.17, 0.16, 1.0))
+    cup.setPos(cup_x, cup_y, z)
+    cup.setP(-90)
+    cup.setTwoSided(True)
+
+    # 4. 정적 3D 양초 스틱 (정적 십자 쿼드)
+    cm_wax1 = CardMaker('wax_1')
+    cm_wax1.setFrame(-0.035, 0.035, 0, 0.16)
+    w1 = sconces_parent.attachNewNode(cm_wax1.generate())
+    w1.setColor(wax_col)
+    w1.setPos(cup_x, cup_y, z)
+    w1.setTwoSided(True)
+
+    cm_wax2 = CardMaker('wax_2')
+    cm_wax2.setFrame(-0.035, 0.035, 0, 0.16)
+    w2 = sconces_parent.attachNewNode(cm_wax2.generate())
+    w2.setColor(wax_col)
+    w2.setPos(cup_x, cup_y, z)
+    w2.setH(90)
+    w2.setTwoSided(True)
+
+    # 5. 자체 발광 촛불 불꽃 (Self-illuminating Glowing Flame Billboard)
+    cm_flame = CardMaker('candle_flame')
+    cm_flame.setFrame(-0.06, 0.06, 0, 0.18)
+    flame = flames_parent.attachNewNode(cm_flame.generate())
+    flame.setPos(cup_x, cup_y, z + 0.16)
+    flame.setColor(LColor(1.0, 0.82, 0.32, 1.0))
+    flame.setLightOff()
+    flame.setTransparency(TransparencyAttrib.M_alpha)
+    flame.setBillboardPointEye()
+
+    return Point3(cup_x, cup_y, z + 0.20)
 
 
 class Chunk:
-    """백룸 무한 타일, 2단 두꺼운 3D 솔리드 벽체, 문틀 소핏, 촛대 및 자체 발광 촛불로 구성된 청크"""
-    def __init__(self, parent, cx, cy, floor_tex, wall_tex, sky_tex):
+    """중세 다크판타지 고성 던전 3D 청크 (최적화 배치, 외곽 100% 밀폐)"""
+    def __init__(self, parent, cx, cy, floor_tex, wall_tex, sky_tex, floor_wet_tex=None):
         self.cx = cx
         self.cy = cy
         if parent is not None:
             self.node = parent.attachNewNode(f"chunk_{cx}_{cy}")
         else:
             self.node = NodePath(f"chunk_{cx}_{cy}")
+
         self.colliders = [] # [(min_x, min_y, max_x, max_y), ...]
-        self.cell_colliders = collections.defaultdict(list) # (gx, gy) -> [collider, ...] 초고속 공간 인덱스
+        self.cell_colliders = collections.defaultdict(list)
+        self.candle_positions = []
         self.is_hidden = False
+
+        # 드로우 콜 최적화를 위한 지오메트리 루트 분리
+        self.geom_root = self.node.attachNewNode("geom_root")
+        self.sconces_root = self.node.attachNewNode("sconces_root")
+        self.flames_root = self.node.attachNewNode("flames_root")
+        self.puddles_root = self.node.attachNewNode("puddles_root")
 
         chunk_origin_x = cx * CHUNK_SIZE
         chunk_origin_y = cy * CHUNK_SIZE
         half_thick = WALL_THICKNESS / 2.0
 
-        # 1. 청크 바닥 타일 (Chunk Floor)
-        cm_floor = CardMaker('floor')
+        # 건식 석판 재질 (Roughness 0.85, 매트한 고대 던전 판석)
+        dry_mat = Material('dry_cobblestone')
+        dry_mat.setRoughness(0.85)
+        dry_mat.setSpecular(LColor(0.08, 0.08, 0.08, 1.0))
+        dry_mat.setShininess(12.0)
+
+        # 1. 청크 바닥: 끊김 없는 일체형 대형 판석 (Seamless World-Aligned UV)
+        cm_floor = CardMaker('chunk_continuous_floor')
         cm_floor.setFrame(0, CHUNK_SIZE, 0, CHUNK_SIZE)
-        floor = self.node.attachNewNode(cm_floor.generate())
+        floor = self.geom_root.attachNewNode(cm_floor.generate())
         floor.setP(-90)
         floor.setPos(chunk_origin_x, chunk_origin_y, 0)
         floor.setTexture(floor_tex)
-        floor.setTexScale(TextureStage.getDefault(), round(CHUNK_SIZE / 3.5, 2), round(CHUNK_SIZE / 3.5, 2))
-        floor.setColorScale(0.60, 0.58, 0.52, 1.0) # 어두운 심야 카펫 톤
 
-        # 2. 청크 천장 타일 (바닥과 동일한 텍스처 에셋 적용)
-        ceil = self.node.attachNewNode(cm_floor.generate())
-        ceil.setP(90)
-        ceil.setPos(chunk_origin_x, chunk_origin_y + CHUNK_SIZE, WALL_HEIGHT)
-        ceil.setTexture(floor_tex)
-        floor_scale = round(CHUNK_SIZE / 3.5, 2)
-        ceil.setTexScale(TextureStage.getDefault(), floor_scale, floor_scale)
-        ceil.setColorScale(0.60, 0.58, 0.52, 1.0) # 바닥과 일체감 있는 리미널 카펫/타일 톤
-        ceil.setTwoSided(True)
+        # 월드 좌표 정렬 UV로 청크 간 경계선/바둑판 눈금 100% 제거
+        uv_unit = 4.0
+        floor.setTexScale(TextureStage.getDefault(), CHUNK_SIZE / uv_unit, CHUNK_SIZE / uv_unit)
+        floor.setTexOffset(TextureStage.getDefault(), (chunk_origin_x / uv_unit) % 1.0, (chunk_origin_y / uv_unit) % 1.0)
+        floor.setMaterial(dry_mat)
+        floor.setColorScale(0.78, 0.76, 0.74, 1.0)
 
-        # 텍스처 수직/수평 반복 비율 (높아진 벽체 및 광폭 복도에 맞춘 자연스러운 종횡비 유지)
-        wall_len = CELL_SIZE + 2.0 * half_thick
-        wall_u_scale = round(wall_len / 3.5, 2)
-        wall_v_scale = round(TIER_HEIGHT / 2.7, 2)
-        lintel_v_scale = round((TIER_HEIGHT - DOOR_HEIGHT) / 2.7, 2)
+        # 2. 텍스처별 결합형 유기적 물웅덩이 데칼 (Batched Organic Puddle Decals)
+        puddle_texs = get_puddle_textures()
+        wet_mat = Material('wet_puddle_reflection')
+        wet_mat.setRoughness(0.04)
+        wet_mat.setMetallic(0.10)
+        wet_mat.setSpecular(LColor(0.98, 0.95, 0.90, 1.0))
+        wet_mat.setShininess(120.0)
 
-        # 3. 2단 벽체 및 두께 마감 카드메이커 설정 (벽 결합 틈새 0% 완벽 밀폐 오버랩)
-        # 1단 벽 (0 ~ 4.5m)
-        cm_tier1 = CardMaker('tier1_face')
-        cm_tier1.setFrame(-half_thick, CELL_SIZE + half_thick, 0, TIER_HEIGHT)
-
-        # 2단 벽 (4.5m ~ 9.0m)
-        cm_tier2 = CardMaker('tier2_face')
-        cm_tier2.setFrame(-half_thick, CELL_SIZE + half_thick, TIER_HEIGHT, WALL_HEIGHT)
-
-        # 출입문 1단 인방 (2.4m ~ 4.5m)
-        cm_door_lintel = CardMaker('door_lintel')
-        cm_door_lintel.setFrame(-half_thick, CELL_SIZE + half_thick, DOOR_HEIGHT, TIER_HEIGHT)
-
-        # 출입문 하단 소핏 (문틀 윗면 천장 마감: 너비 WALL_THICKNESS, 길이 CELL_SIZE)
-        cm_soffit = CardMaker('soffit')
-        cm_soffit.setFrame(-half_thick, CELL_SIZE + half_thick, -half_thick, half_thick)
-
-        # 문틀 기둥 옆면 마감 (너비: WALL_THICKNESS, 높이: DOOR_HEIGHT)
-        cm_jamb = CardMaker('jamb')
-        cm_jamb.setFrame(-half_thick, half_thick, 0, DOOR_HEIGHT)
-
-        # 대형 백룸 홀 전용 건축 지지 기둥 카드 (1.2m x 1.2m x 13.0m 사각 기둥)
-        cm_pillar_face = CardMaker('pillar_face')
-        half_p = 0.6
-        cm_pillar_face.setFrame(-half_p, half_p, 0, WALL_HEIGHT)
+        self.puddle_batches = []
+        if puddle_texs:
+            for idx, p_tex in enumerate(puddle_texs):
+                batch_np = self.puddles_root.attachNewNode(f"puddle_batch_{idx}")
+                batch_np.setTexture(p_tex)
+                batch_np.setTransparency(TransparencyAttrib.M_alpha)
+                batch_np.setMaterial(wet_mat)
+                batch_np.setColorScale(0.88, 0.88, 0.94, 0.92)
+                self.puddle_batches.append(batch_np)
 
         start_gx = cx * CHUNK_CELLS
         start_gy = cy * CHUNK_CELLS
@@ -84,319 +299,185 @@ class Chunk:
         for i in range(CHUNK_CELLS):
             gx = start_gx + i
             cell_x = gx * CELL_SIZE
-
             for j in range(CHUNK_CELLS):
                 gy = start_gy + j
                 cell_y = gy * CELL_SIZE
+
+                # 기둥 없는 빈 공간 중 약 38% 확률로 자연스러운 물웅덩이 배치
+                if not cell_has_pillar(gx, gy) and ((gx * 73856093 ^ gy * 19349663 ^ 0x5bd1e995) % 100) < 38 and self.puddle_batches:
+                    t_idx = (gx * 7 + gy * 13) % len(self.puddle_batches)
+                    ox = (((gx * 37) % 100) / 100.0 - 0.5) * 1.5
+                    oy = (((gy * 59) % 100) / 100.0 - 0.5) * 1.5
+                    p_size = 2.6 + (((gx * 17 + gy * 31) % 100) / 100.0) * 1.6
+
+                    cm_p = CardMaker(f'puddle_{gx}_{gy}')
+                    cm_p.setFrame(-p_size * 0.5, p_size * 0.5, -p_size * 0.5, p_size * 0.5)
+                    p_node = self.puddle_batches[t_idx].attachNewNode(cm_p.generate())
+                    p_node.setP(-90)
+                    p_node.setPos(cell_x + CELL_SIZE * 0.5 + ox, cell_y + CELL_SIZE * 0.5 + oy, 0.006)
+                    p_node.setH((gx * 73 + gy * 109) % 360)
+
+        # 3. 청크 천장: 아치형 석조 볼트 천장
+        cm_ceil = CardMaker('ceiling')
+        cm_ceil.setFrame(0, CHUNK_SIZE, 0, CHUNK_SIZE)
+        ceil = self.geom_root.attachNewNode(cm_ceil.generate())
+        ceil.setP(90)
+        ceil.setPos(chunk_origin_x, chunk_origin_y + CHUNK_SIZE, WALL_HEIGHT)
+        ceil.setTexture(sky_tex)
+        ceil_scale = round(CHUNK_SIZE / 4.0, 2)
+        ceil.setTexScale(TextureStage.getDefault(), ceil_scale, ceil_scale)
+        ceil.setTexOffset(TextureStage.getDefault(), (chunk_origin_x / 4.0) % 1.0, (chunk_origin_y / 4.0) % 1.0)
+        ceil.setColorScale(0.60, 0.60, 0.60, 1.0)
+        ceil.setTwoSided(True)
+
+        Z_MIN = -0.15
+        Z_MAX = WALL_HEIGHT
+
+        # 4. 청크 외곽 및 내부 벽체 지오메트리 생성
+        for i in range(CHUNK_CELLS):
+            gx = start_gx + i
+            cell_x = gx * CELL_SIZE
+            for j in range(CHUNK_CELLS):
+                gy = start_gy + j
+                cell_y = gy * CELL_SIZE
+
                 ht, vt = get_edge_types(gx, gy)
 
-                # 맵 외곽 경계: 최북단 및 최동단은 강제 솔리드 2단 벽체로 밀폐
+                # 맵 북쪽/동쪽 최외곽 경계: 마주하는 인접 셀이 없으므로 무조건 밀폐 솔리드 벽체 강제
                 if gy == (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 1:
                     ht = 1
                 if gx == (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 1:
                     vt = 1
 
-                # --- (0-A) 최남단 외곽 경계벽 밀폐 (y = cell_y) ---
+                # --- (0-A) 최남단 외곽 경계벽 완전 밀폐 (y = cell_y) ---
                 if cy == MAP_MIN_CHUNK and j == 0:
-                    b_south_1 = self.node.attachNewNode(cm_tier1.generate())
-                    b_south_1.setH(180)
-                    b_south_1.setPos(cell_x + CELL_SIZE, cell_y + half_thick, 0)
-                    b_south_1.setTexture(wall_tex)
-                    b_south_1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    b_south_1.setTwoSided(True)
-
-                    b_south_2 = self.node.attachNewNode(cm_tier2.generate())
-                    b_south_2.setH(180)
-                    b_south_2.setPos(cell_x + CELL_SIZE, cell_y + half_thick, 0)
-                    b_south_2.setTexture(wall_tex)
-                    b_south_2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    b_south_2.setTwoSided(True)
-
-                    cap_s = self.node.attachNewNode(cm_soffit.generate())
-                    cap_s.setP(90)
-                    cap_s.setPos(cell_x, cell_y, WALL_HEIGHT)
-                    cap_s.setTexture(wall_tex)
-                    cap_s.setTwoSided(True)
-
-                    b_box_s = (cell_x - half_thick, cell_y - half_thick, cell_x + CELL_SIZE + half_thick, cell_y + half_thick)
+                    x0 = cell_x - half_thick
+                    x1 = cell_x + CELL_SIZE + half_thick
+                    y0 = cell_y - half_thick
+                    y1 = cell_y + half_thick
+                    add_solid_box(self.geom_root, x0, x1, y0, y1, Z_MIN, Z_MAX, wall_tex, has_baseboard=True)
+                    b_box_s = (x0, y0, x1, y1)
                     self.colliders.append(b_box_s)
                     self.cell_colliders[(gx, gy)].append(b_box_s)
+                    self.cell_colliders[(gx, gy - 1)].append(b_box_s)
 
-                # --- (0-B) 최서단 외곽 경계벽 밀폐 (x = cell_x, 내부 지향 H=90) ---
+                    if gx % 2 == 0:
+                        c_s = add_wall_candle_optimized(self.sconces_root, self.flames_root, cell_x + CELL_SIZE * 0.5, cell_y + half_thick, CANDLE_HEIGHT, 0, 1)
+                        self.candle_positions.append(c_s)
+
+                # --- (0-B) 최서단 외곽 경계벽 완전 밀폐 (x = cell_x) ---
                 if cx == MAP_MIN_CHUNK and i == 0:
-                    b_west_1 = self.node.attachNewNode(cm_tier1.generate())
-                    b_west_1.setH(90)
-                    b_west_1.setPos(cell_x + half_thick, cell_y, 0)
-                    b_west_1.setTexture(wall_tex)
-                    b_west_1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    b_west_1.setTwoSided(True)
-
-                    b_west_2 = self.node.attachNewNode(cm_tier2.generate())
-                    b_west_2.setH(90)
-                    b_west_2.setPos(cell_x + half_thick, cell_y, 0)
-                    b_west_2.setTexture(wall_tex)
-                    b_west_2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    b_west_2.setTwoSided(True)
-
-                    cap_w = self.node.attachNewNode(cm_soffit.generate())
-                    cap_w.setP(90)
-                    cap_w.setH(90)
-                    cap_w.setPos(cell_x, cell_y, WALL_HEIGHT)
-                    cap_w.setTexture(wall_tex)
-                    cap_w.setTwoSided(True)
-
-                    b_box_w = (cell_x - half_thick, cell_y - half_thick, cell_x + half_thick, cell_y + CELL_SIZE + half_thick)
+                    x0 = cell_x - half_thick
+                    x1 = cell_x + half_thick
+                    y0 = cell_y - half_thick
+                    y1 = cell_y + CELL_SIZE + half_thick
+                    add_solid_box(self.geom_root, x0, x1, y0, y1, Z_MIN, Z_MAX, wall_tex, has_baseboard=True)
+                    b_box_w = (x0, y0, x1, y1)
                     self.colliders.append(b_box_w)
                     self.cell_colliders[(gx, gy)].append(b_box_w)
+                    self.cell_colliders[(gx - 1, gy)].append(b_box_w)
 
-                # --- (1) 수평 벽체 (Horizontal Wall - 북쪽 경계, y = wy) ---
+                    if gy % 2 == 0:
+                        c_w = add_wall_candle_optimized(self.sconces_root, self.flames_root, cell_x + half_thick, cell_y + CELL_SIZE * 0.5, CANDLE_HEIGHT, 1, 0)
+                        self.candle_positions.append(c_w)
+
+                # --- (1) 수평 벽체 (Horizontal Wall, y = wy) ---
                 wy = cell_y + CELL_SIZE
                 if ht == 1:
-                    # [솔리드 2단 벽체: 남쪽면 + 북쪽면]
-                    # 남쪽면 (Facing -Y)
-                    s1 = self.node.attachNewNode(cm_tier1.generate())
-                    s1.setPos(cell_x, wy - half_thick, 0)
-                    s1.setTexture(wall_tex)
-                    s1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    s1.setTwoSided(True)
+                    # [완전 차폐형 솔리드 벽체]
+                    add_solid_box(self.geom_root, cell_x - half_thick, cell_x + CELL_SIZE + half_thick,
+                                  wy - half_thick, wy + half_thick, Z_MIN, Z_MAX, wall_tex, has_baseboard=True)
 
-                    s2 = self.node.attachNewNode(cm_tier2.generate())
-                    s2.setPos(cell_x, wy - half_thick, 0)
-                    s2.setTexture(wall_tex)
-                    s2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    s2.setTwoSided(True)
-
-                    # 북쪽면 (Facing +Y)
-                    n1 = self.node.attachNewNode(cm_tier1.generate())
-                    n1.setH(180)
-                    n1.setPos(cell_x + CELL_SIZE, wy + half_thick, 0)
-                    n1.setTexture(wall_tex)
-                    n1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    n1.setTwoSided(True)
-
-                    n2 = self.node.attachNewNode(cm_tier2.generate())
-                    n2.setH(180)
-                    n2.setPos(cell_x + CELL_SIZE, wy + half_thick, 0)
-                    n2.setTexture(wall_tex)
-                    n2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    n2.setTwoSided(True)
-
-                    # 벽 상단 마감
-                    cap_h = self.node.attachNewNode(cm_soffit.generate())
-                    cap_h.setP(90)
-                    cap_h.setPos(cell_x, wy, WALL_HEIGHT)
-                    cap_h.setTexture(wall_tex)
-                    cap_h.setTwoSided(True)
-
-                    # 플레이어 충돌체 등록 (0.8m 두께 반영 및 셀 공간 인덱싱)
-                    col_box = (
-                        cell_x - half_thick,
-                        wy - half_thick,
-                        cell_x + CELL_SIZE + half_thick,
-                        wy + half_thick
-                    )
+                    col_box = (cell_x - half_thick, wy - half_thick, cell_x + CELL_SIZE + half_thick, wy + half_thick)
                     self.colliders.append(col_box)
                     self.cell_colliders[(gx, gy)].append(col_box)
                     self.cell_colliders[(gx, gy + 1)].append(col_box)
 
+                    # 12m 간격 남/북 양면에 벽걸이 촛불 배치
+                    if gx % 2 == 0:
+                        c_s = add_wall_candle_optimized(self.sconces_root, self.flames_root, cell_x + CELL_SIZE * 0.5, wy - half_thick, CANDLE_HEIGHT, 0, -1)
+                        self.candle_positions.append(c_s)
+                        if gy + 1 < (MAP_MAX_CHUNK + 1) * CHUNK_CELLS:
+                            c_n = add_wall_candle_optimized(self.sconces_root, self.flames_root, cell_x + CELL_SIZE * 0.5, wy + half_thick, CANDLE_HEIGHT, 0, 1)
+                            self.candle_positions.append(c_n)
+
                 elif ht == 2:
-                    # [출입문 2단 벽체: 1단은 2.4m까지 개방 통로 + 인방벽, 2단은 꽉 찬 벽]
-                    # 1단 출입문 인방 (2.4m ~ 4.5m)
-                    dl_s = self.node.attachNewNode(cm_door_lintel.generate())
-                    dl_s.setPos(cell_x, wy - half_thick, 0)
-                    dl_s.setTexture(wall_tex)
-                    dl_s.setTexScale(TextureStage.getDefault(), wall_u_scale, lintel_v_scale)
-                    dl_s.setTwoSided(True)
+                    # [출입구 벽체]
+                    add_solid_box(self.geom_root, cell_x - half_thick, cell_x + CELL_SIZE + half_thick,
+                                  wy - half_thick, wy + half_thick, DOOR_HEIGHT, Z_MAX, wall_tex, has_baseboard=False)
+                    add_solid_box(self.geom_root, cell_x - half_thick, cell_x,
+                                  wy - half_thick, wy + half_thick, Z_MIN, DOOR_HEIGHT, wall_tex, has_baseboard=True)
+                    add_solid_box(self.geom_root, cell_x + CELL_SIZE, cell_x + CELL_SIZE + half_thick,
+                                  wy - half_thick, wy + half_thick, Z_MIN, DOOR_HEIGHT, wall_tex, has_baseboard=True)
 
-                    dl_n = self.node.attachNewNode(cm_door_lintel.generate())
-                    dl_n.setH(180)
-                    dl_n.setPos(cell_x + CELL_SIZE, wy + half_thick, 0)
-                    dl_n.setTexture(wall_tex)
-                    dl_n.setTexScale(TextureStage.getDefault(), wall_u_scale, lintel_v_scale)
-                    dl_n.setTwoSided(True)
+                    col_l = (cell_x - half_thick, wy - half_thick, cell_x, wy + half_thick)
+                    col_r = (cell_x + CELL_SIZE, wy - half_thick, cell_x + CELL_SIZE + half_thick, wy + half_thick)
+                    self.colliders.extend([col_l, col_r])
+                    self.cell_colliders[(gx, gy)].extend([col_l, col_r])
+                    self.cell_colliders[(gx, gy + 1)].extend([col_l, col_r])
 
-                    # 2단 벽체 (4.5m ~ 9.0m)
-                    u_s = self.node.attachNewNode(cm_tier2.generate())
-                    u_s.setPos(cell_x, wy - half_thick, 0)
-                    u_s.setTexture(wall_tex)
-                    u_s.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    u_s.setTwoSided(True)
-
-                    u_n = self.node.attachNewNode(cm_tier2.generate())
-                    u_n.setH(180)
-                    u_n.setPos(cell_x + CELL_SIZE, wy + half_thick, 0)
-                    u_n.setTexture(wall_tex)
-                    u_n.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    u_n.setTwoSided(True)
-
-                    # 문틀 하부 소핏 (문틀 윗면 천장 마감)
-                    soffit = self.node.attachNewNode(cm_soffit.generate())
-                    soffit.setP(90)
-                    soffit.setPos(cell_x, wy, DOOR_HEIGHT)
-                    soffit.setTexture(wall_tex)
-                    soffit.setTwoSided(True)
-
-                    # 문틀 좌우 기둥 옆면 마감
-                    j_left = self.node.attachNewNode(cm_jamb.generate())
-                    j_left.setH(90)
-                    j_left.setPos(cell_x, wy, 0)
-                    j_left.setTexture(wall_tex)
-                    j_left.setTwoSided(True)
-
-                    j_right = self.node.attachNewNode(cm_jamb.generate())
-                    j_right.setH(-90)
-                    j_right.setPos(cell_x + CELL_SIZE, wy, 0)
-                    j_right.setTexture(wall_tex)
-                    j_right.setTwoSided(True)
-
-                # --- (2) 수직 벽체 (Vertical Wall - 동쪽 경계, x = wx) ---
+                # --- (2) 수직 벽체 (Vertical Wall, x = wx) ---
                 wx = cell_x + CELL_SIZE
                 if vt == 1:
-                    # [솔리드 2단 벽체: 서쪽면 + 동쪽면]
-                    # 서쪽면 (Facing -X)
-                    w1 = self.node.attachNewNode(cm_tier1.generate())
-                    w1.setH(-90)
-                    w1.setPos(wx - half_thick, cell_y + CELL_SIZE, 0)
-                    w1.setTexture(wall_tex)
-                    w1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    w1.setTwoSided(True)
+                    # [완전 차폐형 솔리드 벽체]
+                    add_solid_box(self.geom_root, wx - half_thick, wx + half_thick,
+                                  cell_y - half_thick, cell_y + CELL_SIZE + half_thick, Z_MIN, Z_MAX, wall_tex, has_baseboard=True)
 
-                    w2 = self.node.attachNewNode(cm_tier2.generate())
-                    w2.setH(-90)
-                    w2.setPos(wx - half_thick, cell_y + CELL_SIZE, 0)
-                    w2.setTexture(wall_tex)
-                    w2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    w2.setTwoSided(True)
-
-                    # 동쪽면 (Facing +X)
-                    e1 = self.node.attachNewNode(cm_tier1.generate())
-                    e1.setH(90)
-                    e1.setPos(wx + half_thick, cell_y, 0)
-                    e1.setTexture(wall_tex)
-                    e1.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    e1.setTwoSided(True)
-
-                    e2 = self.node.attachNewNode(cm_tier2.generate())
-                    e2.setH(90)
-                    e2.setPos(wx + half_thick, cell_y, 0)
-                    e2.setTexture(wall_tex)
-                    e2.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    e2.setTwoSided(True)
-
-                    # 벽 상단 마감
-                    cap_v = self.node.attachNewNode(cm_soffit.generate())
-                    cap_v.setP(90)
-                    cap_v.setH(90)
-                    cap_v.setPos(wx, cell_y, WALL_HEIGHT)
-                    cap_v.setTexture(wall_tex)
-                    cap_v.setTwoSided(True)
-
-                    # 플레이어 충돌체 등록 (셀 공간 인덱싱)
-                    col_box = (
-                        wx - half_thick,
-                        cell_y - half_thick,
-                        wx + half_thick,
-                        cell_y + CELL_SIZE + half_thick
-                    )
+                    col_box = (wx - half_thick, cell_y - half_thick, wx + half_thick, cell_y + CELL_SIZE + half_thick)
                     self.colliders.append(col_box)
                     self.cell_colliders[(gx, gy)].append(col_box)
                     self.cell_colliders[(gx + 1, gy)].append(col_box)
 
+                    # 12m 간격 동/서 양면에 벽걸이 촛불 배치
+                    if gy % 2 == 0:
+                        c_w = add_wall_candle_optimized(self.sconces_root, self.flames_root, wx - half_thick, cell_y + CELL_SIZE * 0.5, CANDLE_HEIGHT, -1, 0)
+                        self.candle_positions.append(c_w)
+                        if gx + 1 < (MAP_MAX_CHUNK + 1) * CHUNK_CELLS:
+                            c_e = add_wall_candle_optimized(self.sconces_root, self.flames_root, wx + half_thick, cell_y + CELL_SIZE * 0.5, CANDLE_HEIGHT, 1, 0)
+                            self.candle_positions.append(c_e)
+
                 elif vt == 2:
-                    # [출입문 2단 벽체]
-                    # 1단 출입문 인방
-                    dl_w = self.node.attachNewNode(cm_door_lintel.generate())
-                    dl_w.setH(-90)
-                    dl_w.setPos(wx - half_thick, cell_y + CELL_SIZE, 0)
-                    dl_w.setTexture(wall_tex)
-                    dl_w.setTexScale(TextureStage.getDefault(), wall_u_scale, lintel_v_scale)
-                    dl_w.setTwoSided(True)
+                    # [출입구 벽체]
+                    add_solid_box(self.geom_root, wx - half_thick, wx + half_thick,
+                                  cell_y - half_thick, cell_y + CELL_SIZE + half_thick, DOOR_HEIGHT, Z_MAX, wall_tex, has_baseboard=False)
+                    add_solid_box(self.geom_root, wx - half_thick, wx + half_thick,
+                                  cell_y - half_thick, cell_y, Z_MIN, DOOR_HEIGHT, wall_tex, has_baseboard=True)
+                    add_solid_box(self.geom_root, wx - half_thick, wx + half_thick,
+                                  cell_y + CELL_SIZE, cell_y + CELL_SIZE + half_thick, Z_MIN, DOOR_HEIGHT, wall_tex, has_baseboard=True)
 
-                    dl_e = self.node.attachNewNode(cm_door_lintel.generate())
-                    dl_e.setH(90)
-                    dl_e.setPos(wx + half_thick, cell_y, 0)
-                    dl_e.setTexture(wall_tex)
-                    dl_e.setTexScale(TextureStage.getDefault(), wall_u_scale, lintel_v_scale)
-                    dl_e.setTwoSided(True)
+                    col_s = (wx - half_thick, cell_y - half_thick, wx + half_thick, cell_y)
+                    col_n = (wx - half_thick, cell_y + CELL_SIZE, wx + half_thick, cell_y + CELL_SIZE + half_thick)
+                    self.colliders.extend([col_s, col_n])
+                    self.cell_colliders[(gx, gy)].extend([col_s, col_n])
+                    self.cell_colliders[(gx + 1, gy)].extend([col_s, col_n])
 
-                    # 2단 벽체
-                    u_w = self.node.attachNewNode(cm_tier2.generate())
-                    u_w.setH(-90)
-                    u_w.setPos(wx - half_thick, cell_y + CELL_SIZE, 0)
-                    u_w.setTexture(wall_tex)
-                    u_w.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    u_w.setTwoSided(True)
-
-                    u_e = self.node.attachNewNode(cm_tier2.generate())
-                    u_e.setH(90)
-                    u_e.setPos(wx + half_thick, cell_y, 0)
-                    u_e.setTexture(wall_tex)
-                    u_e.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
-                    u_e.setTwoSided(True)
-
-                    # 문틀 하부 소핏
-                    soffit = self.node.attachNewNode(cm_soffit.generate())
-                    soffit.setP(90)
-                    soffit.setH(90)
-                    soffit.setPos(wx, cell_y, DOOR_HEIGHT)
-                    soffit.setTexture(wall_tex)
-                    soffit.setTwoSided(True)
-
-                    # 문틀 상하 기둥 옆면 마감
-                    j_s = self.node.attachNewNode(cm_jamb.generate())
-                    j_s.setH(0)
-                    j_s.setPos(wx, cell_y, 0)
-                    j_s.setTexture(wall_tex)
-                    j_s.setTwoSided(True)
-
-                    j_n = self.node.attachNewNode(cm_jamb.generate())
-                    j_n.setH(180)
-                    j_n.setPos(wx, cell_y + CELL_SIZE, 0)
-                    j_n.setTexture(wall_tex)
-                    j_n.setTwoSided(True)
-
-                # --- (3) 대형 백룸 룸 지지 기둥 (Pillar Column) ---
+                # --- (3) 사각 기둥 (Pillar Column) ---
                 if cell_has_pillar(gx, gy):
                     px = cell_x + CELL_SIZE * 0.5
                     py = cell_y + CELL_SIZE * 0.5
+                    p_thick = 1.05
+                    half_p = p_thick * 0.5
 
-                    p_s = self.node.attachNewNode(cm_pillar_face.generate())
-                    p_s.setPos(px, py - half_p, 0)
-                    p_s.setTexture(wall_tex)
-                    p_s.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
-                    p_s.setTwoSided(True)
-
-                    p_n = self.node.attachNewNode(cm_pillar_face.generate())
-                    p_n.setH(180)
-                    p_n.setPos(px, py + half_p, 0)
-                    p_n.setTexture(wall_tex)
-                    p_n.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
-                    p_n.setTwoSided(True)
-
-                    p_w = self.node.attachNewNode(cm_pillar_face.generate())
-                    p_w.setH(90)
-                    p_w.setPos(px - half_p, py, 0)
-                    p_w.setTexture(wall_tex)
-                    p_w.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
-                    p_w.setTwoSided(True)
-
-                    p_e = self.node.attachNewNode(cm_pillar_face.generate())
-                    p_e.setH(-90)
-                    p_e.setPos(px + half_p, py, 0)
-                    p_e.setTexture(wall_tex)
-                    p_e.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
-                    p_e.setTwoSided(True)
+                    add_solid_box(self.geom_root, px - half_p, px + half_p,
+                                  py - half_p, py + half_p, Z_MIN, Z_MAX, wall_tex, has_baseboard=True)
 
                     col_pillar = (px - half_p, py - half_p, px + half_p, py + half_p)
                     self.colliders.append(col_pillar)
                     self.cell_colliders[(gx, gy)].append(col_pillar)
 
-        # 4. 드로우 콜 최적화 (청크 벽체 및 바닥/천장 지오메트리 병합)
-        self.node.flattenStrong()
-        self.candle_positions = []
+                    # 기둥 외벽면에 촛불 배치
+                    if (gx + gy) % 2 == 0:
+                        c_p = add_wall_candle_optimized(self.sconces_root, self.flames_root, px, py - half_p, CANDLE_HEIGHT, 0, -1)
+                        self.candle_positions.append(c_p)
+
+        # 5. 드로우 콜 결합 최적화 (flattenStrong)
+        self.geom_root.flattenStrong()
+        self.sconces_root.flattenStrong()
+        for batch_np in self.puddle_batches:
+            batch_np.flattenStrong()
 
     def set_visible(self, visible):
-        """1인칭 시야 렌더링 온/오프 상태 전환 (Panda3D 렌더 패스 스킵)"""
+        """1인칭 시야각 청크 표시/숨김 전환"""
         if visible:
             if self.is_hidden:
                 self.node.show()
@@ -407,12 +488,12 @@ class Chunk:
                 self.is_hidden = True
 
     def attach_to(self, parent):
-        """백그라운드 스레드에서 생성 및 사전 병합된 청크를 메인 씬 그래프에 즉각 마운트"""
+        """월드 루트에 청크 연결"""
         if self.node and parent and not self.node.hasParent():
             self.node.reparentTo(parent)
 
     def destroy(self):
-        """청크 노드 제거 및 메모리 해제"""
+        """청크 노드 및 충돌체, 촛불 메모리 해제"""
         if self.node:
             self.node.removeNode()
             self.node = None
@@ -421,3 +502,5 @@ class Chunk:
             self.cell_colliders.clear()
         if hasattr(self, 'candle_positions'):
             self.candle_positions.clear()
+        if hasattr(self, 'puddle_batches'):
+            self.puddle_batches.clear()
