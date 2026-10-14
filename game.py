@@ -356,9 +356,9 @@ class HazardBarrel:
 
         if ui_mgr:
             if kill_count > 0:
-                ui_mgr.show_style_kill("🔥 [ BARREL CHAIN BLAST! ] 🔥", f"×{kill_count} 처치! +{kill_count * 100} EXP", (1.0, 0.35, 0.1, 1.0))
+                ui_mgr.show_style_kill("[ ! BARREL CHAIN BLAST ! ]", f"×{kill_count} 처치! +{kill_count * 100} EXP", (1.0, 0.35, 0.1, 1.0))
             else:
-                ui_mgr.show_style_kill("🔥 [ HAZARD BARREL DETONATED ] 🔥", "", (1.0, 0.4, 0.1, 1.0))
+                ui_mgr.show_style_kill("[ ! HAZARD BARREL DETONATED ! ]", "", (1.0, 0.4, 0.1, 1.0))
 
         self.destroy()
 
@@ -369,8 +369,8 @@ class HazardBarrel:
 
 
 class LiminalInfiniteLoop(ShowBase):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
         # PBR 렌더링 최적화
         if hasattr(self, 'win') and self.win is not None:

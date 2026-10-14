@@ -1,6 +1,10 @@
 from panda3d.core import loadPrcFileData, LColor
 
-# --- 하드웨어 파이프라인 & 렌더링 프레임 페이싱 최적화 설정 ---
+# 1920x1080 FHD 기본 해상도 및 창 크기 조절 설정
+loadPrcFileData('', 'win-size 1920 1080')
+loadPrcFileData('', 'win-resizable true')
+loadPrcFileData('', 'window-title Liminal Backrooms FPS')
+
 # 60 FPS 프레임 페이싱 고정 (GPU 큐 과부하, 지터링 및 드라이버 스터터링 완벽 차단)
 loadPrcFileData('', 'clock-mode limited')
 loadPrcFileData('', 'clock-frame-rate 60')

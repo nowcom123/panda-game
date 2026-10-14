@@ -332,11 +332,11 @@ class UIManager:
 
     def _setup_hud(self):
         """인게임 조준점 및 이미지 기반 HUD 요소 초기화"""
-        # 1. 엠비언트 다크 호러 비네트 (화면 외곽 심도감)
+        # 1. 엠비언트 다크 호러 비네트 (화면 외곽 심도감, 16:9 1920x1080 와이드 풀스크린)
         self.vignette_dark = OnscreenImage(
             image="assets/ui/vignette_dark.png",
             pos=(0, 0, 0),
-            scale=(1.34, 1, 1.0),
+            scale=(1.80, 1, 1.0),
             parent=self.base.aspect2d
         )
         self.vignette_dark.setTransparency(TransparencyAttrib.MAlpha)
@@ -346,7 +346,7 @@ class UIManager:
         self.vignette_blood = OnscreenImage(
             image="assets/ui/vignette_blood.png",
             pos=(0, 0, 0),
-            scale=(1.34, 1, 1.0),
+            scale=(1.80, 1, 1.0),
             parent=self.base.aspect2d
         )
         self.vignette_blood.setTransparency(TransparencyAttrib.MAlpha)
@@ -375,11 +375,11 @@ class UIManager:
         self.damage_dir_root.setBin("fixed", 24)
         self.damage_indicators = []
 
-        # 4. 상단 목표/나침반 패널
+        # 4. 상단 목표/나침반 패널 (1920x1080 와이드 상단 중앙 배치)
         self.panel_hud_top = OnscreenImage(
             image="assets/ui/panel_hud_top.png",
             pos=(0, 0, 0.91),
-            scale=(0.54, 1, 0.060),
+            scale=(0.58, 1, 0.065),
             parent=self.base.aspect2d
         )
         self.panel_hud_top.setTransparency(TransparencyAttrib.MAlpha)
@@ -387,8 +387,8 @@ class UIManager:
 
         self.icon_radar = OnscreenImage(
             image="assets/ui/icon_radar.png",
-            pos=(-0.45, 0, 0.91),
-            scale=0.032,
+            pos=(-0.50, 0, 0.91),
+            scale=0.036,
             parent=self.base.aspect2d
         )
         self.icon_radar.setTransparency(TransparencyAttrib.MAlpha)
@@ -396,8 +396,8 @@ class UIManager:
 
         self.hud_text = OnscreenText(
             text="[ 비상 탈출구 신호 탐색 중... ]",
-            pos=(-0.40, 0.90),
-            scale=0.028,
+            pos=(-0.44, 0.90),
+            scale=0.030,
             fg=(0.45, 0.85, 1.0, 0.95),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ALeft,
@@ -407,8 +407,8 @@ class UIManager:
 
         self.timer_text = OnscreenText(
             text="[ 05:00 ]",
-            pos=(0.45, 0.90),
-            scale=0.032,
+            pos=(0.50, 0.90),
+            scale=0.034,
             fg=(0.25, 0.95, 0.45, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ARight,
@@ -416,12 +416,12 @@ class UIManager:
             **self.font_kw
         )
 
-        # 5. 좌상단 상태바 (HP, 스테미나, EXP, 유물)
+        # 5. 좌상단 상태바 (HP, 스테미나, EXP, 유물) - 1920x1080 좌측 여백 최적화 배치
         # 5-1. 체력바
         self.icon_hp = OnscreenImage(
             image="assets/ui/icon_health.png",
-            pos=(-1.28, 0, 0.88),
-            scale=0.032,
+            pos=(-1.68, 0, 0.88),
+            scale=0.036,
             parent=self.base.aspect2d
         )
         self.icon_hp.setTransparency(TransparencyAttrib.MAlpha)
@@ -429,8 +429,8 @@ class UIManager:
 
         self.bar_frame_hp = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(-0.96, 0, 0.88),
-            scale=(0.28, 1, 0.024),
+            pos=(-1.34, 0, 0.88),
+            scale=(0.30, 1, 0.026),
             parent=self.base.aspect2d
         )
         self.bar_frame_hp.setTransparency(TransparencyAttrib.MAlpha)
@@ -438,8 +438,8 @@ class UIManager:
 
         self.bar_fill_hp = OnscreenImage(
             image="assets/ui/bar_hp_fill.png",
-            pos=(-0.96, 0, 0.88),
-            scale=(0.27, 1, 0.018),
+            pos=(-1.34, 0, 0.88),
+            scale=(0.29, 1, 0.020),
             parent=self.base.aspect2d
         )
         self.bar_fill_hp.setTransparency(TransparencyAttrib.MAlpha)
@@ -447,8 +447,8 @@ class UIManager:
 
         self.hp_text = OnscreenText(
             text="100 / 100",
-            pos=(-0.65, 0.87),
-            scale=0.024,
+            pos=(-1.00, 0.87),
+            scale=0.026,
             fg=(0.20, 0.95, 0.40, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ALeft,
@@ -459,8 +459,8 @@ class UIManager:
         # 5-2. 스테미나바
         self.icon_stamina = OnscreenImage(
             image="assets/ui/icon_stamina.png",
-            pos=(-1.28, 0, 0.82),
-            scale=0.032,
+            pos=(-1.68, 0, 0.81),
+            scale=0.036,
             parent=self.base.aspect2d
         )
         self.icon_stamina.setTransparency(TransparencyAttrib.MAlpha)
@@ -468,8 +468,8 @@ class UIManager:
 
         self.bar_frame_stamina = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(-0.96, 0, 0.82),
-            scale=(0.28, 1, 0.024),
+            pos=(-1.34, 0, 0.81),
+            scale=(0.30, 1, 0.026),
             parent=self.base.aspect2d
         )
         self.bar_frame_stamina.setTransparency(TransparencyAttrib.MAlpha)
@@ -477,8 +477,8 @@ class UIManager:
 
         self.bar_fill_stamina = OnscreenImage(
             image="assets/ui/bar_stamina_fill.png",
-            pos=(-0.96, 0, 0.82),
-            scale=(0.27, 1, 0.018),
+            pos=(-1.34, 0, 0.81),
+            scale=(0.29, 1, 0.020),
             parent=self.base.aspect2d
         )
         self.bar_fill_stamina.setTransparency(TransparencyAttrib.MAlpha)
@@ -486,8 +486,8 @@ class UIManager:
 
         self.stamina_text = OnscreenText(
             text="100%",
-            pos=(-0.65, 0.81),
-            scale=0.024,
+            pos=(-1.00, 0.80),
+            scale=0.026,
             fg=(0.35, 0.95, 0.5, 0.95),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ALeft,
@@ -498,8 +498,8 @@ class UIManager:
         # 5-3. 경험치바
         self.icon_exp = OnscreenImage(
             image="assets/ui/icon_exp.png",
-            pos=(-1.28, 0, 0.76),
-            scale=0.032,
+            pos=(-1.68, 0, 0.74),
+            scale=0.036,
             parent=self.base.aspect2d
         )
         self.icon_exp.setTransparency(TransparencyAttrib.MAlpha)
@@ -507,8 +507,8 @@ class UIManager:
 
         self.bar_frame_exp = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(-0.96, 0, 0.76),
-            scale=(0.28, 1, 0.024),
+            pos=(-1.34, 0, 0.74),
+            scale=(0.30, 1, 0.026),
             parent=self.base.aspect2d
         )
         self.bar_frame_exp.setTransparency(TransparencyAttrib.MAlpha)
@@ -516,8 +516,8 @@ class UIManager:
 
         self.bar_fill_exp = OnscreenImage(
             image="assets/ui/bar_exp_fill.png",
-            pos=(-0.96, 0, 0.76),
-            scale=(0.27, 1, 0.018),
+            pos=(-1.34, 0, 0.74),
+            scale=(0.29, 1, 0.020),
             parent=self.base.aspect2d
         )
         self.bar_fill_exp.setTransparency(TransparencyAttrib.MAlpha)
@@ -525,8 +525,8 @@ class UIManager:
 
         self.exp_text = OnscreenText(
             text="[LV. 1] 0/100",
-            pos=(-0.65, 0.75),
-            scale=0.024,
+            pos=(-1.00, 0.73),
+            scale=0.026,
             fg=(0.85, 0.70, 1.0, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ALeft,
@@ -537,8 +537,8 @@ class UIManager:
         # 5-4. 유물 배지
         self.icon_relic = OnscreenImage(
             image="assets/ui/icon_relic.png",
-            pos=(-1.28, 0, 0.70),
-            scale=0.030,
+            pos=(-1.68, 0, 0.67),
+            scale=0.034,
             parent=self.base.aspect2d
         )
         self.icon_relic.setTransparency(TransparencyAttrib.MAlpha)
@@ -546,19 +546,19 @@ class UIManager:
 
         self.relic_badge_text = OnscreenText(
             text="[보유 유물] 없음",
-            pos=(-1.23, 0.69),
-            scale=0.024,
+            pos=(-1.63, 0.66),
+            scale=0.026,
             fg=(0.85, 0.70, 1.0, 0.95),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
 
-        # 6. 우하단 탄약 HUD 패널
+        # 6. 우하단 탄약 HUD 패널 (1920x1080 우측 앵커링)
         self.panel_hud_ammo = OnscreenImage(
             image="assets/ui/panel_hud_ammo.png",
-            pos=(1.10, 0, -0.84),
-            scale=(0.23, 1, 0.075),
+            pos=(1.50, 0, -0.84),
+            scale=(0.24, 1, 0.080),
             parent=self.base.aspect2d
         )
         self.panel_hud_ammo.setTransparency(TransparencyAttrib.MAlpha)
@@ -566,8 +566,8 @@ class UIManager:
 
         self.icon_ammo = OnscreenImage(
             image="assets/ui/icon_ammo.png",
-            pos=(0.95, 0, -0.84),
-            scale=0.032,
+            pos=(1.34, 0, -0.84),
+            scale=0.036,
             parent=self.base.aspect2d
         )
         self.icon_ammo.setTransparency(TransparencyAttrib.MAlpha)
@@ -575,8 +575,8 @@ class UIManager:
 
         self.ammo_text = OnscreenText(
             text="12 / 12",
-            pos=(1.25, -0.85),
-            scale=0.034,
+            pos=(1.66, -0.85),
+            scale=0.038,
             fg=(1.0, 0.90, 0.35, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ARight,
@@ -621,7 +621,7 @@ class UIManager:
         self.hit_marker_text = OnscreenText(
             text="",
             pos=(0, -0.16),
-            scale=0.032,
+            scale=0.034,
             fg=(1.0, 0.85, 0.2, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
@@ -642,11 +642,11 @@ class UIManager:
         self.blackout_banner.hide()
         self.blackout_pulse_timer = 0.0
 
-        # 인게임 전술 퀵슬롯 HUD (소모품 수량 실시간 표시)
+        # 인게임 전술 퀵슬롯 HUD (소모품 수량 실시간 표시, 1920x1080 하단 중앙)
         self.quickslot_text = OnscreenText(
             text="[1] 응급키트: 2개  |  [2] 아드레날린: 1개  |  [3] 탄약팩: 2개  |  [4] 수류탄: 1개  |  [Tab/I] 배낭",
-            pos=(0, -0.88),
-            scale=0.024,
+            pos=(0, -0.86),
+            scale=0.028,
             fg=(0.35, 0.95, 1.0, 0.95),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
@@ -656,8 +656,8 @@ class UIManager:
 
         self.guide_text = OnscreenText(
             text="[WASD] 이동  |  [Space] 슬라이드  |  [G] 전술수류탄  |  [우클릭] 정밀조준  |  [좌클릭] 사격  |  [R] 재장전  |  [Tab/I] 인벤토리",
-            pos=(0, -0.93),
-            scale=0.022,
+            pos=(0, -0.92),
+            scale=0.025,
             fg=(0.9, 0.9, 0.8, 0.85),
             align=TextNode.ACenter,
             mayChange=False,
@@ -678,11 +678,11 @@ class UIManager:
         self.style_kill_banner.hide()
         self.style_kill_timer = 0.0
 
-        # 전술 스킬 (Space 슬라이드 / G 수류탄) 쿨다운 HUD 인디케이터
+        # 전술 스킬 (Space 슬라이드 / G 수류탄) 쿨다운 HUD 인디케이터 (우하단 앵커링)
         self.skills_status_text = OnscreenText(
             text="[SPACE] 슬라이드: READY   |   [G] 수류탄: READY",
-            pos=(1.28, -0.74),
-            scale=0.024,
+            pos=(1.68, -0.72),
+            scale=0.026,
             fg=(0.35, 1.0, 0.65, 0.95),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ARight,
@@ -782,11 +782,12 @@ class UIManager:
         self.btn_game_rank.hide()
 
     def _setup_intro_ui(self):
-        """메인 인트로 타이틀 및 메뉴 버튼 (이미지 배경 및 텍스처 버튼)"""
+        """메인 인트로 타이틀 및 메뉴 버튼 (1920x1080 와이드 화면 비율 최적화)"""
         self.intro_frame = DirectFrame(
             image='assets/ui/panel_modal_bg.png',
             relief=None,
-            frameSize=(-0.90, 0.90, -0.72, 0.72),
+            frameSize=(-1.15, 1.15, -0.78, 0.78),
+            image_scale=(1.15, 1.0, 0.78),
             scale=(1.0, 1, 1.0),
             pos=(0, 0, 0)
         )
@@ -795,8 +796,8 @@ class UIManager:
         self.intro_title = OnscreenText(
             text="LIMINAL BACKROOMS",
             parent=self.intro_frame,
-            pos=(0, 0.48),
-            scale=0.075,
+            pos=(0, 0.52),
+            scale=0.082,
             fg=(0.95, 0.95, 0.95, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
@@ -806,8 +807,8 @@ class UIManager:
         self.intro_subtitle = OnscreenText(
             text="[ 5분 던전 크롤러 RPG : 심연의 미궁 ]",
             parent=self.intro_frame,
-            pos=(0, 0.35),
-            scale=0.032,
+            pos=(0, 0.38),
+            scale=0.034,
             fg=(0.95, 0.45, 0.20, 1.0),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ACenter,
@@ -817,8 +818,8 @@ class UIManager:
         self.intro_desc = OnscreenText(
             text="미궁에 도사린 몬스터들을 처치하여 경험치를 획득하고 레벨업하세요.\n5분 안에 비상탈출구를 찾아 5초간 사수하면 상점에서 특성을 강화하고 다음 층으로 내려갑니다.",
             parent=self.intro_frame,
-            pos=(0, 0.20),
-            scale=0.024,
+            pos=(0, 0.22),
+            scale=0.026,
             fg=(0.85, 0.88, 0.92, 0.92),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ACenter,
@@ -831,8 +832,8 @@ class UIManager:
             relief=None,
             text="START GAME",
             pos=(0, 0, 0.02),
-            scale=(0.48, 1, 0.070),
-            text_scale=((0.070 / 0.48) * 0.46, 0.46),
+            scale=(0.54, 1, 0.075),
+            text_scale=((0.075 / 0.54) * 0.46, 0.46),
             text_pos=(0, -0.14),
             text_fg=(0.35, 1.0, 0.55, 1.0),
             command=self.on_start,
@@ -845,9 +846,9 @@ class UIManager:
             image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="RANKING",
-            pos=(0, 0, -0.15),
-            scale=(0.48, 1, 0.070),
-            text_scale=((0.070 / 0.48) * 0.46, 0.46),
+            pos=(0, 0, -0.16),
+            scale=(0.54, 1, 0.075),
+            text_scale=((0.075 / 0.54) * 0.46, 0.46),
             text_pos=(0, -0.14),
             text_fg=(1.0, 0.85, 0.25, 1.0),
             command=self.show_rank_modal,
@@ -860,9 +861,9 @@ class UIManager:
             image=('assets/ui/btn_danger_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_danger_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="EXIT",
-            pos=(0, 0, -0.32),
-            scale=(0.48, 1, 0.070),
-            text_scale=((0.070 / 0.48) * 0.46, 0.46),
+            pos=(0, 0, -0.34),
+            scale=(0.54, 1, 0.075),
+            text_scale=((0.075 / 0.54) * 0.46, 0.46),
             text_pos=(0, -0.14),
             text_fg=(1.0, 0.45, 0.45, 1.0),
             command=self.on_exit,
@@ -871,11 +872,12 @@ class UIManager:
         self.btn_exit.setTransparency(TransparencyAttrib.MAlpha)
 
     def _setup_rank_ui(self):
-        """기록 랭킹 팝업 모달창"""
+        """기록 랭킹 팝업 모달창 (1920x1080 와이드 최적화)"""
         self.rank_modal = DirectFrame(
             image='assets/ui/panel_modal_bg.png',
             relief=None,
-            frameSize=(-1.10, 1.10, -0.80, 0.80),
+            frameSize=(-1.42, 1.42, -0.85, 0.85),
+            image_scale=(1.42, 1.0, 0.85),
             scale=(1.0, 1, 1.0),
             pos=(0, 0, 0)
         )
@@ -884,8 +886,8 @@ class UIManager:
         self.rank_title = OnscreenText(
             text="[ 생존 & 탈출 기록 랭킹 (RANKING) ]",
             parent=self.rank_modal,
-            pos=(0, 0.65),
-            scale=0.044,
+            pos=(0, 0.70),
+            scale=0.048,
             fg=(1.0, 0.85, 0.25, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
@@ -895,8 +897,8 @@ class UIManager:
         self.rank_content = OnscreenText(
             text="기록을 불러오는 중...",
             parent=self.rank_modal,
-            pos=(-0.95, 0.48),
-            scale=0.024,
+            pos=(-1.20, 0.52),
+            scale=0.028,
             fg=(0.92, 0.92, 0.92, 0.95),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ALeft,
@@ -909,9 +911,9 @@ class UIManager:
             image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="닫기 (CLOSE)",
-            pos=(0, 0, -0.68),
-            scale=(0.40, 1, 0.058),
-            text_scale=((0.058 / 0.40) * 0.48, 0.48),
+            pos=(0, 0, -0.70),
+            scale=(0.44, 1, 0.060),
+            text_scale=((0.060 / 0.44) * 0.48, 0.48),
             text_pos=(0, -0.15),
             text_fg=(0.95, 0.95, 0.95, 1.0),
             command=self.hide_rank_modal,
@@ -1240,7 +1242,7 @@ class UIManager:
 
     def update_stamina(self, stamina, max_stamina, is_sprinting=False, is_exhausted=False):
         pct = max(0.0, min(1.0, stamina / max(1.0, max_stamina)))
-        self._set_bar_percentage(self.bar_fill_stamina, pct, -0.96, 0.82, 0.28, 0.024)
+        self._set_bar_percentage(self.bar_fill_stamina, pct, -1.34, 0.81, 0.30, 0.026)
 
         stamina_pct = int(pct * 100)
         if is_exhausted:
@@ -1262,7 +1264,7 @@ class UIManager:
 
     def update_hp_exp(self, hp, max_hp, exp, exp_to_next, level=1, stat_points=0):
         pct_hp = max(0.0, min(1.0, hp / max(1.0, max_hp)))
-        self._set_bar_percentage(self.bar_fill_hp, pct_hp, -0.96, 0.88, 0.28, 0.024)
+        self._set_bar_percentage(self.bar_fill_hp, pct_hp, -1.34, 0.88, 0.30, 0.026)
         msg_hp = f"{int(hp)} / {int(max_hp)}"
         if msg_hp != self._cached_hp_str:
             self.hp_text.setText(msg_hp)
@@ -1275,7 +1277,7 @@ class UIManager:
             self._cached_hp_str = msg_hp
 
         pct_exp = max(0.0, min(1.0, exp / max(1.0, exp_to_next)))
-        self._set_bar_percentage(self.bar_fill_exp, pct_exp, -0.96, 0.76, 0.28, 0.024)
+        self._set_bar_percentage(self.bar_fill_exp, pct_exp, -1.34, 0.74, 0.30, 0.026)
         sp_tag = f" [스탯 +{stat_points}]" if stat_points > 0 else ""
         msg_exp = f"[LV.{level}] {int(exp)}/{int(exp_to_next)}{sp_tag}"
         if msg_exp != self._cached_exp_str:
@@ -1436,7 +1438,8 @@ class UIManager:
         self.shop_modal = DirectFrame(
             image='assets/ui/panel_modal_bg.png',
             relief=None,
-            frameSize=(-1.28, 1.28, -0.88, 0.88),
+            frameSize=(-1.54, 1.54, -0.88, 0.88),
+            image_scale=(1.54, 1.0, 0.88),
             scale=(1.0, 1, 1.0),
             pos=(0, 0, 0)
         )
@@ -1446,7 +1449,7 @@ class UIManager:
             text="[ STAGE CLEAR! 스탯 분배 및 보급소 ]",
             parent=self.shop_modal,
             pos=(0, 0.72),
-            scale=0.040,
+            scale=0.042,
             fg=(1.0, 0.85, 0.25, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
@@ -1457,7 +1460,7 @@ class UIManager:
             text="비상탈출구를 사수했습니다! 스탯 포인트를 분배하고 고대 미궁의 저주받은 유물을 선택하세요.",
             parent=self.shop_modal,
             pos=(0, 0.64),
-            scale=0.024,
+            scale=0.026,
             fg=(0.85, 0.88, 0.92, 0.95),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ACenter,
@@ -1469,7 +1472,7 @@ class UIManager:
             text="[ 보유 스탯 포인트: 0 P ]",
             parent=self.shop_modal,
             pos=(0, 0.55),
-            scale=0.032,
+            scale=0.034,
             fg=(1.0, 0.88, 0.25, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
@@ -1480,18 +1483,18 @@ class UIManager:
         btn_alloc_style = {
             "image": ('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
             "relief": None,
-            "scale": (0.24, 1, 0.046),
-            "text_scale": ((0.046 / 0.24) * 0.48, 0.48),
+            "scale": (0.24, 1, 0.048),
+            "text_scale": ((0.048 / 0.24) * 0.48, 0.48),
             "text_pos": (0, -0.14)
         }
 
-        # --- 1단: 스탯 강화 4종 (2열 그리드 배치) ---
+        # --- 1단: 스탯 강화 4종 (1920x1080 2열 와이드 그리드 배치) ---
         # 1-1. 공격력 (좌측)
         self.stat_label_atk = OnscreenText(
             text="[공격력] 현재: 35 (+5)",
             parent=self.shop_modal,
-            pos=(-1.12, 0.44),
-            scale=0.026,
+            pos=(-1.36, 0.44),
+            scale=0.028,
             fg=(1.0, 0.80, 0.40, 1.0),
             align=TextNode.ALeft,
             mayChange=True,
@@ -1500,7 +1503,7 @@ class UIManager:
         self.btn_alloc_atk = DirectButton(
             parent=self.shop_modal,
             text="[ +1 강화 ]",
-            pos=(-0.20, 0, 0.45),
+            pos=(-0.42, 0, 0.45),
             text_fg=(1.0, 0.85, 0.4, 1.0),
             command=self._allocate,
             extraArgs=["ATK"],
@@ -1513,8 +1516,8 @@ class UIManager:
         self.stat_label_spd = OnscreenText(
             text="[이동 속도] 현재: 100% (+8%)",
             parent=self.shop_modal,
-            pos=(-1.12, 0.33),
-            scale=0.026,
+            pos=(-1.36, 0.33),
+            scale=0.028,
             fg=(0.45, 0.85, 1.0, 1.0),
             align=TextNode.ALeft,
             mayChange=True,
@@ -1523,7 +1526,7 @@ class UIManager:
         self.btn_alloc_spd = DirectButton(
             parent=self.shop_modal,
             text="[ +1 강화 ]",
-            pos=(-0.20, 0, 0.34),
+            pos=(-0.42, 0, 0.34),
             text_fg=(0.45, 0.85, 1.0, 1.0),
             command=self._allocate,
             extraArgs=["SPD"],
@@ -1536,8 +1539,8 @@ class UIManager:
         self.stat_label_hp = OnscreenText(
             text="[최대 체력] 현재: 100 (+25)",
             parent=self.shop_modal,
-            pos=(0.06, 0.44),
-            scale=0.026,
+            pos=(0.04, 0.44),
+            scale=0.028,
             fg=(0.40, 1.0, 0.60, 1.0),
             align=TextNode.ALeft,
             mayChange=True,
@@ -1546,7 +1549,7 @@ class UIManager:
         self.btn_alloc_hp = DirectButton(
             parent=self.shop_modal,
             text="[ +1 강화 ]",
-            pos=(0.96, 0, 0.45),
+            pos=(0.98, 0, 0.45),
             text_fg=(0.4, 1.0, 0.6, 1.0),
             command=self._allocate,
             extraArgs=["HP"],
@@ -1559,8 +1562,8 @@ class UIManager:
         self.stat_label_ammo = OnscreenText(
             text="[최대 탄약] 현재: 12발 (+2발)",
             parent=self.shop_modal,
-            pos=(0.06, 0.33),
-            scale=0.026,
+            pos=(0.04, 0.33),
+            scale=0.028,
             fg=(1.0, 0.92, 0.40, 1.0),
             align=TextNode.ALeft,
             mayChange=True,
@@ -1569,7 +1572,7 @@ class UIManager:
         self.btn_alloc_ammo = DirectButton(
             parent=self.shop_modal,
             text="[ +1 강화 ]",
-            pos=(0.96, 0, 0.34),
+            pos=(0.98, 0, 0.34),
             text_fg=(1.0, 0.92, 0.4, 1.0),
             command=self._allocate,
             extraArgs=["AMMO"],
@@ -1578,7 +1581,7 @@ class UIManager:
         )
         self.btn_alloc_ammo.setTransparency(TransparencyAttrib.MAlpha)
 
-        # --- 2단: 저주받은 유물 선택 (3개 이미지 카드) ---
+        # --- 2단: 저주받은 유물 선택 (3개 이미지 카드 와이드 배치) ---
         self.relic_section_title = OnscreenText(
             text="[ 고대 미궁의 저주받은 유물 (1개 선택 또는 다음 스테이지로 스킵) ]",
             parent=self.shop_modal,
@@ -1592,14 +1595,15 @@ class UIManager:
 
         self.relic_cards = []
         self.offered_relics = []
-        card_xs = [-0.78, 0.0, 0.78]
+        card_xs = [-0.98, 0.0, 0.98]
 
         for i in range(3):
             card_f = DirectFrame(
                 parent=self.shop_modal,
                 image='assets/ui/card_relic_bg.png',
                 relief=None,
-                frameSize=(-0.36, 0.36, -0.21, 0.21),
+                frameSize=(-0.44, 0.44, -0.22, 0.22),
+                image_scale=(0.44, 1.0, 0.22),
                 pos=(card_xs[i], 0, -0.04),
                 scale=(1.0, 1, 1.0)
             )
@@ -1609,7 +1613,7 @@ class UIManager:
                 text="",
                 parent=card_f,
                 pos=(0, 0.12),
-                scale=0.026,
+                scale=0.028,
                 fg=(1.0, 0.88, 0.35, 1.0),
                 align=TextNode.ACenter,
                 mayChange=True,
@@ -1619,7 +1623,7 @@ class UIManager:
                 text="",
                 parent=card_f,
                 pos=(0, 0.03),
-                scale=0.022,
+                scale=0.024,
                 fg=(0.35, 1.0, 0.55, 1.0),
                 align=TextNode.ACenter,
                 mayChange=True,
@@ -1629,7 +1633,7 @@ class UIManager:
                 text="",
                 parent=card_f,
                 pos=(0, -0.05),
-                scale=0.022,
+                scale=0.024,
                 fg=(1.0, 0.38, 0.38, 1.0),
                 align=TextNode.ACenter,
                 mayChange=True,
@@ -1641,8 +1645,8 @@ class UIManager:
                 relief=None,
                 text="[ 선택 획득 ]",
                 pos=(0, 0, -0.14),
-                scale=(0.30, 1, 0.044),
-                text_scale=((0.044 / 0.30) * 0.48, 0.48),
+                scale=(0.32, 1, 0.048),
+                text_scale=((0.048 / 0.32) * 0.48, 0.48),
                 text_pos=(0, -0.15),
                 text_fg=(0.95, 0.80, 1.0, 1.0),
                 command=self._select_relic,
@@ -1818,7 +1822,7 @@ class UIManager:
     def hide_stage_clear_shop(self):
         self.shop_modal.hide()
 
-    # --- [전술 군용 인벤토리 배낭 모달 시스템] ---
+    # --- [전술 군용 인벤토리 배낭 모달 시스템 (1920x1080 FHD 최적화)] ---
     def _setup_inventory_ui(self):
         self.inv_player = None
         self.inv_combat = None
@@ -1826,22 +1830,23 @@ class UIManager:
         self.on_close_inventory = None
         self.selected_inv_slot = 0
 
-        # 메인 반투명 흑요석 전술 모달 배경
+        # 메인 반투명 흑요석 전술 모달 배경 (1920x1080 16:9 와이드 비율 매칭)
         self.inv_modal = DirectFrame(
             image='assets/ui/panel_modal_bg.png',
             relief=None,
-            frameSize=(-1.28, 1.28, -0.88, 0.88),
+            frameSize=(-1.54, 1.54, -0.88, 0.88),
+            image_scale=(1.54, 1.0, 0.88),
             scale=(1.0, 1, 1.0),
             pos=(0, 0, 0)
         )
         self.inv_modal.setTransparency(TransparencyAttrib.MAlpha)
 
-        # 1. 헤더: 타이틀 & 닫기 버튼
+        # 1. 헤더: 타이틀 & 서브타이틀 & 닫기 버튼
         self.inv_title = OnscreenText(
             text="[ TACTICAL INVENTORY - 전술 군용 배낭 ]",
             parent=self.inv_modal,
-            pos=(0, 0.74),
-            scale=0.038,
+            pos=(0, 0.76),
+            scale=0.046,
             fg=(0.40, 0.92, 1.0, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
@@ -1849,10 +1854,10 @@ class UIManager:
         )
 
         self.inv_subtitle = OnscreenText(
-            text="생존 소모품 보급 현황 및 장비 관리  |  단축키 [1~4] 인게임 즉시 사용 가능",
+            text="생존 소모품 보급 현황 및 무기 제원 관리  |  단축키 [1~4] 인게임 즉시 사용 가능",
             parent=self.inv_modal,
-            pos=(0, 0.67),
-            scale=0.022,
+            pos=(0, 0.70),
+            scale=0.026,
             fg=(0.78, 0.85, 0.92, 0.90),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ACenter,
@@ -1864,9 +1869,9 @@ class UIManager:
             image=('assets/ui/btn_danger_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_danger_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="[ X 닫기 (TAB / ESC) ]",
-            pos=(0.96, 0, 0.73),
-            scale=(0.26, 1, 0.046),
-            text_scale=((0.046 / 0.26) * 0.44, 0.44),
+            pos=(1.26, 0, 0.76),
+            scale=(0.24, 1, 0.052),
+            text_scale=((0.052 / 0.24) * 0.46, 0.46),
             text_pos=(0, -0.14),
             text_fg=(1.0, 0.85, 0.85, 1.0),
             command=self.hide_inventory,
@@ -1874,12 +1879,12 @@ class UIManager:
         )
         self.btn_close_inv.setTransparency(TransparencyAttrib.MAlpha)
 
-        # 2. 좌측 칼럼: 생존자 RPG 종합 스탯 & 무기 제원 (x = -0.80)
+        # 2. 좌측 칼럼: 생존자 RPG 종합 스탯 & 무기 제원 (x = -1.42 ~ -0.45)
         self.inv_left_title = OnscreenText(
             text="■ 생존자 상태 및 무기 제원",
             parent=self.inv_modal,
-            pos=(-1.14, 0.58),
-            scale=0.027,
+            pos=(-1.42, 0.61),
+            scale=0.034,
             fg=(0.95, 0.82, 0.35, 1.0),
             align=TextNode.ALeft,
             **self.font_kw
@@ -1888,8 +1893,8 @@ class UIManager:
         self.inv_stats_text = OnscreenText(
             text="",
             parent=self.inv_modal,
-            pos=(-1.14, 0.50),
-            scale=0.021,
+            pos=(-1.42, 0.53),
+            scale=0.027,
             fg=(0.90, 0.94, 0.98, 0.95),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ALeft,
@@ -1897,31 +1902,32 @@ class UIManager:
             **self.font_kw
         )
 
-        # 3. 중앙 칼럼: 소지품 6슬롯 전술 배낭 그리드
+        # 3. 중앙 칼럼: 소지품 6슬롯 전술 배낭 그리드 (x = -0.40 ~ 0.40)
         self.inv_grid_title = OnscreenText(
             text="■ 전술 보급품 및 소지품 (6 슬롯)",
             parent=self.inv_modal,
-            pos=(-0.28, 0.58),
-            scale=0.027,
+            pos=(0, 0.61),
+            scale=0.034,
             fg=(0.35, 0.95, 1.0, 1.0),
-            align=TextNode.ALeft,
+            align=TextNode.ACenter,
             **self.font_kw
         )
 
         self.inv_slots = []
         slot_coords = [
-            (-0.16, 0.40), (0.16, 0.40),   # Row 1 (Quickslots 1, 2)
-            (-0.16, 0.16), (0.16, 0.16),   # Row 2 (Quickslots 3, 4)
-            (-0.16, -0.08), (0.16, -0.08)  # Row 3 (Slots 5, 6)
+            (-0.19, 0.42), (0.19, 0.42),   # Row 1 (Quickslots 1, 2)
+            (-0.19, 0.16), (0.19, 0.16),   # Row 2 (Quickslots 3, 4)
+            (-0.19, -0.10), (0.19, -0.10)  # Row 3 (Slots 5, 6)
         ]
 
         for idx, (sx, sz) in enumerate(slot_coords):
+            # 정방형(1:1) 스케일로 왜곡/찌그러짐 원천 차단 (1920x1080 기준 약 167px 정사각 슬롯)
             slot_btn = DirectButton(
                 parent=self.inv_modal,
                 image=('assets/ui/slot_bg_normal.png', 'assets/ui/slot_bg_selected.png', 'assets/ui/slot_bg_selected.png', 'assets/ui/slot_bg_normal.png'),
                 relief=None,
                 pos=(sx, 0, sz),
-                scale=(0.14, 1, 0.11),
+                scale=(0.155, 1.0, 0.155),
                 command=self._select_inventory_slot,
                 extraArgs=[idx]
             )
@@ -1930,8 +1936,8 @@ class UIManager:
             slot_icon = OnscreenImage(
                 image='assets/ui/item_medkit.png',
                 parent=slot_btn,
-                scale=(0.46, 1, 0.46),
-                pos=(0, 0, 0.05)
+                scale=(0.62, 1.0, 0.62),
+                pos=(0, 0, 0.04)
             )
             slot_icon.setTransparency(TransparencyAttrib.MAlpha)
             slot_icon.hide()
@@ -1939,8 +1945,8 @@ class UIManager:
             slot_tag = OnscreenText(
                 text=f"[{idx+1}]" if idx < 4 else "",
                 parent=slot_btn,
-                pos=(-0.38, 0.30),
-                scale=(0.18, 0.22),
+                pos=(-0.40, 0.36),
+                scale=0.18,
                 fg=(0.40, 0.95, 1.0, 1.0),
                 shadow=(0, 0, 0, 0.95),
                 align=TextNode.ALeft,
@@ -1951,8 +1957,8 @@ class UIManager:
             slot_count = OnscreenText(
                 text="",
                 parent=slot_btn,
-                pos=(0.38, -0.32),
-                scale=(0.18, 0.22),
+                pos=(0.40, -0.36),
+                scale=0.18,
                 fg=(1.0, 0.90, 0.35, 1.0),
                 shadow=(0, 0, 0, 0.95),
                 align=TextNode.ARight,
@@ -1963,8 +1969,8 @@ class UIManager:
             slot_name = OnscreenText(
                 text="[ 빈 슬롯 ]",
                 parent=slot_btn,
-                pos=(0, -0.44),
-                scale=(0.13, 0.16),
+                pos=(0, -0.50),
+                scale=0.15,
                 fg=(0.70, 0.75, 0.82, 0.90),
                 align=TextNode.ACenter,
                 mayChange=True,
@@ -1979,30 +1985,30 @@ class UIManager:
                 "name": slot_name
             })
 
-        # 4. 우측 칼럼: 선택된 아이템 상세 정보 및 사용 패널 (x = 0.78)
+        # 4. 우측 칼럼: 선택된 아이템 상세 정보 및 사용 패널 (x = 0.45 ~ 1.45)
         self.inv_right_title = OnscreenText(
             text="■ 아이템 상세 정보 (INFO)",
             parent=self.inv_modal,
-            pos=(0.44, 0.58),
-            scale=0.027,
+            pos=(0.92, 0.61),
+            scale=0.034,
             fg=(0.40, 0.95, 0.60, 1.0),
-            align=TextNode.ALeft,
+            align=TextNode.ACenter,
             **self.font_kw
         )
 
         self.inv_detail_icon = OnscreenImage(
             image='assets/ui/item_medkit.png',
             parent=self.inv_modal,
-            scale=(0.10, 1, 0.10),
-            pos=(0.78, 0, 0.40)
+            scale=(0.165, 1.0, 0.165),
+            pos=(0.92, 0, 0.42)
         )
         self.inv_detail_icon.setTransparency(TransparencyAttrib.MAlpha)
 
         self.inv_detail_name = OnscreenText(
             text="[ 선택된 아이템 없음 ]",
             parent=self.inv_modal,
-            pos=(0.78, 0.27),
-            scale=0.028,
+            pos=(0.92, 0.23),
+            scale=0.034,
             fg=(1.0, 1.0, 1.0, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
@@ -2013,8 +2019,8 @@ class UIManager:
         self.inv_detail_meta = OnscreenText(
             text="분류: -  |  보유 수량: -",
             parent=self.inv_modal,
-            pos=(0.78, 0.21),
-            scale=0.021,
+            pos=(0.92, 0.16),
+            scale=0.025,
             fg=(0.75, 0.82, 0.90, 0.90),
             align=TextNode.ACenter,
             mayChange=True,
@@ -2024,11 +2030,12 @@ class UIManager:
         self.inv_detail_desc = OnscreenText(
             text="아이템을 선택하면 상세 정보 및 사용법이 표시됩니다.",
             parent=self.inv_modal,
-            pos=(0.48, 0.13),
-            scale=0.021,
+            pos=(0.48, 0.08),
+            scale=0.025,
             fg=(0.88, 0.92, 0.96, 0.95),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ALeft,
+            wordwrap=23,
             mayChange=True,
             **self.font_kw
         )
@@ -2038,9 +2045,9 @@ class UIManager:
             image=('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="[ 사용하기 (USE ITEM) ]",
-            pos=(0.78, 0, -0.06),
-            scale=(0.36, 1, 0.052),
-            text_scale=((0.052 / 0.36) * 0.48, 0.48),
+            pos=(0.92, 0, -0.12),
+            scale=(0.40, 1.0, 0.060),
+            text_scale=((0.060 / 0.40) * 0.48, 0.48),
             text_pos=(0, -0.15),
             text_fg=(0.35, 1.0, 0.55, 1.0),
             command=self._on_click_use_inventory_item,
@@ -2051,8 +2058,8 @@ class UIManager:
         self.inv_msg_text = OnscreenText(
             text="",
             parent=self.inv_modal,
-            pos=(0.78, -0.15),
-            scale=0.022,
+            pos=(0.92, -0.20),
+            scale=0.025,
             fg=(0.40, 1.0, 0.60, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
@@ -2060,25 +2067,25 @@ class UIManager:
             **self.font_kw
         )
 
-        # 5. 하단 칼럼: 장착된 고대 저주받은 유물 목록 (z = -0.32 ~ -0.58)
+        # 5. 하단 칼럼: 장착된 고대 저주받은 유물 목록 (z = -0.27 ~ -0.45)
         self.inv_relics_title = OnscreenText(
             text="■ 장착된 고대 미궁의 저주받은 유물 (CURSED RELICS)",
             parent=self.inv_modal,
-            pos=(0, -0.30),
-            scale=0.026,
+            pos=(0, -0.27),
+            scale=0.030,
             fg=(0.95, 0.72, 1.0, 1.0),
             align=TextNode.ACenter,
             **self.font_kw
         )
 
         self.inv_relic_labels = []
-        r_xs = [-0.85, -0.28, 0.28, 0.85]
+        r_xs = [-1.05, -0.35, 0.35, 1.05]
         for i in range(4):
             lbl = OnscreenText(
                 text="[ 빈 유물 슬롯 ]",
                 parent=self.inv_modal,
-                pos=(r_xs[i], -0.38),
-                scale=0.020,
+                pos=(r_xs[i], -0.35),
+                scale=0.024,
                 fg=(0.60, 0.60, 0.65, 0.85),
                 shadow=(0, 0, 0, 0.95),
                 align=TextNode.ACenter,
@@ -2091,8 +2098,8 @@ class UIManager:
         self.inv_footer_text = OnscreenText(
             text="[1~4] 키로 인게임에서 배낭을 열지 않고 즉시 사용 가능  |  [TAB] / [I] / [ESC] 키로 배낭 닫기",
             parent=self.inv_modal,
-            pos=(0, -0.52),
-            scale=0.021,
+            pos=(0, -0.47),
+            scale=0.024,
             fg=(0.65, 0.75, 0.85, 0.80),
             align=TextNode.ACenter,
             **self.font_kw
