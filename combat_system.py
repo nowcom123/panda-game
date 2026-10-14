@@ -109,10 +109,11 @@ class CombatSystem:
         # 정밀 조준(ADS: Aim Down Sights) 상태
         self.is_aiming = False
         self.ads_alpha = 0.0
-        self.ads_hip_pos = Vec3(0.30, 0.74, -0.26)
-        self.ads_aim_pos = Vec3(0.00, 0.58, -0.165)
-        self.ads_hip_hpr = Vec3(3.0, 1.5, 0)
-        self.ads_aim_hpr = Vec3(0.0, 0.0, 0)
+        # 총기가 화면 하단에 파묻히지 않고 또렷하게 보이도록 위치/높이 최적화
+        self.ads_hip_pos = Vec3(0.22, 0.58, -0.17)
+        self.ads_aim_pos = Vec3(0.00, 0.46, -0.118)
+        self.ads_hip_hpr = Vec3(2.5, 1.0, -1.0)
+        self.ads_aim_hpr = Vec3(0.0, 0.0, 0.0)
 
         # 뷰모델 지오메트리 구축
         self._setup_viewmodel()
@@ -140,8 +141,8 @@ class CombatSystem:
 
         # --- (A) 왼손: 택티컬 손전등 ---
         self.vm_flashlight = self.vm_root.attachNewNode("vm_flashlight")
-        self.vm_flashlight.setPos(-0.32, 0.78, -0.28)
-        self.vm_flashlight.setHpr(-3.5, 2.0, 0)
+        self.vm_flashlight.setPos(-0.25, 0.65, -0.20)
+        self.vm_flashlight.setHpr(-3.0, 1.5, 0)
 
         fl_body_col = LColor(0.12, 0.12, 0.14, 1.0)
         fl_ring_col = LColor(0.24, 0.25, 0.28, 1.0)
@@ -174,8 +175,8 @@ class CombatSystem:
 
         # --- (B) 오른손: 현실적 기계 구조 12발 권총 ---
         self.vm_pistol = self.vm_root.attachNewNode("vm_pistol")
-        self.vm_pistol.setPos(0.30, 0.74, -0.26)
-        self.vm_pistol.setHpr(3.0, 1.5, 0)
+        self.vm_pistol.setPos(0.22, 0.58, -0.17)
+        self.vm_pistol.setHpr(2.5, 1.0, -1.0)
 
         self.recoil_node = self.vm_pistol.attachNewNode("recoil_node")
 
@@ -260,7 +261,10 @@ class CombatSystem:
         cam_fwd = cam_quat.getForward()
         cam_up = cam_quat.getUp()
 
-        eject_pos = self.camera.getPos() + cam_fwd * 0.70 + cam_right * 0.35 - cam_up * 0.20
+        if hasattr(self, 'slide_node') and self.slide_node and not self.slide_node.isEmpty():
+            eject_pos = self.slide_node.getPos(self.render) + cam_right * 0.04 + cam_up * 0.02
+        else:
+            eject_pos = self.camera.getPos() + cam_fwd * 0.65 + cam_right * (0.22 * (1.0 - self.ads_alpha) + 0.04) - cam_up * 0.16
 
         c_node = self.world_root.attachNewNode("spent_casing")
         c_node.setPos(eject_pos)
@@ -300,7 +304,11 @@ class CombatSystem:
         cam_right = cam_quat.getRight()
         cam_up = cam_quat.getUp()
 
-        muzzle_pos = self.camera.getPos() + cam_fwd * 0.88 + cam_right * 0.30 - cam_up * 0.22
+        if hasattr(self, 'muzzle_flash_geom') and self.muzzle_flash_geom and not self.muzzle_flash_geom.isEmpty():
+            muzzle_pos = self.muzzle_flash_geom.getPos(self.render)
+        else:
+            muzzle_pos = self.camera.getPos() + cam_fwd * 0.80 + cam_right * (0.22 * (1.0 - self.ads_alpha)) - cam_up * 0.16
+
         smoke_col = LColor(0.75, 0.75, 0.78, 0.35)
 
         for _ in range(2):
@@ -458,24 +466,26 @@ class CombatSystem:
             impact_world = ray_origin + ray_dir * tracer_dist
 
         # 발광 총알 궤적 (Bullet Tracer)
-        cam_pos = self.camera.getPos()
-        cam_quat = self.camera.getQuat()
-        cam_fwd = cam_quat.getForward()
-        cam_right = cam_quat.getRight()
-        cam_up = cam_quat.getUp()
-
-        muzzle_world = cam_pos + cam_fwd * 0.86 + cam_right * 0.30 - cam_up * 0.22
+        if hasattr(self, 'muzzle_flash_geom') and self.muzzle_flash_geom and not self.muzzle_flash_geom.isEmpty():
+            muzzle_world = self.muzzle_flash_geom.getPos(self.render)
+        else:
+            cam_pos = self.camera.getPos()
+            cam_quat = self.camera.getQuat()
+            cam_fwd = cam_quat.getForward()
+            cam_right = cam_quat.getRight()
+            cam_up = cam_quat.getUp()
+            muzzle_world = cam_pos + cam_fwd * 0.75 + cam_right * (0.22 * (1.0 - self.ads_alpha)) - cam_up * 0.16
 
         ls = LineSegs("bullet_tracer")
-        ls.setThickness(3.6)
-        ls.setColor(1.0, 0.94, 0.35, 1.0)
+        ls.setThickness(4.5)
+        ls.setColor(1.0, 0.95, 0.40, 1.0)
         ls.moveTo(muzzle_world)
         ls.drawTo(impact_world)
         tracer_node = ls.create()
         tracer_np = self.world_root.attachNewNode(tracer_node)
         tracer_np.setLightOff()
 
-        self.active_tracers.append({"np": tracer_np, "life": 0.09})
+        self.active_tracers.append({"np": tracer_np, "life": 0.12})
 
     def spawn_hit_particles(self, hit_pos, is_blood=True):
         """총탄이 몬스터에 적중했을 때 사방으로 분출되는 3D 핏빛/스파크 파티클 버스트"""
@@ -813,9 +823,9 @@ class CombatSystem:
         self.vm_pistol.setPos(cur_pos)
         self.vm_pistol.setHpr(cur_hpr)
 
-        # 카메라 FOV 줌 (60도 -> 47도)
+        # 카메라 FOV 줌 (기본 88도 넓은 시야각 -> 정밀조준 시 72도로 자연스럽게 확대)
         if hasattr(self.base, 'camLens') and self.base.camLens:
-            cur_fov = 60.0 * (1.0 - self.ads_alpha) + 47.0 * self.ads_alpha
+            cur_fov = 88.0 * (1.0 - self.ads_alpha) + 72.0 * self.ads_alpha
             self.base.camLens.setFov(cur_fov)
 
         # 조준 중 크로스헤어 투명화 (가늠쇠 조준 유도)

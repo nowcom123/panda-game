@@ -95,14 +95,17 @@ class PlayerController:
             self.base.accept(s_key, self._set_key, ["shift", 1])
             self.base.accept(f"{s_key}-up", self._set_key, ["shift", 0])
 
-        # 마우스 좌클릭 사격
-        self.base.accept("mouse1", on_shoot)
+        # 마우스 좌클릭 사격 (Shift/Ctrl 조합키 지원으로 조준 중/달리기 중 입력 누락 방지)
+        for m1_evt in ["mouse1", "shift-mouse1", "control-mouse1", "alt-mouse1"]:
+            self.base.accept(m1_evt, on_shoot)
 
         # 마우스 우클릭 정밀 조준(ADS)
         if on_aim_start:
-            self.base.accept("mouse3", self._on_aim_down, [on_aim_start])
+            for m3_down in ["mouse3", "shift-mouse3", "control-mouse3"]:
+                self.base.accept(m3_down, self._on_aim_down, [on_aim_start])
         if on_aim_stop:
-            self.base.accept("mouse3-up", self._on_aim_up, [on_aim_stop])
+            for m3_up in ["mouse3-up", "shift-mouse3-up", "control-mouse3-up"]:
+                self.base.accept(m3_up, self._on_aim_up, [on_aim_stop])
 
         # R 키 재장전
         self.base.accept("r", on_reload)

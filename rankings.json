@@ -509,5 +509,38 @@
     "ammo_left": 3,
     "reserve_ammo": 0,
     "ammo_used": 9
+  },
+  {
+    "timestamp": "2026-10-14 11:36:25",
+    "stage": 1,
+    "result": "사망 (혐오스런 진흙 오크)",
+    "success": false,
+    "time_elapsed": 7.2,
+    "time_left": 292.8,
+    "ammo_left": 0,
+    "reserve_ammo": 0,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-10-14 12:55:19",
+    "stage": 1,
+    "result": "사망 (혐오스런 진흙 오크)",
+    "success": false,
+    "time_elapsed": 6.7,
+    "time_left": 293.3,
+    "ammo_left": 6,
+    "reserve_ammo": 0,
+    "ammo_used": 6
+  },
+  {
+    "timestamp": "2026-10-14 12:55:35",
+    "stage": 1,
+    "result": "사망 (장신 해골 괴물)",
+    "success": false,
+    "time_elapsed": 6.4,
+    "time_left": 293.6,
+    "ammo_left": 3,
+    "reserve_ammo": 0,
+    "ammo_used": 9
   }
 ]
