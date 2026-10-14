@@ -1,6 +1,7 @@
 """
 UI Manager Module
-Panda3D DirectGui & OnscreenText 관리, HUD 실시간 갱신 최적화(텍스트 캐싱) 및 랭킹 데이터 입출력
+Panda3D DirectGui & OnscreenText 관리, 이미지 기반 HUD (체력/스테미나/EXP 바, 아이콘, 비네트, 크로스헤어, 패널)
+및 텍스트 캐싱 최적화, 랭킹 데이터 입출력
 """
 
 import os
@@ -10,9 +11,19 @@ import math
 import random
 import datetime
 from direct.gui.OnscreenText import OnscreenText
+from direct.gui.OnscreenImage import OnscreenImage
 from direct.gui.DirectGui import DirectButton, DirectFrame, DGG
-from panda3d.core import TextNode
+from panda3d.core import TextNode, TransparencyAttrib
 from constants import CURSED_RELICS
+
+
+class ImageCrosshair(OnscreenImage):
+    """하위 호환 및 텍스처 교체를 지원하는 고해상도 그래픽 크로스헤어"""
+    def setText(self, text):
+        pass
+
+    def setFg(self, fg):
+        pass
 
 
 class UIManager:
@@ -48,6 +59,7 @@ class UIManager:
         # 상점 콜백 및 선택된 특성
         self.selected_upgrade = "ATTACK"
         self.on_shop_confirm = None
+        self.on_escape_victory = None
 
         # UI 요소 빌드
         self._setup_hud()
@@ -56,66 +68,86 @@ class UIManager:
         self._setup_rank_ui()
         self._setup_shop_ui()
 
-    def _setup_hud(self):
-        """인게임 조준점 및 HUD 요소 초기화"""
-        self.crosshair = OnscreenText(
-            text="+",
-            pos=(0, -0.015),
-            scale=0.065,
-            fg=(1.0, 1.0, 1.0, 0.85),
-            shadow=(0, 0, 0, 0.9),
-            align=TextNode.ACenter,
-            mayChange=True
-        )
+    def _set_bar_percentage(self, fill_img, pct, cx, cz, hw, hh):
+        """이미지 기반 프로그레스바의 가로 스케일 및 왼쪽 정렬 앵커 오프셋 계산"""
+        pct = max(0.0, min(1.0, pct))
+        if pct <= 0.005:
+            fill_img.hide()
+        else:
+            fill_img.show()
+            track_w = 2.0 * hw * 0.96
+            x_left = cx - hw * 0.96
+            cur_w = track_w * pct
+            fill_img.setPos(x_left + cur_w / 2.0, 0, cz)
+            fill_img.setScale(cur_w / 2.0, 1.0, hh * 0.76)
 
-        # 화면 피격 붉은 플래시 오버레이
+    def _setup_hud(self):
+        """인게임 조준점 및 이미지 기반 HUD 요소 초기화"""
+        # 1. 엠비언트 다크 호러 비네트 (화면 외곽 심도감)
+        self.vignette_dark = OnscreenImage(
+            image="assets/ui/vignette_dark.png",
+            pos=(0, 0, 0),
+            scale=(1.34, 1, 1.0),
+            parent=self.base.aspect2d
+        )
+        self.vignette_dark.setTransparency(TransparencyAttrib.MAlpha)
+        self.vignette_dark.setBin("fixed", 1)
+
+        # 2. 피격 핏자국 및 저체력 심장박동 맥동 비네트
+        self.vignette_blood = OnscreenImage(
+            image="assets/ui/vignette_blood.png",
+            pos=(0, 0, 0),
+            scale=(1.34, 1, 1.0),
+            parent=self.base.aspect2d
+        )
+        self.vignette_blood.setTransparency(TransparencyAttrib.MAlpha)
+        self.vignette_blood.setBin("fixed", 2)
+        self.vignette_blood.setColorScale(1, 1, 1, 0.0)
+
+        # 하위 호환용 damage_flash 프레임
         self.damage_flash = DirectFrame(
             frameColor=(0.85, 0.05, 0.05, 0.0),
             frameSize=(-2.0, 2.0, -2.0, 2.0),
             pos=(0, 0, 0)
         )
-        self.damage_flash.setBin("fixed", 5)
+        self.damage_flash.setBin("fixed", 3)
         self.damage_flash_alpha = 0.0
+
+        # 3. 고해상도 그래픽 크로스헤어
+        self.crosshair = ImageCrosshair(
+            image="assets/ui/crosshair_default.png",
+            pos=(0, 0, 0),
+            scale=0.038,
+            parent=self.base.aspect2d
+        )
+        self.crosshair.setTransparency(TransparencyAttrib.MAlpha)
+        self.crosshair.setBin("fixed", 10)
         self.crosshair_hit_timer = 0.0
         self.hit_marker_timer = 0.0
 
-        self.timer_text = OnscreenText(
-            text="[ 탈출 제한시간: 01:00 ]",
-            pos=(0, 0.91),
-            scale=0.052,
-            fg=(0.25, 0.95, 0.45, 1.0),
-            shadow=(0, 0, 0, 0.9),
-            align=TextNode.ACenter,
-            mayChange=True,
-            **self.font_kw
+        # 4. 상단 목표/나침반 패널
+        self.panel_hud_top = OnscreenImage(
+            image="assets/ui/panel_hud_top.png",
+            pos=(0, 0, 0.91),
+            scale=(0.54, 1, 0.060),
+            parent=self.base.aspect2d
         )
+        self.panel_hud_top.setTransparency(TransparencyAttrib.MAlpha)
+        self.panel_hud_top.setBin("fixed", 4)
 
-        self.ammo_text = OnscreenText(
-            text="[ 탄약: 12 / 12 ]",
-            pos=(1.28, -0.85),
-            scale=0.048,
-            fg=(1.0, 0.90, 0.35, 1.0),
-            shadow=(0, 0, 0, 0.9),
-            align=TextNode.ARight,
-            mayChange=True,
-            **self.font_kw
+        self.icon_radar = OnscreenImage(
+            image="assets/ui/icon_radar.png",
+            pos=(-0.45, 0, 0.91),
+            scale=0.032,
+            parent=self.base.aspect2d
         )
-
-        self.hit_marker_text = OnscreenText(
-            text="",
-            pos=(0, -0.16),
-            scale=0.046,
-            fg=(1.0, 0.85, 0.2, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
-            mayChange=True,
-            **self.font_kw
-        )
+        self.icon_radar.setTransparency(TransparencyAttrib.MAlpha)
+        self.icon_radar.setBin("fixed", 5)
 
         self.hud_text = OnscreenText(
             text="[ 비상 탈출구 신호 탐색 중... ]",
-            pos=(-1.3, 0.92),
-            scale=0.043,
+            pos=(-0.40, 0.90),
+            scale=0.040,
             fg=(0.45, 0.85, 1.0, 0.95),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ALeft,
@@ -123,43 +155,226 @@ class UIManager:
             **self.font_kw
         )
 
-        self.stamina_text = OnscreenText(
-            text="스테미나: [|||||||||||||||] 100%",
-            pos=(-1.3, 0.86),
-            scale=0.04,
-            fg=(0.35, 0.95, 0.5, 0.95),
+        self.timer_text = OnscreenText(
+            text="[ 05:00 ]",
+            pos=(0.45, 0.90),
+            scale=0.046,
+            fg=(0.25, 0.95, 0.45, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ARight,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 5. 좌상단 상태바 (HP, 스테미나, EXP, 유물)
+        # 5-1. 체력바
+        self.icon_hp = OnscreenImage(
+            image="assets/ui/icon_health.png",
+            pos=(-1.28, 0, 0.88),
+            scale=0.032,
+            parent=self.base.aspect2d
+        )
+        self.icon_hp.setTransparency(TransparencyAttrib.MAlpha)
+        self.icon_hp.setBin("fixed", 5)
+
+        self.bar_frame_hp = OnscreenImage(
+            image="assets/ui/bar_frame.png",
+            pos=(-0.96, 0, 0.88),
+            scale=(0.28, 1, 0.024),
+            parent=self.base.aspect2d
+        )
+        self.bar_frame_hp.setTransparency(TransparencyAttrib.MAlpha)
+        self.bar_frame_hp.setBin("fixed", 5)
+
+        self.bar_fill_hp = OnscreenImage(
+            image="assets/ui/bar_hp_fill.png",
+            pos=(-0.96, 0, 0.88),
+            scale=(0.27, 1, 0.018),
+            parent=self.base.aspect2d
+        )
+        self.bar_fill_hp.setTransparency(TransparencyAttrib.MAlpha)
+        self.bar_fill_hp.setBin("fixed", 6)
+
+        self.hp_text = OnscreenText(
+            text="100 / 100",
+            pos=(-0.65, 0.87),
+            scale=0.034,
+            fg=(0.20, 0.95, 0.40, 1.0),
+            shadow=(0, 0, 0, 0.95),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
 
-        # 5.5. 플레이어 체력(HP) & 경험치(EXP) HUD
-        self.hp_text = OnscreenText(
-            text="체  력: [|||||||||||||||] 100/100",
-            pos=(-1.3, 0.80),
-            scale=0.04,
-            fg=(0.20, 0.95, 0.40, 1.0),
+        # 5-2. 스테미나바
+        self.icon_stamina = OnscreenImage(
+            image="assets/ui/icon_stamina.png",
+            pos=(-1.28, 0, 0.82),
+            scale=0.032,
+            parent=self.base.aspect2d
+        )
+        self.icon_stamina.setTransparency(TransparencyAttrib.MAlpha)
+        self.icon_stamina.setBin("fixed", 5)
+
+        self.bar_frame_stamina = OnscreenImage(
+            image="assets/ui/bar_frame.png",
+            pos=(-0.96, 0, 0.82),
+            scale=(0.28, 1, 0.024),
+            parent=self.base.aspect2d
+        )
+        self.bar_frame_stamina.setTransparency(TransparencyAttrib.MAlpha)
+        self.bar_frame_stamina.setBin("fixed", 5)
+
+        self.bar_fill_stamina = OnscreenImage(
+            image="assets/ui/bar_stamina_fill.png",
+            pos=(-0.96, 0, 0.82),
+            scale=(0.27, 1, 0.018),
+            parent=self.base.aspect2d
+        )
+        self.bar_fill_stamina.setTransparency(TransparencyAttrib.MAlpha)
+        self.bar_fill_stamina.setBin("fixed", 6)
+
+        self.stamina_text = OnscreenText(
+            text="100%",
+            pos=(-0.65, 0.81),
+            scale=0.034,
+            fg=(0.35, 0.95, 0.5, 0.95),
+            shadow=(0, 0, 0, 0.95),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
+
+        # 5-3. 경험치바
+        self.icon_exp = OnscreenImage(
+            image="assets/ui/icon_exp.png",
+            pos=(-1.28, 0, 0.76),
+            scale=0.032,
+            parent=self.base.aspect2d
+        )
+        self.icon_exp.setTransparency(TransparencyAttrib.MAlpha)
+        self.icon_exp.setBin("fixed", 5)
+
+        self.bar_frame_exp = OnscreenImage(
+            image="assets/ui/bar_frame.png",
+            pos=(-0.96, 0, 0.76),
+            scale=(0.28, 1, 0.024),
+            parent=self.base.aspect2d
+        )
+        self.bar_frame_exp.setTransparency(TransparencyAttrib.MAlpha)
+        self.bar_frame_exp.setBin("fixed", 5)
+
+        self.bar_fill_exp = OnscreenImage(
+            image="assets/ui/bar_exp_fill.png",
+            pos=(-0.96, 0, 0.76),
+            scale=(0.27, 1, 0.018),
+            parent=self.base.aspect2d
+        )
+        self.bar_fill_exp.setTransparency(TransparencyAttrib.MAlpha)
+        self.bar_fill_exp.setBin("fixed", 6)
 
         self.exp_text = OnscreenText(
-            text="[LV. 1] EXP: [...............] 0/100",
-            pos=(-1.3, 0.74),
-            scale=0.038,
-            fg=(0.35, 0.85, 1.0, 1.0),
+            text="[LV. 1] 0/100",
+            pos=(-0.65, 0.75),
+            scale=0.034,
+            fg=(0.85, 0.70, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.95),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
+
+        # 5-4. 유물 배지
+        self.icon_relic = OnscreenImage(
+            image="assets/ui/icon_relic.png",
+            pos=(-1.28, 0, 0.70),
+            scale=0.030,
+            parent=self.base.aspect2d
+        )
+        self.icon_relic.setTransparency(TransparencyAttrib.MAlpha)
+        self.icon_relic.setBin("fixed", 5)
 
         self.relic_badge_text = OnscreenText(
             text="[보유 유물] 없음",
-            pos=(-1.3, 0.68),
+            pos=(-1.23, 0.69),
             scale=0.034,
             fg=(0.85, 0.70, 1.0, 0.95),
             align=TextNode.ALeft,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 6. 우하단 탄약 HUD 패널
+        self.panel_hud_ammo = OnscreenImage(
+            image="assets/ui/panel_hud_ammo.png",
+            pos=(1.10, 0, -0.84),
+            scale=(0.23, 1, 0.075),
+            parent=self.base.aspect2d
+        )
+        self.panel_hud_ammo.setTransparency(TransparencyAttrib.MAlpha)
+        self.panel_hud_ammo.setBin("fixed", 4)
+
+        self.icon_ammo = OnscreenImage(
+            image="assets/ui/icon_ammo.png",
+            pos=(0.95, 0, -0.84),
+            scale=0.032,
+            parent=self.base.aspect2d
+        )
+        self.icon_ammo.setTransparency(TransparencyAttrib.MAlpha)
+        self.icon_ammo.setBin("fixed", 5)
+
+        self.ammo_text = OnscreenText(
+            text="12 / 12",
+            pos=(1.25, -0.85),
+            scale=0.048,
+            fg=(1.0, 0.90, 0.35, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ARight,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 7. 중앙 비상문 방어 프로그레스바 (하저드 스트라이프)
+        self.bar_frame_defense = OnscreenImage(
+            image="assets/ui/bar_frame.png",
+            pos=(0, 0, 0.60),
+            scale=(0.42, 1, 0.032),
+            parent=self.base.aspect2d
+        )
+        self.bar_frame_defense.setTransparency(TransparencyAttrib.MAlpha)
+        self.bar_frame_defense.setBin("fixed", 8)
+        self.bar_frame_defense.hide()
+
+        self.bar_fill_defense = OnscreenImage(
+            image="assets/ui/bar_defense_fill.png",
+            pos=(0, 0, 0.60),
+            scale=(0.40, 1, 0.024),
+            parent=self.base.aspect2d
+        )
+        self.bar_fill_defense.setTransparency(TransparencyAttrib.MAlpha)
+        self.bar_fill_defense.setBin("fixed", 9)
+        self.bar_fill_defense.hide()
+
+        self.door_status_text = OnscreenText(
+            text="",
+            pos=(0, 0.66),
+            scale=0.048,
+            fg=(1.0, 0.85, 0.2, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+        self.door_status_text.hide()
+
+        # 알림/피격 텍스트
+        self.hit_marker_text = OnscreenText(
+            text="",
+            pos=(0, -0.16),
+            scale=0.046,
+            fg=(1.0, 0.85, 0.2, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
         )
@@ -198,18 +413,6 @@ class UIManager:
             **self.font_kw
         )
         self.stage_clear_banner.hide()
-
-        self.door_status_text = OnscreenText(
-            text="",
-            pos=(0, 0.65),
-            scale=0.048,
-            fg=(1.0, 0.85, 0.2, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
-            mayChange=True,
-            **self.font_kw
-        )
-        self.door_status_text.hide()
 
     def _setup_end_game_ui(self):
         """사망 및 승리 화면 UI"""
@@ -256,29 +459,32 @@ class UIManager:
         )
 
         self.btn_game_menu = DirectButton(
+            image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
             text="메인 메뉴 (MENU)",
-            pos=(-0.28, 0, -0.22),
-            scale=0.055,
-            relief=DGG.RAISED,
-            frameColor=(0.15, 0.16, 0.22, 0.95),
+            pos=(-0.35, 0, -0.22),
+            scale=(0.42, 1, 0.060),
+            text_scale=0.52,
+            text_pos=(0, -0.15),
             text_fg=(1.0, 1.0, 1.0, 1.0),
-            borderWidth=(0.005, 0.005),
-            pad=(0.35, 0.15),
             command=self.on_return_menu,
             **self.btn_font_kw
         )
+        self.btn_game_menu.setTransparency(TransparencyAttrib.MAlpha)
+
         self.btn_game_rank = DirectButton(
+            image=('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
             text="기록 랭킹 (RANK)",
-            pos=(0.28, 0, -0.22),
-            scale=0.055,
-            relief=DGG.RAISED,
-            frameColor=(0.18, 0.15, 0.12, 0.95),
+            pos=(0.35, 0, -0.22),
+            scale=(0.42, 1, 0.060),
+            text_scale=0.52,
+            text_pos=(0, -0.15),
             text_fg=(1.0, 0.9, 0.3, 1.0),
-            borderWidth=(0.005, 0.005),
-            pad=(0.35, 0.15),
             command=self.show_rank_modal,
             **self.btn_font_kw
         )
+        self.btn_game_rank.setTransparency(TransparencyAttrib.MAlpha)
 
         self.game_over_banner.hide()
         self.game_over_desc.hide()
@@ -288,18 +494,21 @@ class UIManager:
         self.btn_game_rank.hide()
 
     def _setup_intro_ui(self):
-        """메인 인트로 타이틀 및 메뉴 버튼"""
+        """메인 인트로 타이틀 및 메뉴 버튼 (이미지 배경 및 텍스처 버튼)"""
         self.intro_frame = DirectFrame(
-            frameColor=(0, 0, 0, 0),
-            frameSize=(-1.5, 1.5, -1.0, 1.0),
+            image='assets/ui/panel_modal_bg.png',
+            relief=None,
+            frameSize=(-0.90, 0.90, -0.72, 0.72),
+            scale=(1.0, 1, 1.0),
             pos=(0, 0, 0)
         )
+        self.intro_frame.setTransparency(TransparencyAttrib.MAlpha)
 
         self.intro_title = OnscreenText(
             text="LIMINAL BACKROOMS",
             parent=self.intro_frame,
-            pos=(0, 0.52),
-            scale=0.11,
+            pos=(0, 0.48),
+            scale=0.10,
             fg=(0.95, 0.95, 0.95, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
@@ -309,8 +518,8 @@ class UIManager:
         self.intro_subtitle = OnscreenText(
             text="[ 5분 던전 크롤러 RPG : 심연의 미궁 ]",
             parent=self.intro_frame,
-            pos=(0, 0.38),
-            scale=0.048,
+            pos=(0, 0.35),
+            scale=0.046,
             fg=(0.95, 0.45, 0.20, 1.0),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ACenter,
@@ -320,61 +529,69 @@ class UIManager:
         self.intro_desc = OnscreenText(
             text="미궁에 도사린 몬스터들을 처치하여 경험치를 획득하고 레벨업하세요.\n5분 안에 비상탈출구를 찾아 5초간 사수하면 상점에서 특성을 강화하고 다음 층으로 내려갑니다.",
             parent=self.intro_frame,
-            pos=(0, 0.22),
-            scale=0.038,
+            pos=(0, 0.20),
+            scale=0.036,
             fg=(0.85, 0.88, 0.92, 0.92),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ACenter,
             **self.font_kw
         )
 
-        btn_style = {
-            "relief": DGG.RAISED,
-            "borderWidth": (0.005, 0.005),
-            "pad": (0.45, 0.16),
-            "scale": 0.065
-        }
-
         self.btn_start = DirectButton(
             parent=self.intro_frame,
-            text="START",
+            image=('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
+            text="START GAME",
             pos=(0, 0, 0.02),
-            frameColor=(0.14, 0.24, 0.16, 0.95),
+            scale=(0.48, 1, 0.070),
+            text_scale=0.50,
+            text_pos=(0, -0.14),
             text_fg=(0.35, 1.0, 0.55, 1.0),
             command=self.on_start,
-            **btn_style,
             **self.btn_font_kw
         )
+        self.btn_start.setTransparency(TransparencyAttrib.MAlpha)
 
         self.btn_rank = DirectButton(
             parent=self.intro_frame,
-            text="RANK",
+            image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
+            text="RANKING",
             pos=(0, 0, -0.15),
-            frameColor=(0.20, 0.18, 0.12, 0.95),
+            scale=(0.48, 1, 0.070),
+            text_scale=0.50,
+            text_pos=(0, -0.14),
             text_fg=(1.0, 0.85, 0.25, 1.0),
             command=self.show_rank_modal,
-            **btn_style,
             **self.btn_font_kw
         )
+        self.btn_rank.setTransparency(TransparencyAttrib.MAlpha)
 
         self.btn_exit = DirectButton(
             parent=self.intro_frame,
+            image=('assets/ui/btn_danger_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_danger_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
             text="EXIT",
             pos=(0, 0, -0.32),
-            frameColor=(0.22, 0.12, 0.12, 0.95),
-            text_fg=(1.0, 0.4, 0.4, 1.0),
+            scale=(0.48, 1, 0.070),
+            text_scale=0.50,
+            text_pos=(0, -0.14),
+            text_fg=(1.0, 0.45, 0.45, 1.0),
             command=self.on_exit,
-            **btn_style,
             **self.btn_font_kw
         )
+        self.btn_exit.setTransparency(TransparencyAttrib.MAlpha)
 
     def _setup_rank_ui(self):
         """기록 랭킹 팝업 모달창"""
         self.rank_modal = DirectFrame(
-            frameColor=(0.06, 0.07, 0.09, 0.96),
+            image='assets/ui/panel_modal_bg.png',
+            relief=None,
             frameSize=(-1.10, 1.10, -0.80, 0.80),
+            scale=(1.0, 1, 1.0),
             pos=(0, 0, 0)
         )
+        self.rank_modal.setTransparency(TransparencyAttrib.MAlpha)
 
         self.rank_title = OnscreenText(
             text="[ 생존 & 탈출 기록 랭킹 (RANKING) ]",
@@ -401,18 +618,62 @@ class UIManager:
 
         self.btn_close_rank = DirectButton(
             parent=self.rank_modal,
+            image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
             text="닫기 (CLOSE)",
             pos=(0, 0, -0.68),
-            scale=0.052,
-            relief=DGG.RAISED,
-            frameColor=(0.18, 0.18, 0.22, 0.95),
+            scale=(0.40, 1, 0.058),
+            text_scale=0.55,
+            text_pos=(0, -0.15),
             text_fg=(0.95, 0.95, 0.95, 1.0),
-            borderWidth=(0.005, 0.005),
-            pad=(0.35, 0.14),
             command=self.hide_rank_modal,
             **self.btn_font_kw
         )
+        self.btn_close_rank.setTransparency(TransparencyAttrib.MAlpha)
         self.rank_modal.hide()
+
+    def _set_hud_cluster_visible(self, visible: bool):
+        """인게임 HUD 요소 일괄 표시/숨김 제어"""
+        nodes = [
+            getattr(self, 'vignette_dark', None),
+            getattr(self, 'vignette_blood', None),
+            getattr(self, 'crosshair', None),
+            getattr(self, 'panel_hud_top', None),
+            getattr(self, 'icon_radar', None),
+            getattr(self, 'hud_text', None),
+            getattr(self, 'timer_text', None),
+            getattr(self, 'icon_hp', None),
+            getattr(self, 'bar_frame_hp', None),
+            getattr(self, 'bar_fill_hp', None),
+            getattr(self, 'hp_text', None),
+            getattr(self, 'icon_stamina', None),
+            getattr(self, 'bar_frame_stamina', None),
+            getattr(self, 'bar_fill_stamina', None),
+            getattr(self, 'stamina_text', None),
+            getattr(self, 'icon_exp', None),
+            getattr(self, 'bar_frame_exp', None),
+            getattr(self, 'bar_fill_exp', None),
+            getattr(self, 'exp_text', None),
+            getattr(self, 'icon_relic', None),
+            getattr(self, 'relic_badge_text', None),
+            getattr(self, 'panel_hud_ammo', None),
+            getattr(self, 'icon_ammo', None),
+            getattr(self, 'ammo_text', None),
+            getattr(self, 'guide_text', None),
+        ]
+        for n in nodes:
+            if n is not None:
+                if visible:
+                    n.show()
+                else:
+                    n.hide()
+        if not visible:
+            if hasattr(self, 'bar_frame_defense') and self.bar_frame_defense:
+                self.bar_frame_defense.hide()
+            if hasattr(self, 'bar_fill_defense') and self.bar_fill_defense:
+                self.bar_fill_defense.hide()
+            if hasattr(self, 'door_status_text') and self.door_status_text:
+                self.door_status_text.hide()
 
     def show_intro(self):
         """인트로 화면 표시"""
@@ -436,27 +697,11 @@ class UIManager:
         self.victory_desc.hide()
         self.btn_game_menu.hide()
         self.btn_game_rank.hide()
-
-        self.crosshair.show()
-        self.timer_text.show()
-        self.ammo_text.show()
-        self.hud_text.show()
-        self.stamina_text.show()
-        self.hp_text.show()
-        self.exp_text.show()
-        self.guide_text.show()
+        self._set_hud_cluster_visible(True)
 
     def hide_all_ingame(self):
         """인게임 HUD 전체 숨김"""
-        self.crosshair.hide()
-        self.timer_text.hide()
-        self.ammo_text.hide()
-        self.hud_text.hide()
-        self.stamina_text.hide()
-        self.hp_text.hide()
-        self.exp_text.hide()
-        self.guide_text.hide()
-        self.door_status_text.hide()
+        self._set_hud_cluster_visible(False)
         self.hit_marker_text.setText("")
         self.stage_clear_banner.hide()
 
@@ -468,25 +713,22 @@ class UIManager:
         self.hit_marker_timer = 2.2
 
     def trigger_player_damage_flash(self, intensity=0.60):
-        """플레이어 피격 시 화면 붉은 플래시 효과"""
+        """플레이어 피격 시 화면 붉은 핏빛 비네트 효과"""
         self.damage_flash_alpha = intensity
         self.damage_flash['frameColor'] = (0.85, 0.05, 0.05, self.damage_flash_alpha)
+        if hasattr(self, 'vignette_blood') and self.vignette_blood:
+            self.vignette_blood.setColorScale(1, 1, 1, self.damage_flash_alpha)
 
     def trigger_crosshair_hit(self, is_kill=False, is_crit=False):
         """몬스터 타격 시 크로스헤어 적중 마커 표시 (치명타 시 골드 마커)"""
         self.crosshair_hit_timer = 0.22 if is_crit else 0.18
-        if is_crit:
-            self.crosshair.setText("※")
-            self.crosshair.setScale(0.096)
-            self.crosshair.setFg((1.0, 0.88, 0.15, 1.0))
-        elif is_kill:
-            self.crosshair.setText("X")
-            self.crosshair.setScale(0.088)
-            self.crosshair.setFg((1.0, 0.20, 0.20, 1.0))
-        else:
-            self.crosshair.setText("x")
-            self.crosshair.setScale(0.078)
-            self.crosshair.setFg((1.0, 0.40, 0.40, 1.0))
+        if hasattr(self.crosshair, 'setImage'):
+            if is_crit:
+                self.crosshair.setImage("assets/ui/crosshair_crit.png")
+                self.crosshair.setScale(0.054)
+            else:
+                self.crosshair.setImage("assets/ui/crosshair_hit.png")
+                self.crosshair.setScale(0.046)
 
     def set_crosshair_visible(self, visible: bool):
         """정밀 조준(ADS) 시 크로스헤어 표시/숨김 제어"""
@@ -497,22 +739,26 @@ class UIManager:
                 self.crosshair.hide()
 
     def trigger_low_hp_pulse(self, intensity=0.40):
-        """체력 30 미만 빈사 상태 시 심장박동 화면 붉은 펄스"""
+        """체력 30 미만 빈사 상태 시 심장박동 화면 붉은 비네트 펄스"""
         self.damage_flash_alpha = max(self.damage_flash_alpha, intensity)
         self.damage_flash['frameColor'] = (0.75, 0.04, 0.04, self.damage_flash_alpha)
+        if hasattr(self, 'vignette_blood') and self.vignette_blood:
+            self.vignette_blood.setColorScale(1, 1, 1, self.damage_flash_alpha)
 
     def update(self, dt):
         """HUD 실시간 애니메이션 (피격 플래시 페이드아웃, 크로스헤어 복구, 정전 경보 맥동)"""
         if self.damage_flash_alpha > 0.0:
             self.damage_flash_alpha = max(0.0, self.damage_flash_alpha - dt * 2.5)
             self.damage_flash['frameColor'] = (0.85, 0.05, 0.05, self.damage_flash_alpha)
+            if hasattr(self, 'vignette_blood') and self.vignette_blood:
+                self.vignette_blood.setColorScale(1, 1, 1, self.damage_flash_alpha)
 
         if self.crosshair_hit_timer > 0.0:
-            self.crosshair_hit_timer -= dt
+            self.crosshair_hit_timer = max(0.0, self.crosshair_hit_timer - dt)
             if self.crosshair_hit_timer <= 0.0:
-                self.crosshair.setText("+")
-                self.crosshair.setScale(0.065)
-                self.crosshair.setFg((1.0, 1.0, 1.0, 0.85))
+                if hasattr(self.crosshair, 'setImage'):
+                    self.crosshair.setImage("assets/ui/crosshair_default.png")
+                    self.crosshair.setScale(0.038)
 
         if self.hit_marker_timer > 0.0:
             self.hit_marker_timer -= dt
@@ -570,23 +816,22 @@ class UIManager:
         self.btn_game_menu.show()
         self.btn_game_rank.show()
 
-    # --- 텍스트 캐싱 기반 HUD 고속 업데이트 (프레임 페이싱 최적화) ---
+    # --- 텍스트 및 이미지 기반 HUD 고속 업데이트 ---
     def update_timer(self, time_left, stage=1):
         mins = int(time_left) // 60
         secs = int(time_left) % 60
         t_str = f"{mins:02d}:{secs:02d}"
-        stg_str = f"[ STAGE {stage} ]  "
 
         if time_left <= 10.0:
             flash = (int(time_left * 4) % 2 == 0)
             col = (1.0, 0.2, 0.2, 1.0) if flash else (1.0, 0.8, 0.8, 1.0)
-            msg = f"{stg_str}[ ! 탈출 제한시간: {t_str} (서두르세요!) ]"
+            msg = f"! {t_str} !"
         elif time_left <= 25.0:
             col = (1.0, 0.85, 0.2, 1.0)
-            msg = f"{stg_str}[ 탈출 제한시간: {t_str} ]"
+            msg = t_str
         else:
             col = (0.25, 0.95, 0.45, 1.0)
-            msg = f"{stg_str}[ 탈출 제한시간: {t_str} ]"
+            msg = t_str
 
         if msg != self._cached_timer_str:
             self.timer_text.setText(msg)
@@ -597,26 +842,30 @@ class UIManager:
 
     def update_ammo(self, ammo, max_ammo, reserve_ammo=0):
         if reserve_ammo > 0:
-            msg = f"[ 탄약: {ammo} / {max_ammo} (예비: {reserve_ammo}) ]"
+            msg = f"{ammo} / {max_ammo}  (+{reserve_ammo})"
         else:
-            msg = f"[ 탄약: {ammo} / {max_ammo} ]"
+            msg = f"{ammo} / {max_ammo}"
         if msg != self._cached_ammo_str:
             self.ammo_text.setText(msg)
+            if ammo <= 3:
+                self.ammo_text.setFg((1.0, 0.25, 0.25, 1.0))
+            else:
+                self.ammo_text.setFg((1.0, 0.90, 0.35, 1.0))
             self._cached_ammo_str = msg
 
     def update_stamina(self, stamina, max_stamina, is_sprinting=False, is_exhausted=False):
-        bars = int((stamina / max_stamina) * 15)
-        bar_str = "|" * bars + "." * (15 - bars)
-        stamina_pct = int(stamina)
+        pct = max(0.0, min(1.0, stamina / max(1.0, max_stamina)))
+        self._set_bar_percentage(self.bar_fill_stamina, pct, -0.96, 0.82, 0.28, 0.024)
 
+        stamina_pct = int(pct * 100)
         if is_exhausted:
-            msg = f"스테미나: [{bar_str}] {stamina_pct}% (탈진! 회복 대기...)"
+            msg = f"{stamina_pct}% (탈진!)"
             col = (1.0, 0.25, 0.25, 1.0)
         elif is_sprinting:
-            msg = f"스테미나: [{bar_str}] {stamina_pct}% (전력질주 중!)"
+            msg = f"{stamina_pct}% (달리기)"
             col = (1.0, 0.85, 0.2, 1.0)
         else:
-            msg = f"스테미나: [{bar_str}] {stamina_pct}%"
+            msg = f"{stamina_pct}%"
             col = (0.35, 0.95, 0.5, 0.95)
 
         if msg != self._cached_stamina_str:
@@ -625,6 +874,28 @@ class UIManager:
         if col != self._cached_stamina_col:
             self.stamina_text.setFg(col)
             self._cached_stamina_col = col
+
+    def update_hp_exp(self, hp, max_hp, exp, exp_to_next, level=1, stat_points=0):
+        pct_hp = max(0.0, min(1.0, hp / max(1.0, max_hp)))
+        self._set_bar_percentage(self.bar_fill_hp, pct_hp, -0.96, 0.88, 0.28, 0.024)
+        msg_hp = f"{int(hp)} / {int(max_hp)}"
+        if msg_hp != self._cached_hp_str:
+            self.hp_text.setText(msg_hp)
+            if pct_hp <= 0.25:
+                self.hp_text.setFg((1.0, 0.25, 0.25, 1.0))
+            elif pct_hp <= 0.55:
+                self.hp_text.setFg((1.0, 0.85, 0.2, 1.0))
+            else:
+                self.hp_text.setFg((0.20, 0.95, 0.40, 1.0))
+            self._cached_hp_str = msg_hp
+
+        pct_exp = max(0.0, min(1.0, exp / max(1.0, exp_to_next)))
+        self._set_bar_percentage(self.bar_fill_exp, pct_exp, -0.96, 0.76, 0.28, 0.024)
+        sp_tag = f" [스탯 +{stat_points}]" if stat_points > 0 else ""
+        msg_exp = f"[LV.{level}] {int(exp)}/{int(exp_to_next)}{sp_tag}"
+        if msg_exp != self._cached_exp_str:
+            self.exp_text.setText(msg_exp)
+            self._cached_exp_str = msg_exp
 
     def update_hud(self, px, py, escape_pos=None, heading=0.0):
         if escape_pos:
@@ -652,10 +923,10 @@ class UIManager:
                 dir_str = "↙ 후방 좌측"
 
             if dist <= 25.0:
-                msg = f"[ 비상 탈출구: {dist:.0f}m ({dir_str}) ◎ 근접 신호 감지! ]"
+                msg = f"[ 비상 탈출구: {dist:.0f}m ({dir_str}) ◎ 근접! ]"
                 col = (0.35, 1.0, 0.45, 1.0)
             elif dist <= 60.0:
-                msg = f"[ 비상 탈출구: {dist:.0f}m ({dir_str}) ◎ ]"
+                msg = f"[ 비상 탈출구: {dist:.0f}m ({dir_str}) ]"
                 col = (0.95, 0.85, 0.35, 1.0)
             else:
                 msg = f"[ 비상 탈출구 신호: {dist:.0f}m ({dir_str}) ]"
@@ -678,10 +949,25 @@ class UIManager:
             if fg is not None:
                 self.door_status_text.setFg(fg)
             self.door_status_text.show()
+            self.bar_frame_defense.show()
+
+            # "비상문 개방 중: 3.5s / 5.0s" 추출하여 하저드바 비율 갱신
+            if "개방 중:" in msg and "/ 5.0s" in msg:
+                try:
+                    sec_str = msg.split("개방 중:")[1].split("s")[0].strip()
+                    sec = float(sec_str)
+                    pct = max(0.0, min(1.0, sec / 5.0))
+                    self._set_bar_percentage(self.bar_fill_defense, pct, 0, 0.60, 0.42, 0.032)
+                except Exception:
+                    pass
+            elif "중단" in msg:
+                self._set_bar_percentage(self.bar_fill_defense, 0.0, 0, 0.60, 0.42, 0.032)
         else:
             if not self.door_status_text.isHidden():
                 self.door_status_text.hide()
                 self._cached_door_str = ""
+            self.bar_frame_defense.hide()
+            self.bar_fill_defense.hide()
 
     # --- 랭킹 입출력 관리 ---
     def load_rankings(self):
@@ -755,49 +1041,26 @@ class UIManager:
         else:
             self.intro_frame.show()
 
-    # --- 플레이어 체력 및 경험치 HUD 업데이트 ---
-    def update_hp_exp(self, hp, max_hp, exp, exp_to_next, level=1, stat_points=0):
-        pct_hp = max(0.0, min(1.0, hp / max(1.0, max_hp)))
-        bars_hp = int(pct_hp * 15)
-        bar_hp_str = "|" * bars_hp + "." * (15 - bars_hp)
-        msg_hp = f"체  력: [{bar_hp_str}] {int(hp)}/{int(max_hp)}"
-
-        if msg_hp != self._cached_hp_str:
-            self.hp_text.setText(msg_hp)
-            if pct_hp <= 0.25:
-                self.hp_text.setFg((1.0, 0.2, 0.2, 1.0))
-            elif pct_hp <= 0.55:
-                self.hp_text.setFg((1.0, 0.85, 0.2, 1.0))
-            else:
-                self.hp_text.setFg((0.20, 0.95, 0.40, 1.0))
-            self._cached_hp_str = msg_hp
-
-        pct_exp = max(0.0, min(1.0, exp / max(1.0, exp_to_next)))
-        bars_exp = int(pct_exp * 15)
-        bar_exp_str = "|" * bars_exp + "." * (15 - bars_exp)
-        sp_tag = f" [스탯P +{stat_points}]" if stat_points > 0 else ""
-        msg_exp = f"[LV. {level}{sp_tag}] EXP: [{bar_exp_str}] {int(exp)}/{int(exp_to_next)}"
-
-        if msg_exp != self._cached_exp_str:
-            self.exp_text.setText(msg_exp)
-            self._cached_exp_str = msg_exp
-
-    # --- [스테이지 클리어: 스탯 분배 상점 모달] ---
+    # --- [스테이지 클리어: 스탯 분배 상점 모달 (이미지 기반 배경/카드/버튼)] ---
     def _setup_shop_ui(self):
         self.shop_player = None
         self.shop_combat = None
         self.on_shop_confirm = None
+        self.on_escape_victory = None
 
         self.shop_modal = DirectFrame(
-            frameColor=(0.06, 0.07, 0.09, 0.98),
+            image='assets/ui/panel_modal_bg.png',
+            relief=None,
             frameSize=(-1.28, 1.28, -0.88, 0.88),
+            scale=(1.0, 1, 1.0),
             pos=(0, 0, 0)
         )
+        self.shop_modal.setTransparency(TransparencyAttrib.MAlpha)
 
         self.shop_title = OnscreenText(
             text="[ STAGE CLEAR! 스탯 분배 및 보급소 ]",
             parent=self.shop_modal,
-            pos=(0, 0.75),
+            pos=(0, 0.72),
             scale=0.058,
             fg=(1.0, 0.85, 0.25, 1.0),
             shadow=(0, 0, 0, 0.95),
@@ -808,7 +1071,7 @@ class UIManager:
         self.shop_desc = OnscreenText(
             text="비상탈출구를 사수했습니다! 스탯 포인트를 분배하고 고대 미궁의 저주받은 유물을 선택하세요.",
             parent=self.shop_modal,
-            pos=(0, 0.67),
+            pos=(0, 0.64),
             scale=0.034,
             fg=(0.85, 0.88, 0.92, 0.95),
             shadow=(0, 0, 0, 0.9),
@@ -820,7 +1083,7 @@ class UIManager:
         self.shop_stat_points_text = OnscreenText(
             text="[ 보유 스탯 포인트: 0 P ]",
             parent=self.shop_modal,
-            pos=(0, 0.58),
+            pos=(0, 0.55),
             scale=0.046,
             fg=(1.0, 0.88, 0.25, 1.0),
             shadow=(0, 0, 0, 0.95),
@@ -830,10 +1093,11 @@ class UIManager:
         )
 
         btn_alloc_style = {
-            "relief": DGG.RAISED,
-            "borderWidth": (0.005, 0.005),
-            "scale": 0.042,
-            "pad": (0.32, 0.14)
+            "image": ('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+            "relief": None,
+            "scale": (0.24, 1, 0.046),
+            "text_scale": 0.55,
+            "text_pos": (0, -0.14)
         }
 
         # --- 1단: 스탯 강화 4종 (2열 그리드 배치) ---
@@ -841,7 +1105,7 @@ class UIManager:
         self.stat_label_atk = OnscreenText(
             text="[공격력] 현재: 35 (+5)",
             parent=self.shop_modal,
-            pos=(-1.12, 0.47),
+            pos=(-1.12, 0.44),
             scale=0.038,
             fg=(1.0, 0.80, 0.40, 1.0),
             align=TextNode.ALeft,
@@ -851,20 +1115,20 @@ class UIManager:
         self.btn_alloc_atk = DirectButton(
             parent=self.shop_modal,
             text="[ +1 강화 ]",
-            pos=(-0.22, 0, 0.48),
-            frameColor=(0.28, 0.16, 0.16, 0.95),
+            pos=(-0.20, 0, 0.45),
             text_fg=(1.0, 0.85, 0.4, 1.0),
             command=self._allocate,
             extraArgs=["ATK"],
             **btn_alloc_style,
             **self.btn_font_kw
         )
+        self.btn_alloc_atk.setTransparency(TransparencyAttrib.MAlpha)
 
         # 1-2. 이동 속도 (좌측 하단)
         self.stat_label_spd = OnscreenText(
             text="[이동 속도] 현재: 100% (+8%)",
             parent=self.shop_modal,
-            pos=(-1.12, 0.36),
+            pos=(-1.12, 0.33),
             scale=0.038,
             fg=(0.45, 0.85, 1.0, 1.0),
             align=TextNode.ALeft,
@@ -874,20 +1138,20 @@ class UIManager:
         self.btn_alloc_spd = DirectButton(
             parent=self.shop_modal,
             text="[ +1 강화 ]",
-            pos=(-0.22, 0, 0.37),
-            frameColor=(0.14, 0.20, 0.30, 0.95),
+            pos=(-0.20, 0, 0.34),
             text_fg=(0.45, 0.85, 1.0, 1.0),
             command=self._allocate,
             extraArgs=["SPD"],
             **btn_alloc_style,
             **self.btn_font_kw
         )
+        self.btn_alloc_spd.setTransparency(TransparencyAttrib.MAlpha)
 
         # 1-3. 최대 체력 (우측)
         self.stat_label_hp = OnscreenText(
             text="[최대 체력] 현재: 100 (+25)",
             parent=self.shop_modal,
-            pos=(0.04, 0.47),
+            pos=(0.06, 0.44),
             scale=0.038,
             fg=(0.40, 1.0, 0.60, 1.0),
             align=TextNode.ALeft,
@@ -897,20 +1161,20 @@ class UIManager:
         self.btn_alloc_hp = DirectButton(
             parent=self.shop_modal,
             text="[ +1 강화 ]",
-            pos=(0.94, 0, 0.48),
-            frameColor=(0.14, 0.26, 0.16, 0.95),
+            pos=(0.96, 0, 0.45),
             text_fg=(0.4, 1.0, 0.6, 1.0),
             command=self._allocate,
             extraArgs=["HP"],
             **btn_alloc_style,
             **self.btn_font_kw
         )
+        self.btn_alloc_hp.setTransparency(TransparencyAttrib.MAlpha)
 
         # 1-4. 최대 탄약 (우측 하단)
         self.stat_label_ammo = OnscreenText(
             text="[최대 탄약] 현재: 12발 (+2발)",
             parent=self.shop_modal,
-            pos=(0.04, 0.36),
+            pos=(0.06, 0.33),
             scale=0.038,
             fg=(1.0, 0.92, 0.40, 1.0),
             align=TextNode.ALeft,
@@ -920,20 +1184,20 @@ class UIManager:
         self.btn_alloc_ammo = DirectButton(
             parent=self.shop_modal,
             text="[ +1 강화 ]",
-            pos=(0.94, 0, 0.37),
-            frameColor=(0.26, 0.24, 0.14, 0.95),
+            pos=(0.96, 0, 0.34),
             text_fg=(1.0, 0.92, 0.4, 1.0),
             command=self._allocate,
             extraArgs=["AMMO"],
             **btn_alloc_style,
             **self.btn_font_kw
         )
+        self.btn_alloc_ammo.setTransparency(TransparencyAttrib.MAlpha)
 
-        # --- 2단: 저주받은 유물 선택 (3개 카드) ---
+        # --- 2단: 저주받은 유물 선택 (3개 이미지 카드) ---
         self.relic_section_title = OnscreenText(
             text="[ 고대 미궁의 저주받은 유물 (1개 선택 또는 다음 스테이지로 스킵) ]",
             parent=self.shop_modal,
-            pos=(0, 0.23),
+            pos=(0, 0.22),
             scale=0.044,
             fg=(0.95, 0.72, 1.0, 1.0),
             shadow=(0, 0, 0, 0.95),
@@ -948,16 +1212,18 @@ class UIManager:
         for i in range(3):
             card_f = DirectFrame(
                 parent=self.shop_modal,
-                frameColor=(0.10, 0.11, 0.16, 0.97),
+                image='assets/ui/card_relic_bg.png',
+                relief=None,
                 frameSize=(-0.36, 0.36, -0.21, 0.21),
                 pos=(card_xs[i], 0, -0.04),
-                relief=DGG.RIDGE,
-                borderWidth=(0.005, 0.005)
+                scale=(1.0, 1, 1.0)
             )
+            card_f.setTransparency(TransparencyAttrib.MAlpha)
+
             r_title = OnscreenText(
                 text="",
                 parent=card_f,
-                pos=(0, 0.13),
+                pos=(0, 0.12),
                 scale=0.042,
                 fg=(1.0, 0.88, 0.35, 1.0),
                 align=TextNode.ACenter,
@@ -967,7 +1233,7 @@ class UIManager:
             r_pro = OnscreenText(
                 text="",
                 parent=card_f,
-                pos=(0, 0.04),
+                pos=(0, 0.03),
                 scale=0.033,
                 fg=(0.35, 1.0, 0.55, 1.0),
                 align=TextNode.ACenter,
@@ -977,7 +1243,7 @@ class UIManager:
             r_con = OnscreenText(
                 text="",
                 parent=card_f,
-                pos=(0, -0.04),
+                pos=(0, -0.05),
                 scale=0.033,
                 fg=(1.0, 0.38, 0.38, 1.0),
                 align=TextNode.ACenter,
@@ -986,18 +1252,20 @@ class UIManager:
             )
             r_btn = DirectButton(
                 parent=card_f,
+                image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+                relief=None,
                 text="[ 선택 획득 ]",
                 pos=(0, 0, -0.14),
-                scale=0.042,
-                relief=DGG.RAISED,
-                frameColor=(0.20, 0.15, 0.30, 0.95),
+                scale=(0.30, 1, 0.044),
+                text_scale=0.55,
+                text_pos=(0, -0.15),
                 text_fg=(0.95, 0.80, 1.0, 1.0),
-                borderWidth=(0.005, 0.005),
-                pad=(0.35, 0.12),
                 command=self._select_relic,
                 extraArgs=[i],
                 **self.btn_font_kw
             )
+            r_btn.setTransparency(TransparencyAttrib.MAlpha)
+
             self.relic_cards.append({
                 "frame": card_f,
                 "title": r_title,
@@ -1022,32 +1290,34 @@ class UIManager:
         # 다음 스테이지 시작 버튼
         self.btn_start_next = DirectButton(
             parent=self.shop_modal,
+            image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
             text="다음 스테이지 시작 (START NEXT STAGE)",
             pos=(0, 0, -0.48),
-            scale=0.058,
-            relief=DGG.RAISED,
-            frameColor=(0.18, 0.32, 0.20, 0.98),
+            scale=(0.54, 1, 0.058),
+            text_scale=0.52,
+            text_pos=(0, -0.15),
             text_fg=(0.35, 1.0, 0.55, 1.0),
-            borderWidth=(0.006, 0.006),
-            pad=(0.50, 0.18),
             command=self._confirm_shop_and_start,
             **self.btn_font_kw
         )
+        self.btn_start_next.setTransparency(TransparencyAttrib.MAlpha)
 
         # 미궁 완전 탈출 승리 버튼 (STAGE 3 이상 클리어 시 선택 가능)
         self.btn_escape_victory = DirectButton(
             parent=self.shop_modal,
+            image=('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
             text="★ 미궁 완전 탈출 (VICTORY ESCAPE) ★",
             pos=(0.35, 0, -0.48),
-            scale=0.052,
-            relief=DGG.RAISED,
-            frameColor=(0.12, 0.35, 0.50, 0.98),
+            scale=(0.52, 1, 0.054),
+            text_scale=0.52,
+            text_pos=(0, -0.15),
             text_fg=(0.40, 0.95, 1.0, 1.0),
-            borderWidth=(0.006, 0.006),
-            pad=(0.38, 0.16),
             command=self._confirm_escape_victory,
             **self.btn_font_kw
         )
+        self.btn_escape_victory.setTransparency(TransparencyAttrib.MAlpha)
         self.btn_escape_victory.hide()
 
         self.shop_modal.hide()
@@ -1098,12 +1368,14 @@ class UIManager:
         self.shop_msg_text.setText(f"★ [{relic['name']}] 유물을 장착했습니다! ({relic['desc']})")
         self.shop_msg_text.setFg((0.95, 0.75, 1.0, 1.0))
 
-        # 모든 유물 카드 비활성화
-        for c in self.relic_cards:
+        # 모든 유물 카드 비활성화 및 활성화 카드 하이라이트
+        for idx, c in enumerate(self.relic_cards):
             c["btn"]["state"] = DGG.DISABLED
-            c["btn"]["frameColor"] = (0.15, 0.15, 0.15, 0.8)
-            c["btn"]["text_fg"] = (0.5, 0.5, 0.5, 0.8)
-        self.relic_cards[card_idx]["btn"]["text"] = "[ 장착 완료 ]"
+            if idx == card_idx:
+                c["frame"]["image"] = 'assets/ui/card_relic_active.png'
+                c["btn"]["text"] = "[ 장착 완료 ]"
+            else:
+                c["btn"]["text"] = "[ 미선택 ]"
         self._refresh_shop_labels()
 
     def _confirm_shop_and_start(self):
@@ -1143,6 +1415,7 @@ class UIManager:
         self.offered_relics = random.sample(available, pick_count) if pick_count > 0 else []
 
         for i, card in enumerate(self.relic_cards):
+            card["frame"]["image"] = 'assets/ui/card_relic_bg.png'
             if i < len(self.offered_relics):
                 relic = self.offered_relics[i]
                 card["frame"].show()
@@ -1151,8 +1424,6 @@ class UIManager:
                 card["con"].setText(f"- {relic['con']}")
                 card["btn"]["state"] = DGG.NORMAL
                 card["btn"]["text"] = "[ 선택 획득 ]"
-                card["btn"]["frameColor"] = (0.20, 0.15, 0.30, 0.95)
-                card["btn"]["text_fg"] = (0.95, 0.80, 1.0, 1.0)
             else:
                 card["frame"].hide()
 
