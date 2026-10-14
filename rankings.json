@@ -465,5 +465,49 @@
     "ammo_left": 3,
     "reserve_ammo": 0,
     "ammo_used": 9
+  },
+  {
+    "timestamp": "2026-10-13 17:22:14",
+    "stage": 1,
+    "result": "사망 (검은 뱀 괴물)",
+    "success": false,
+    "time_elapsed": 13.3,
+    "time_left": 286.7,
+    "ammo_left": 0,
+    "reserve_ammo": 0,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-10-13 17:48:37",
+    "stage": 1,
+    "result": "사망 (혐오스런 진흙 오크)",
+    "success": false,
+    "time_elapsed": 9.7,
+    "time_left": 290.3,
+    "ammo_left": 10,
+    "reserve_ammo": 0,
+    "ammo_used": 2
+  },
+  {
+    "timestamp": "2026-10-13 17:49:25",
+    "stage": 2,
+    "result": "사망 (혐오스런 진흙 오크)",
+    "success": false,
+    "time_elapsed": 21.6,
+    "time_left": 278.4,
+    "ammo_left": 5,
+    "reserve_ammo": 24,
+    "ammo_used": 7
+  },
+  {
+    "timestamp": "2026-10-14 09:21:31",
+    "stage": 1,
+    "result": "사망 (매혹의 잿더미 마녀)",
+    "success": false,
+    "time_elapsed": 16.0,
+    "time_left": 284.0,
+    "ammo_left": 3,
+    "reserve_ammo": 0,
+    "ammo_used": 9
   }
 ]

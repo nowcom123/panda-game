@@ -66,6 +66,26 @@ class AudioManager:
         pwr_p = self._get_path("power_restored.wav")
         self.power_restored_sfx = self.loader.loadSfx(pwr_p) if pwr_p else None
 
+        # 7. 신규 전술 효과음 (재장전, 공이 클릭, 탄약 획득, 피격음, 방어/레벨업/스킬)
+        empty_p = self._get_path("empty_click.wav")
+        self.empty_click_sfx = self.loader.loadSfx(empty_p) if empty_p else None
+        reload_p = self._get_path("reload.wav")
+        self.reload_sfx = self.loader.loadSfx(reload_p) if reload_p else None
+        ammo_p = self._get_path("ammo_pickup.wav")
+        self.ammo_pickup_sfx = self.loader.loadSfx(ammo_p) if ammo_p else None
+        hurt_p = self._get_path("player_hurt.wav")
+        self.player_hurt_sfx = self.loader.loadSfx(hurt_p) if hurt_p else None
+        door_alarm_p = self._get_path("door_alarm.wav")
+        self.door_alarm_sfx = self.loader.loadSfx(door_alarm_p) if door_alarm_p else None
+        door_unlock_p = self._get_path("door_unlock.wav")
+        self.door_unlock_sfx = self.loader.loadSfx(door_unlock_p) if door_unlock_p else None
+        levelup_p = self._get_path("levelup.wav")
+        self.levelup_sfx = self.loader.loadSfx(levelup_p) if levelup_p else None
+        fireball_p = self._get_path("witch_fireball.wav")
+        self.witch_fireball_sfx = self.loader.loadSfx(fireball_p) if fireball_p else None
+        slam_p = self._get_path("orc_slam.wav")
+        self.orc_slam_sfx = self.loader.loadSfx(slam_p) if slam_p else None
+
     def _get_path(self, fname):
         full_p = os.path.join(self.audio_dir, fname)
         if os.path.exists(full_p):
@@ -166,6 +186,60 @@ class AudioManager:
         if self.power_restored_sfx:
             self.power_restored_sfx.setVolume(0.85)
             self.power_restored_sfx.play()
+
+    def play_empty_click(self):
+        """탄약 고갈 시 공이 격발음"""
+        if self.empty_click_sfx:
+            self.empty_click_sfx.setVolume(0.75)
+            self.empty_click_sfx.play()
+
+    def play_reload(self):
+        """탄창 장착 및 슬라이드 장전음"""
+        if self.reload_sfx:
+            self.reload_sfx.setVolume(0.85)
+            self.reload_sfx.play()
+
+    def play_ammo_pickup(self):
+        """탄약 상자 습득 차징 사운드"""
+        if self.ammo_pickup_sfx:
+            self.ammo_pickup_sfx.setVolume(0.80)
+            self.ammo_pickup_sfx.play()
+
+    def play_player_hurt(self):
+        """플레이어 피격 충격음"""
+        if self.player_hurt_sfx:
+            self.player_hurt_sfx.setVolume(0.90)
+            self.player_hurt_sfx.play()
+
+    def play_door_alarm(self):
+        """탈출문 방어 개방 비프음"""
+        if self.door_alarm_sfx:
+            self.door_alarm_sfx.setVolume(0.70)
+            self.door_alarm_sfx.play()
+
+    def play_door_unlock(self):
+        """탈출문 완전 개방 락 해제 사운드"""
+        if self.door_unlock_sfx:
+            self.door_unlock_sfx.setVolume(0.95)
+            self.door_unlock_sfx.play()
+
+    def play_levelup(self):
+        """레벨업 축하 아르페지오 사운드"""
+        if self.levelup_sfx:
+            self.levelup_sfx.setVolume(0.85)
+            self.levelup_sfx.play()
+
+    def play_witch_fireball(self):
+        """마녀 파이어볼 발사음"""
+        if self.witch_fireball_sfx:
+            self.witch_fireball_sfx.setVolume(0.85)
+            self.witch_fireball_sfx.play()
+
+    def play_orc_slam(self):
+        """오크 땅울림 지진파 강타음"""
+        if self.orc_slam_sfx:
+            self.orc_slam_sfx.setVolume(1.0)
+            self.orc_slam_sfx.play()
 
     def update(self, dt, dist_serpent, dist_skeleton, s_los, k_los):
         """프레임별 3D 오디오 리스너 및 몬스터 거리 감쇠/포효 갱신"""

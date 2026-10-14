@@ -112,10 +112,11 @@ class UIManager:
         )
 
         self.hud_text = OnscreenText(
-            text="위치: X=0.0, Y=0.0",
+            text="[ 비상 탈출구 신호 탐색 중... ]",
             pos=(-1.3, 0.92),
-            scale=0.045,
-            fg=(1, 1, 1, 0.9),
+            scale=0.043,
+            fg=(0.45, 0.85, 1.0, 0.95),
+            shadow=(0, 0, 0, 0.95),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
@@ -600,11 +601,48 @@ class UIManager:
             self.stamina_text.setFg(col)
             self._cached_stamina_col = col
 
-    def update_hud(self, px, py, rendered_count, total_count):
-        msg = f"위치: X={px:.1f}, Y={py:.1f} | 활성: {rendered_count}/{total_count} 청크"
+    def update_hud(self, px, py, escape_pos=None, heading=0.0):
+        if escape_pos:
+            dx = escape_pos[0] - px
+            dy = escape_pos[1] - py
+            dist = math.hypot(dx, dy)
+            target_h = math.degrees(math.atan2(-dx, dy))
+            rel_h = (target_h - heading + 180) % 360 - 180
+
+            if abs(rel_h) <= 22.5:
+                dir_str = "▲ 전방"
+            elif 22.5 < rel_h <= 67.5:
+                dir_str = "↗ 전방 우측"
+            elif 67.5 < rel_h <= 112.5:
+                dir_str = "▶ 우측"
+            elif 112.5 < rel_h <= 157.5:
+                dir_str = "↘ 후방 우측"
+            elif abs(rel_h) > 157.5:
+                dir_str = "▼ 후방"
+            elif -67.5 <= rel_h < -22.5:
+                dir_str = "↖ 전방 좌측"
+            elif -112.5 <= rel_h < -67.5:
+                dir_str = "◀ 좌측"
+            else:
+                dir_str = "↙ 후방 좌측"
+
+            if dist <= 25.0:
+                msg = f"[ 비상 탈출구: {dist:.0f}m ({dir_str}) ◎ 근접 신호 감지! ]"
+                col = (0.35, 1.0, 0.45, 1.0)
+            elif dist <= 60.0:
+                msg = f"[ 비상 탈출구: {dist:.0f}m ({dir_str}) ◎ ]"
+                col = (0.95, 0.85, 0.35, 1.0)
+            else:
+                msg = f"[ 비상 탈출구 신호: {dist:.0f}m ({dir_str}) ]"
+                col = (0.45, 0.85, 1.0, 0.95)
+        else:
+            msg = f"위치: X={px:.1f}, Y={py:.1f}"
+            col = (1, 1, 1, 0.9)
+
         if msg != self._cached_hud_str:
             self.hud_text.setText(msg)
             self._cached_hud_str = msg
+            self.hud_text.setFg(col)
 
     def update_door_status(self, msg, fg=None, show=True):
         if show:

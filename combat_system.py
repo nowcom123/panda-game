@@ -7,15 +7,65 @@ Combat System Module
 import math
 import random
 from panda3d.core import (
-    PointLight, Spotlight, PerspectiveLens, LineSegs, LColor, Vec3,
-    GeomVertexFormat, GeomVertexData, Geom, GeomNode, GeomTriangles, GeomVertexWriter,
-    TransparencyAttrib, PNMImage, Texture, CardMaker
+    PointLight, Spotlight, PerspectiveLens, LineSegs, LColor, Vec3
 )
 from constants import (
     CELL_SIZE, CHUNK_CELLS, MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
 from world_gen import cell_has_pillar
 from geometry import make_cube_to
+from collision import get_nearby_colliders
+
+
+def raycast_walls(chunks, ray_origin, ray_dir, max_dist=55.0):
+    """광선(Ray)과 월드 내 AABB 벽체 충돌체 간 최단 교차 거리 및 타격 지점 정밀 계산"""
+    px, py = ray_origin.x, ray_origin.y
+    dx, dy = ray_dir.x, ray_dir.y
+    if math.hypot(dx, dy) < 1e-4:
+        return max_dist, None
+
+    colliders = set()
+    for s in (0.0, 10.0, 20.0, 32.0, 44.0, max_dist):
+        sx = px + dx * s
+        sy = py + dy * s
+        for col in get_nearby_colliders(chunks, sx, sy, search_dist=5.5):
+            colliders.add(col)
+
+    closest_t = max_dist
+    for min_x, min_y, max_x, max_y in colliders:
+        if (max_x - min_x) < 0.5 and (max_y - min_y) < 0.5:
+            continue
+        p = [-dx, dx, -dy, dy]
+        q = [px - min_x, max_x - px, py - min_y, max_y - py]
+        t0, t1 = 0.0, max_dist
+        hit = True
+        for i in range(4):
+            if abs(p[i]) < 1e-6:
+                if q[i] < 0:
+                    hit = False
+                    break
+            else:
+                t = q[i] / p[i]
+                if p[i] < 0:
+                    if t > t1:
+                        hit = False
+                        break
+                    if t > t0:
+                        t0 = t
+                else:
+                    if t < t0:
+                        hit = False
+                        break
+                    if t < t1:
+                        t1 = t
+        if hit and 0.2 < t0 <= t1 and t0 < closest_t:
+            hit_z = ray_origin.z + ray_dir.z * t0
+            if 0.0 <= hit_z <= 9.0:
+                closest_t = t0
+
+    if closest_t < max_dist:
+        return closest_t, ray_origin + ray_dir * closest_t
+    return max_dist, None
 
 
 class CombatSystem:
@@ -43,11 +93,8 @@ class CombatSystem:
         self.ammo_drops = []
         self.hit_particles = []
 
-        # 정전 및 대기 안개 효과 상태
+        # 정전 상태
         self.is_blackout = False
-        self.beam_flicker_time = 0.0
-        self.mist_particles = []
-        self._setup_mist_particles()
 
         # 뷰모델 지오메트리 구축
         self._setup_viewmodel()
@@ -65,15 +112,14 @@ class CombatSystem:
         self.vm_flashlight.setHpr(-3.5, 2.0, 0)
 
         fl_body_col = LColor(0.12, 0.12, 0.14, 1.0)
-        fl_ring_col = LColor(0.28, 0.30, 0.34, 1.0)
-        fl_lens_col = LColor(1.0, 0.98, 0.88, 1.0)
+        fl_ring_col = LColor(0.24, 0.25, 0.28, 1.0)
+        fl_lens_rim = LColor(0.18, 0.19, 0.22, 1.0)
 
         make_cube_to(self.vm_flashlight, 0.08, 0.28, 0.08, fl_body_col, 0, 0, 0)
         make_cube_to(self.vm_flashlight, 0.11, 0.09, 0.11, fl_ring_col, 0, 0.17, 0)
-        glass = make_cube_to(self.vm_flashlight, 0.095, 0.02, 0.095, fl_lens_col, 0, 0.22, 0)
-        glass.setLightOff()
+        make_cube_to(self.vm_flashlight, 0.095, 0.02, 0.095, fl_lens_rim, 0, 0.22, 0)
 
-        # 손전등 Spotlight
+        # 손전등 Spotlight (원형 감쇠 빔, 부드러운 가장자리)
         spotlight = Spotlight('player_flashlight')
         spotlight.setColor((2.85, 2.70, 2.35, 1.0))
         spot_lens = PerspectiveLens()
@@ -81,20 +127,18 @@ class CombatSystem:
         spot_lens.setNearFar(0.15, 65.0)
         spotlight.setLens(spot_lens)
         spotlight.setAttenuation((1.0, 0.015, 0.0006))
+        spotlight.setExponent(55.0)
         self.pl_np = self.vm_flashlight.attachNewNode(spotlight)
         self.pl_np.setPos(0, 0.24, 0)
         self.render.setLight(self.pl_np)
 
-        # 근거리 필라이트
+        # 근거리 필라이트 (발밑 은은한 보조광)
         fill_light = PointLight('player_fill')
-        fill_light.setColor((0.18, 0.16, 0.14, 1.0))
-        fill_light.setAttenuation((1.0, 0.28, 0.08))
+        fill_light.setColor((0.14, 0.12, 0.10, 1.0))
+        fill_light.setAttenuation((1.0, 0.35, 0.12))
         self.fill_np = self.vm_flashlight.attachNewNode(fill_light)
         self.fill_np.setPos(0, 0.10, 0)
         self.render.setLight(self.fill_np)
-
-        # 손전등 입체 안개 광선 (Volumetric Light Cone)
-        self._setup_flashlight_beam()
 
         # --- (B) 오른손: 12발 권총 ---
         self.vm_pistol = self.vm_root.attachNewNode("vm_pistol")
@@ -135,11 +179,13 @@ class CombatSystem:
         self.muzzle_light_np.setPos(0, 0.35, 0.04)
 
     def shoot(self, monsters, player=None, game_state="PLAYING"):
-        """권총 사격 및 다중 몬스터 대상 레이캐스트 적중 판정"""
+        """권총 사격 및 다중 몬스터 대상 레이캐스트 적중 판정 (벽체 엄폐 판정 포함)"""
         if game_state != "PLAYING" or self.is_reloading or self.shoot_cooldown > 0.0:
             return
 
         if self.ammo <= 0:
+            if self.audio_mgr:
+                self.audio_mgr.play_empty_click()
             if self.reserve_ammo > 0:
                 self.ui_mgr.show_hit_marker("탄약 소진! [R] 키를 눌러 재장전하세요!", (1.0, 0.4, 0.4, 1.0))
             else:
@@ -154,15 +200,19 @@ class CombatSystem:
         self.muzzle_timer = 0.04
         self.muzzle_flash_geom.show()
         self.render.setLight(self.muzzle_light_np)
-        self.audio_mgr.play_gunshot()
+        if self.audio_mgr:
+            self.audio_mgr.play_gunshot()
         self.ui_mgr.update_ammo(self.ammo, self.max_ammo, self.reserve_ammo)
 
-        # 다중 몬스터 대상 레이캐스트 히트스캔
+        # 1. 벽체 충돌 레이캐스트 (벽 관통 사격 원천 차단)
         ray_origin = self.camera.getPos()
         ray_dir = self.camera.getQuat().getForward()
+        chunks = getattr(self.base, 'chunks', {})
+        wall_dist, wall_hit_pos = raycast_walls(chunks, ray_origin, ray_dir, max_dist=55.0)
 
+        # 2. 다중 몬스터 대상 레이캐스트 히트스캔 (벽 너머의 몬스터는 피격되지 않음)
         closest_monster = None
-        min_hit_dist = 999.0
+        min_hit_dist = wall_dist
 
         monster_list = monsters if isinstance(monsters, (list, tuple)) else [monsters]
         for m in monster_list:
@@ -173,10 +223,11 @@ class CombatSystem:
                 min_hit_dist = hit_dist
                 closest_monster = m
 
-        tracer_dist = min(55.0, min_hit_dist) if closest_monster is not None else 55.0
-        impact_world = ray_origin + ray_dir * tracer_dist
-
         if closest_monster is not None:
+            # 몬스터 타격
+            tracer_dist = min_hit_dist
+            impact_world = ray_origin + ray_dir * tracer_dist
+
             blackout_active = getattr(self.base, 'blackout_active', False)
             if player and hasattr(player, 'get_attack_power'):
                 dmg = player.get_attack_power(blackout_active=blackout_active)
@@ -210,14 +261,25 @@ class CombatSystem:
                 self.ui_mgr.show_hit_marker("")
                 self.hit_marker_timer = 0.0
 
-            if "뱀" in m_name:
-                self.audio_mgr.play_serpent_hit()
-            elif "해골" in m_name:
-                self.audio_mgr.play_skeleton_hit()
-            elif "오크" in m_name:
-                self.audio_mgr.play_gunshot()
-            else:
-                self.audio_mgr.play_serpent_hit()
+            if self.audio_mgr:
+                if "뱀" in m_name:
+                    self.audio_mgr.play_serpent_hit()
+                elif "해골" in m_name:
+                    self.audio_mgr.play_skeleton_hit()
+                elif "오크" in m_name:
+                    self.audio_mgr.play_gunshot()
+                else:
+                    self.audio_mgr.play_serpent_hit()
+
+        elif wall_hit_pos is not None:
+            # 벽체 피격 (콘크리트 스파크 분출)
+            tracer_dist = wall_dist
+            impact_world = wall_hit_pos
+            self.spawn_hit_particles(impact_world, is_blood=False)
+        else:
+            # 허공 사격 (최대 사거리 55m)
+            tracer_dist = 55.0
+            impact_world = ray_origin + ray_dir * tracer_dist
 
         # 발광 총알 궤적 (Bullet Tracer)
         cam_pos = self.camera.getPos()
@@ -227,11 +289,6 @@ class CombatSystem:
         cam_up = cam_quat.getUp()
 
         muzzle_world = cam_pos + cam_fwd * 0.86 + cam_right * 0.30 - cam_up * 0.22
-        tracer_dist = 55.0
-        if closest_monster is not None:
-            tracer_dist = min(tracer_dist, min_hit_dist)
-
-        impact_world = cam_pos + ray_dir * tracer_dist
 
         ls = LineSegs("bullet_tracer")
         ls.setThickness(3.6)
@@ -277,12 +334,16 @@ class CombatSystem:
         if game_state != "PLAYING" or self.is_reloading or self.ammo >= self.max_ammo:
             return
         if self.reserve_ammo <= 0:
+            if self.audio_mgr:
+                self.audio_mgr.play_empty_click()
             self.ui_mgr.show_hit_marker("예비 탄약이 없습니다! (탄약 상자를 탐색하세요)", (1.0, 0.3, 0.3, 1.0))
             self.hit_marker_timer = 1.8
             return
 
         self.is_reloading = True
         self.reload_timer = 1.2
+        if self.audio_mgr:
+            self.audio_mgr.play_reload()
         self.ui_mgr.show_hit_marker("재장전 중...", (0.9, 0.9, 0.9, 1.0))
         self.hit_marker_timer = 1.3
 
@@ -449,6 +510,8 @@ class CombatSystem:
                 dy = py - drop["pos"][1]
                 if math.hypot(dx, dy) <= 1.8:
                     self.reserve_ammo += 12
+                    if self.audio_mgr:
+                        self.audio_mgr.play_ammo_pickup()
                     self.ui_mgr.show_hit_marker("탄약 상자 획득! (+12발 예비탄)", (0.35, 1.0, 0.5, 1.0))
                     self.hit_marker_timer = 2.0
                     if "light_np" in drop and drop["light_np"] and not drop["light_np"].isEmpty():
@@ -468,191 +531,10 @@ class CombatSystem:
             self.bobbing_time += dt * 2.0
             sway_z = math.sin(self.bobbing_time) * 0.003
             self.vm_root.setPos(0, 0, sway_z)
-
-        # 손전등 볼륨메트릭 안개 광선 및 공기 중 3D 미스트 입자 갱신
-        self._update_flashlight_beam(dt)
-        self._update_mist_particles(dt, px, py)
-
-    def _setup_flashlight_beam(self):
-        """손전등 빛줄기 및 볼륨메트릭 안개 원뿔 (Volumetric Light Cone)"""
-        format = GeomVertexFormat.getV3c4()
-        vdata = GeomVertexData('fl_beam', format, Geom.UHStatic)
-        vertex = GeomVertexWriter(vdata, 'vertex')
-        color = GeomVertexWriter(vdata, 'color')
-
-        # 5개 링: 손전등 렌즈(y=0.25)부터 28m 전방까지 점진적 부드러운 안개 빛줄기 형성
-        rings = [
-            (0.25, 0.06, 0.00),   # 렌즈 시작점 (투명)
-            (1.20, 0.45, 0.16),   # 근거리 피크 광량 (살짝 밝은 중심부)
-            (5.50, 1.90, 0.09),   # 중근거리 안개 산란
-            (14.0, 4.80, 0.04),   # 원거리 감쇠
-            (28.0, 9.80, 0.00),   # 최원거리 0 페이드아웃
-        ]
-        segments = 16
-
-        for y, r, a in rings:
-            for i in range(segments):
-                angle = 2.0 * math.pi * i / segments
-                x = r * math.cos(angle)
-                z = r * math.sin(angle)
-                vertex.addData3(x, y, z)
-                color.addData4(1.0, 0.96, 0.88, a)
-
-        tris = GeomTriangles(Geom.UHStatic)
-        num_rings = len(rings)
-        for ring_idx in range(num_rings - 1):
-            r0 = ring_idx * segments
-            r1 = (ring_idx + 1) * segments
-            for i in range(segments):
-                nxt = (i + 1) % segments
-                tris.addVertices(r0 + i, r0 + nxt, r1 + nxt)
-                tris.addVertices(r0 + i, r1 + nxt, r1 + i)
-
-        geom = Geom(vdata)
-        geom.addPrimitive(tris)
-        node = GeomNode('volumetric_flashlight_beam')
-        node.addGeom(geom)
-        self.beam_np = self.vm_flashlight.attachNewNode(node)
-        self.beam_np.setTransparency(TransparencyAttrib.M_alpha)
-        self.beam_np.setTwoSided(True)
-        self.beam_np.setLightOff()
-        self.beam_np.setDepthWrite(False)
-        self.beam_np.setBin('transparent', 20)
-
-    def _setup_mist_particles(self):
-        """플레이어 주변 공기 중에 떠다니는 3D 안개/미스트 입자 시스템"""
-        pnm = PNMImage(64, 64, 4)
-        for x in range(64):
-            for y in range(64):
-                dx = (x - 31.5) / 31.5
-                dy = (y - 31.5) / 31.5
-                r = math.hypot(dx, dy)
-                a = max(0.0, min(1.0, 1.0 - r)) ** 1.8
-                pnm.setXel(x, y, 1.0, 1.0, 1.0)
-                pnm.setAlpha(x, y, a)
-        self.mist_tex = Texture('procedural_mist')
-        self.mist_tex.load(pnm)
-
-        cm = CardMaker('mist_sprite')
-        cm.setFrame(-2.0, 2.0, -2.0, 2.0)
-        mist_geom = cm.generate()
-
-        self.mist_root = self.render.attachNewNode("mist_particles_root")
-        self.mist_root.setTransparency(TransparencyAttrib.M_alpha)
-        self.mist_root.setLightOff()
-        self.mist_root.setDepthWrite(False)
-        self.mist_root.setBin('transparent', 21)
-
-        self.mist_particles = []
-        num_particles = 48
-
-        for _ in range(num_particles):
-            node = self.mist_root.attachNewNode(mist_geom)
-            node.setTexture(self.mist_tex)
-            node.setBillboardPointEye()
-
-            rx = random.uniform(-18.0, 18.0)
-            ry = random.uniform(-18.0, 18.0)
-            rz = random.uniform(0.5, 3.2)
-            node.setPos(rx, ry, rz)
-
-            scale = random.uniform(1.2, 2.8)
-            node.setScale(scale)
-
-            p_data = {
-                "node": node,
-                "rel_x": rx,
-                "rel_y": ry,
-                "z": rz,
-                "vx": random.uniform(-0.20, 0.20),
-                "vy": random.uniform(-0.20, 0.20),
-                "base_alpha": random.uniform(0.18, 0.38),
-                "rot": random.uniform(0.0, 360.0),
-                "rot_speed": random.uniform(-5.0, 5.0),
-            }
-            self.mist_particles.append(p_data)
-
-    def _update_flashlight_beam(self, dt):
-        """손전등 빛줄기 미세 흔들림 및 밥빙 연동"""
-        if not hasattr(self, 'beam_np') or self.beam_np.isEmpty():
-            return
-        self.beam_flicker_time += dt * 5.0
-        subtle_pulse = 1.0 + math.sin(self.beam_flicker_time) * 0.04
-        if self.is_blackout:
-            self.beam_np.setColorScale(1.10 * subtle_pulse, 0.22 * subtle_pulse, 0.18 * subtle_pulse, 1.25)
-        else:
-            self.beam_np.setColorScale(subtle_pulse, subtle_pulse, subtle_pulse, 1.0)
-
-    def _update_mist_particles(self, dt, px, py):
-        """플레이어 주변 안개 입자 부유 및 손전등 조명 반응 갱신"""
-        if not hasattr(self, 'mist_particles') or not self.mist_particles:
-            return
-        cam_pos = self.camera.getPos(self.render)
-        cam_fwd = self.camera.getQuat(self.render).getForward()
-
-        wrap_dist = 20.0
-        for p in self.mist_particles:
-            p["rel_x"] += p["vx"] * dt
-            p["rel_y"] += p["vy"] * dt
-            p["rot"] += p["rot_speed"] * dt
-            p["node"].setR(p["rot"])
-
-            if p["rel_x"] > wrap_dist:
-                p["rel_x"] -= wrap_dist * 2.0
-            elif p["rel_x"] < -wrap_dist:
-                p["rel_x"] += wrap_dist * 2.0
-
-            if p["rel_y"] > wrap_dist:
-                p["rel_y"] -= wrap_dist * 2.0
-            elif p["rel_y"] < -wrap_dist:
-                p["rel_y"] += wrap_dist * 2.0
-
-            world_x = px + p["rel_x"]
-            world_y = py + p["rel_y"]
-            p["node"].setPos(world_x, world_y, p["z"])
-
-            # 손전등 광선 안에 있는지 판정
-            dx = world_x - cam_pos.x
-            dy = world_y - cam_pos.y
-            dz = p["z"] - cam_pos.z
-            dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-
-            if dist > 0.1:
-                dir_x = dx / dist
-                dir_y = dy / dist
-                dir_z = dz / dist
-                dot = dir_x * cam_fwd.x + dir_y * cam_fwd.y + dir_z * cam_fwd.z
-            else:
-                dot = 1.0
-
-            # 손전등 원뿔(스포트라이트 fov 44도 = 반각 22도, cos(22) = 0.927. 주변산란 포함 dot > 0.70)
-            in_light = max(0.0, (dot - 0.70) / 0.25) if dot > 0.70 else 0.0
-            dist_fade = max(0.0, 1.0 - (dist / 26.0))
-            light_boost = in_light * dist_fade
-
-            if self.is_blackout:
-                # 비상 정전 프로토콜: 핏빛 붉은 안개가 손전등 빛을 받아 붉게 산란
-                r = 0.55 + 0.45 * light_boost
-                g = 0.05 + 0.12 * light_boost
-                b = 0.05 + 0.10 * light_boost
-                alpha = p["base_alpha"] * (0.45 + 0.55 * light_boost)
-            else:
-                # 일반 모드: 스산하고 자욱한 차가운 백색 안개
-                r = 0.40 + 0.60 * light_boost
-                g = 0.38 + 0.58 * light_boost
-                b = 0.35 + 0.55 * light_boost
-                alpha = p["base_alpha"] * (0.35 + 0.65 * light_boost)
-
-            p["node"].setColorScale(r, g, b, alpha)
-
     def set_blackout_mode(self, is_active: bool):
-        """정전 비상등 핏빛 안개 모드 전환"""
+        """정전 비상등 핏빛 조명 모드 전환"""
         self.is_blackout = is_active
         if is_active:
-            if hasattr(self, 'beam_np') and not self.beam_np.isEmpty():
-                self.beam_np.setColorScale(1.10, 0.22, 0.18, 1.25)
-            self.pl_np.node().setColor((2.70, 1.80, 1.60, 1.0))
+            self.pl_np.node().setColor((2.70, 0.85, 0.70, 1.0))
         else:
-            if hasattr(self, 'beam_np') and not self.beam_np.isEmpty():
-                self.beam_np.setColorScale(1.0, 1.0, 1.0, 1.0)
             self.pl_np.node().setColor((2.85, 2.70, 2.35, 1.0))

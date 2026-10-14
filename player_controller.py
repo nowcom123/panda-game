@@ -128,7 +128,8 @@ class PlayerController:
             self.exp_to_next = int(self.exp_to_next * 1.5)
             self.stat_points += 3  # 레벨업마다 3 스탯 포인트 지급
             leveled = True
-            # 레벨업 UI 텍스트 완전 제거 (조용히 EXP 바 및 스탯 포인트로만 반영)
+        if leveled and self.audio_mgr:
+            self.audio_mgr.play_levelup()
         self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
         return leveled
 
@@ -155,7 +156,8 @@ class PlayerController:
         # 플레이어 피격 시각 효과: 화면 붉은 플래시 및 카메라 충격 흔들림
         self.ui_mgr.trigger_player_damage_flash(intensity=0.65)
         self.trigger_quake_shake(intensity=1.8, duration=0.35)
-        self.audio_mgr.play_skeleton_hit()
+        if self.audio_mgr:
+            self.audio_mgr.play_player_hurt()
 
         return self.hp <= 0.0
 
@@ -371,7 +373,8 @@ class PlayerController:
             self.footstep_timer += dt
             if self.footstep_timer >= step_interval:
                 self.footstep_timer = 0.0
-                self.audio_mgr.play_footstep(self.is_sprinting)
+                if self.audio_mgr:
+                    self.audio_mgr.play_footstep(self.is_sprinting)
 
             curr_pos = self.camera.getPos()
             new_x, new_y = resolve_collision(chunks, curr_pos.x, curr_pos.y, disp.x, disp.y, radius=PLAYER_RADIUS)

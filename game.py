@@ -275,8 +275,6 @@ class LiminalInfiniteLoop(ShowBase):
         self.game_state = "INTRO"
         self.player.lock_mouse(False)
         self.combat.vm_root.hide()
-        if hasattr(self.combat, 'mist_root') and self.combat.mist_root:
-            self.combat.mist_root.hide()
         self.combat.set_blackout_mode(False)
         self.amb_np.node().setColor((0.005, 0.005, 0.006, 1.0))
         self.render.clearLight(self.combat.pl_np)
@@ -289,8 +287,6 @@ class LiminalInfiniteLoop(ShowBase):
         self.game_state = "PLAYING"
         self.restart_game()
         self.combat.vm_root.show()
-        if hasattr(self.combat, 'mist_root') and self.combat.mist_root:
-            self.combat.mist_root.show()
         self.render.setLight(self.combat.pl_np)
         self.render.setLight(self.combat.fill_np)
         self.ui_mgr.start_game_ui()
@@ -589,6 +585,23 @@ class LiminalInfiniteLoop(ShowBase):
             lamp.setLightOff()
             self.door_lamps.append(lamp)
 
+        # 벙커 상단 비상 유도 비콘등 (Emergency Beacon Strobe Light)
+        if hasattr(self, 'beacon_light_np') and self.beacon_light_np and not self.beacon_light_np.isEmpty():
+            self.render.clearLight(self.beacon_light_np)
+            self.beacon_light_np.removeNode()
+
+        b_light = PointLight('escape_beacon_light')
+        b_light.setColor((0.35, 1.5, 0.55, 1.0))
+        b_light.setAttenuation((1.0, 0.05, 0.006))
+        self.beacon_light_np = self.escape_portal_np.attachNewNode(b_light)
+        self.beacon_light_np.setPos(0, 0, 4.3)
+        self.render.setLight(self.beacon_light_np)
+
+        # 비콘 발광 큐브
+        beacon_bulb = make_cube_to(self.escape_portal_np, 0.45, 0.45, 0.55, LColor(0.2, 1.0, 0.4, 1.0), 0, 0, 4.3)
+        beacon_bulb.setLightOff()
+        self.beacon_bulb = beacon_bulb
+
     # --- 청크 스트리밍 및 컬링 최적화 ---
     def update_chunks(self, force=False):
         px, py = self.camera.getX(), self.camera.getY()
@@ -736,7 +749,7 @@ class LiminalInfiniteLoop(ShowBase):
                     impact = m.slam_ground(dt)
                     if impact:
                         self.shockwaves.append(GroundShockwave(self.render, mx, my))
-                        self.audio_mgr.play_skeleton_hit()
+                        self.audio_mgr.play_orc_slam()
                         if dist <= 11.5:
                             self.player.apply_slow(duration=2.8, factor=0.40)
                             self.player.trigger_quake_shake(intensity=2.6, duration=0.85)
@@ -764,7 +777,7 @@ class LiminalInfiniteLoop(ShowBase):
                         orb_pos = (mx, my, m.pos.z + 1.5)
                         target_pos = (px, py, PLAYER_EYE_HEIGHT)
                         self.fireballs.append(Fireball(self.render, orb_pos, target_pos))
-                        self.audio_mgr.play_serpent_hit()
+                        self.audio_mgr.play_witch_fireball()
 
                     dx = px - mx
                     dy = py - my
@@ -854,7 +867,6 @@ class LiminalInfiniteLoop(ShowBase):
             dz = abs(fb.pos.z - pz)
             if dist_p < 0.95 and dz < 1.6:
                 is_dead = self.player.take_damage(fb.damage)
-                self.audio_mgr.play_serpent_hit()
                 fb.destroy()
                 self.fireballs.remove(fb)
                 if is_dead:
@@ -874,8 +886,14 @@ class LiminalInfiniteLoop(ShowBase):
         """탈출구 앞 2.8m 방어 판정 (5초 사수 시 상점 모달 팝업)"""
         dist_exit = math.hypot(px - self.escape_pos[0], py - self.escape_pos[1])
         if dist_exit <= 2.8:
+            old_timer = self.door_hold_timer
             self.door_hold_timer -= dt
             progress_sec = 5.0 - max(0.0, self.door_hold_timer)
+
+            # 매 1초마다 전자 보안 비프음 재생
+            if int(progress_sec) != int(5.0 - max(0.0, old_timer)):
+                self.audio_mgr.play_door_alarm()
+
             pct = max(0.0, min(1.0, progress_sec / 5.0))
             bars = int(pct * 16)
             bar_str = "■" * bars + "□" * (16 - bars)
@@ -888,6 +906,7 @@ class LiminalInfiniteLoop(ShowBase):
             if self.door_hold_timer <= 0.0:
                 for lamp in self.door_lamps:
                     lamp.setColor(LColor(0.2, 1.0, 0.4, 1.0))
+                self.audio_mgr.play_door_unlock()
                 self.door_hold_timer = 5.0
                 # 던전 크롤러: 스탯 분배 및 상점 모달 팝업 & 다음 스테이지 준비
                 self.game_state = "SHOP"
@@ -1022,14 +1041,22 @@ class LiminalInfiniteLoop(ShowBase):
         if self._update_door_defense(dt, px, py):
             return cont
 
+        # 12-1. 비상 비콘 유도등 실시간 맥동
+        if hasattr(self, 'beacon_light_np') and self.beacon_light_np and not self.beacon_light_np.isEmpty():
+            t_now = globalClock.getFrameTime()
+            pulse = 0.65 + 0.35 * math.sin(t_now * 4.5)
+            self.beacon_light_np.node().setColor((0.35 * pulse, 1.5 * pulse, 0.55 * pulse, 1.0))
+
         # 13. HUD 텍스트 캐싱 및 실시간 피격 효과 애니메이션 갱신
         self.ui_mgr.update(dt)
         self.ui_mgr.update_timer(self.time_left, self.current_stage)
-        self.ui_mgr.update_hud(px, py, self.rendered_chunk_count, self.total_chunk_count)
+        self.ui_mgr.update_hud(px, py, getattr(self, 'escape_pos', None), getattr(self.player, 'heading', 0.0))
 
         return cont
 
     def destroy(self):
+        if hasattr(self, 'beacon_light_np') and self.beacon_light_np and not self.beacon_light_np.isEmpty():
+            self.render.clearLight(self.beacon_light_np)
         if hasattr(self, 'chunk_executor'):
             self.chunk_executor.shutdown(wait=False, cancel_futures=True)
         super().destroy()
