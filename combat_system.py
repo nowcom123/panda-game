@@ -93,6 +93,16 @@ class CombatSystem:
         self.ammo_drops = []
         self.hit_particles = []
 
+        # 현실적 총기 메커니즘 상태 (슬라이드 블로우백, 탄피 배출, 탄창 분리, 슬라이드 락)
+        self.slide_locked = False
+        self.slide_timer = 0.0
+        self.slide_blowback_duration = 0.08
+        self.slide_max_travel = -0.055
+        self.hammer_timer = 0.0
+        self.active_casings = []
+        self.smoke_particles = []
+        self.was_slide_locked_before_reload = False
+
         # 정전 상태
         self.is_blackout = False
 
@@ -162,7 +172,7 @@ class CombatSystem:
         self.fill_np.setPos(0, 0.10, 0)
         self.render.setLight(self.fill_np)
 
-        # --- (B) 오른손: 12발 권총 ---
+        # --- (B) 오른손: 현실적 기계 구조 12발 권총 ---
         self.vm_pistol = self.vm_root.attachNewNode("vm_pistol")
         self.vm_pistol.setPos(0.30, 0.74, -0.26)
         self.vm_pistol.setHpr(3.0, 1.5, 0)
@@ -171,25 +181,68 @@ class CombatSystem:
 
         steel_dark = LColor(0.10, 0.10, 0.12, 1.0)
         steel_slide = LColor(0.22, 0.23, 0.26, 1.0)
+        steel_barrel = LColor(0.16, 0.16, 0.18, 1.0)
         grip_col = LColor(0.06, 0.06, 0.07, 1.0)
         tritium_green = LColor(0.35, 1.0, 0.40, 1.0)
 
-        # 슬라이드, 총열, 그립, 방아쇠울
-        make_cube_to(self.recoil_node, 0.065, 0.30, 0.09, steel_slide, 0, 0.05, 0.04)
-        make_cube_to(self.recoil_node, 0.045, 0.08, 0.045, steel_dark, 0, 0.22, 0.035)
-        grip = make_cube_to(self.recoil_node, 0.058, 0.11, 0.20, grip_col, 0, -0.06, -0.09)
+        # 1. 하부 프레임 (Frame) - 고정부 (리시버, 그립, 방아쇠, 슬라이드 멈치, 탄창 멈치)
+        self.frame_node = self.recoil_node.attachNewNode("frame_node")
+        grip = make_cube_to(self.frame_node, 0.058, 0.11, 0.20, grip_col, 0, -0.06, -0.09)
         grip.setP(16)
-        make_cube_to(self.recoil_node, 0.030, 0.08, 0.06, steel_dark, 0, 0.04, -0.04)
+        # 하부 더스트커버 및 피카티니 레일
+        make_cube_to(self.frame_node, 0.055, 0.20, 0.050, steel_dark, 0, 0.08, 0.005)
+        # 방아쇠울 및 방아쇠
+        make_cube_to(self.frame_node, 0.030, 0.08, 0.060, steel_dark, 0, 0.04, -0.04)
+        make_cube_to(self.frame_node, 0.014, 0.02, 0.035, steel_dark, 0, 0.035, -0.025)
+        # 좌측 슬라이드 스톱 레버 (Slide Catch Lever)
+        make_cube_to(self.frame_node, 0.010, 0.035, 0.012, steel_dark, -0.032, 0.02, 0.045)
+        # 좌측 탄창 분리 버튼 (Magazine Release)
+        make_cube_to(self.frame_node, 0.012, 0.015, 0.015, steel_dark, -0.032, -0.03, -0.02)
 
-        # 트리튬 야광 가늠쇠/가늠자
-        front_sight = make_cube_to(self.recoil_node, 0.012, 0.02, 0.02, tritium_green, 0, 0.19, 0.09)
+        # 2. 총열 및 약실 (Barrel & Chamber Hood) - 슬라이드 후퇴 시 내부 노출
+        self.barrel_node = self.recoil_node.attachNewNode("barrel_node")
+        # 메인 강선 총열
+        make_cube_to(self.barrel_node, 0.042, 0.16, 0.042, steel_barrel, 0, 0.18, 0.04)
+        # 총구 크라운 보어 홀
+        make_cube_to(self.barrel_node, 0.028, 0.015, 0.028, LColor(0.02, 0.02, 0.02, 1.0), 0, 0.265, 0.04)
+        # 사각 약실 후드 (Chamber Block) - 슬라이드 후퇴 시 탄피 배출구 사이로 적나라하게 노출
+        make_cube_to(self.barrel_node, 0.048, 0.07, 0.046, steel_dark, 0, 0.04, 0.042)
+
+        # 3. 왕복 슬라이드 (Reciprocating Slide) - 격발 시 -Y축으로 후퇴 후 복좌 (또는 탄 소진 시 고정)
+        self.slide_node = self.recoil_node.attachNewNode("slide_node")
+        # 슬라이드 전방/후방 바디
+        make_cube_to(self.slide_node, 0.062, 0.30, 0.075, steel_slide, 0, 0.05, 0.045)
+        # 우측 탄피 배출구 홈 (Ejection Port Cutout)
+        make_cube_to(self.slide_node, 0.020, 0.07, 0.035, steel_dark, 0.026, 0.04, 0.055)
+        # 후방 코킹 서레이션 (미끄럼 방지 홈)
+        make_cube_to(self.slide_node, 0.064, 0.05, 0.055, steel_dark, 0, -0.05, 0.045)
+
+        # 트리튬 야광 가늠쇠/가늠자 (슬라이드와 함께 움직임)
+        front_sight = make_cube_to(self.slide_node, 0.012, 0.02, 0.02, tritium_green, 0, 0.19, 0.09)
         front_sight.setLightOff()
-        r_sight1 = make_cube_to(self.recoil_node, 0.012, 0.015, 0.02, tritium_green, -0.022, -0.09, 0.09)
-        r_sight2 = make_cube_to(self.recoil_node, 0.012, 0.015, 0.02, tritium_green, 0.022, -0.09, 0.09)
+        r_sight1 = make_cube_to(self.slide_node, 0.012, 0.015, 0.02, tritium_green, -0.022, -0.09, 0.09)
+        r_sight2 = make_cube_to(self.slide_node, 0.012, 0.015, 0.02, tritium_green, 0.022, -0.09, 0.09)
         r_sight1.setLightOff()
         r_sight2.setLightOff()
 
-        # 총구 화염 지오메트리 & 조명
+        # 4. 외부 해머 (Hammer / 공이치기) - 격발 및 슬라이드 후퇴 시 피벗 회전
+        self.hammer_node = self.recoil_node.attachNewNode("hammer_node")
+        self.hammer_node.setPos(0, -0.102, 0.038)
+        self.hammer_node.setP(-42)  # 기본 코킹 완료 상태
+        make_cube_to(self.hammer_node, 0.016, 0.030, 0.045, steel_dark, 0, -0.012, 0.018)
+
+        # 5. 분리형 탄창 (Detachable Box Magazine)
+        self.mag_node = self.frame_node.attachNewNode("mag_node")
+        self.mag_node.setPos(0, -0.06, -0.09)
+        self.mag_node.setP(16)
+        # 탄창 스틸 바디
+        make_cube_to(self.mag_node, 0.046, 0.082, 0.18, steel_dark, 0, 0, 0)
+        # 탄창 범퍼 패드 (Baseplate)
+        make_cube_to(self.mag_node, 0.056, 0.096, 0.024, grip_col, 0, -0.005, -0.095)
+        # 최상단 장전 황동 실탄 (Brass Top Round)
+        make_cube_to(self.mag_node, 0.024, 0.048, 0.024, LColor(0.85, 0.68, 0.22, 1.0), 0, 0.01, 0.08)
+
+        # 6. 총구 화염 지오메트리 & 조명
         self.muzzle_flash_geom = make_cube_to(self.recoil_node, 0.16, 0.22, 0.16, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.34, 0.04, rot_h=45)
         self.muzzle_flash_geom.setLightOff()
         self.muzzle_flash_geom.hide()
@@ -200,16 +253,88 @@ class CombatSystem:
         self.muzzle_light_np = self.recoil_node.attachNewNode(self.muzzle_light)
         self.muzzle_light_np.setPos(0, 0.35, 0.04)
 
+    def _eject_casing(self):
+        """격발 시 우측 탄피 배출구에서 3D 황동 탄피가 회전하며 튀어나오는 물리 효과"""
+        cam_quat = self.camera.getQuat()
+        cam_right = cam_quat.getRight()
+        cam_fwd = cam_quat.getForward()
+        cam_up = cam_quat.getUp()
+
+        eject_pos = self.camera.getPos() + cam_fwd * 0.70 + cam_right * 0.35 - cam_up * 0.20
+
+        c_node = self.world_root.attachNewNode("spent_casing")
+        c_node.setPos(eject_pos)
+        brass_col = LColor(0.92, 0.76, 0.24, 1.0)
+        c_cube = make_cube_to(c_node, 0.016, 0.044, 0.016, brass_col, 0, 0, 0)
+        c_cube.setLightOff()
+
+        v_right = random.uniform(2.4, 3.6)
+        v_up = random.uniform(1.8, 2.8)
+        v_fwd = random.uniform(-0.8, -0.3)
+        initial_vel = cam_right * v_right + cam_up * v_up + cam_fwd * v_fwd
+
+        spin = Vec3(
+            random.uniform(600, 1400),
+            random.uniform(400, 1000),
+            random.uniform(300, 800)
+        )
+
+        self.active_casings.append({
+            "node": c_node,
+            "pos": Vec3(eject_pos),
+            "vel": initial_vel,
+            "rot": Vec3(random.uniform(0, 360), random.uniform(0, 360), 0),
+            "spin": spin,
+            "life": 1.4
+        })
+
+        if len(self.active_casings) > 25:
+            oldest = self.active_casings.pop(0)
+            if not oldest["node"].isEmpty():
+                oldest["node"].removeNode()
+
+    def _spawn_barrel_smoke(self):
+        """격발 직후 총구 및 약실에서 피어오르는 반투명 화약 가스 연기"""
+        cam_quat = self.camera.getQuat()
+        cam_fwd = cam_quat.getForward()
+        cam_right = cam_quat.getRight()
+        cam_up = cam_quat.getUp()
+
+        muzzle_pos = self.camera.getPos() + cam_fwd * 0.88 + cam_right * 0.30 - cam_up * 0.22
+        smoke_col = LColor(0.75, 0.75, 0.78, 0.35)
+
+        for _ in range(2):
+            s_node = self.world_root.attachNewNode("barrel_smoke")
+            s_node.setPos(muzzle_pos + Vec3(random.uniform(-0.02, 0.02), random.uniform(-0.02, 0.02), random.uniform(-0.02, 0.02)))
+            cube = make_cube_to(s_node, 0.045, 0.045, 0.045, smoke_col, 0, 0, 0)
+            cube.setLightOff()
+
+            vel = cam_fwd * random.uniform(0.6, 1.4) + cam_up * random.uniform(0.2, 0.5) + cam_right * random.uniform(-0.1, 0.1)
+            self.smoke_particles.append({
+                "node": s_node,
+                "cube": cube,
+                "pos": Vec3(s_node.getPos()),
+                "vel": vel,
+                "scale": 0.045,
+                "timer": 0.55,
+                "max_timer": 0.55
+            })
+
+        if len(self.smoke_particles) > 20:
+            oldest = self.smoke_particles.pop(0)
+            if not oldest["node"].isEmpty():
+                oldest["node"].removeNode()
+
     def shoot(self, monsters, player=None, game_state="PLAYING"):
         """권총 사격 및 다중 몬스터 대상 레이캐스트 적중 판정 (벽체 엄폐 판정 포함)"""
         if game_state != "PLAYING" or self.is_reloading or self.shoot_cooldown > 0.0:
             return
 
-        if self.ammo <= 0:
+        if self.slide_locked or self.ammo <= 0:
             if self.audio_mgr:
                 self.audio_mgr.play_empty_click()
             if self.reserve_ammo > 0:
-                self.ui_mgr.show_hit_marker("탄약 소진! [R] 키를 눌러 재장전하세요!", (1.0, 0.4, 0.4, 1.0))
+                self.ui_mgr.show_hit_marker("슬라이드 후퇴 고정! [R] 키로 재장전하세요!", (1.0, 0.4, 0.4, 1.0))
             else:
                 self.ui_mgr.show_hit_marker("탄약 소진! (맵에서 탄약 상자를 찾으세요)", (1.0, 0.3, 0.3, 1.0))
             self.hit_marker_timer = 1.8
@@ -217,11 +342,28 @@ class CombatSystem:
             return
 
         self.ammo -= 1
-        self.shoot_cooldown = 0.22
+        self.shoot_cooldown = 0.20
         self.recoil_timer = 0.10
         self.muzzle_timer = 0.04
+
+        # 1. 슬라이드 블로우백 및 공이치기 격발
+        self.slide_timer = self.slide_blowback_duration
+        self.hammer_timer = 0.04
+        self.hammer_node.setP(0)
+
+        # 2. 3D 황동 탄피 배출 및 총구 화약 가스 연기
+        self._eject_casing()
+        self._spawn_barrel_smoke()
+
+        # 3. 다이내믹 총구 화염 및 조명
+        self.muzzle_flash_geom.setR(random.uniform(0, 360))
+        self.muzzle_flash_geom.setScale(random.uniform(0.9, 1.3))
         self.muzzle_flash_geom.show()
         self.render.setLight(self.muzzle_light_np)
+
+        # 4. 마지막 탄약 격발 시 슬라이드 스톱 고정 (Slide Lock on Empty Chamber)
+        if self.ammo <= 0:
+            self.slide_locked = True
         if self.audio_mgr:
             self.audio_mgr.play_gunshot()
         self.ui_mgr.update_ammo(self.ammo, self.max_ammo, self.reserve_ammo)
@@ -364,7 +506,7 @@ class CombatSystem:
             self.ui_mgr.show_hit_marker("[특성 강화] 최대 탄창 +6발 및 예비탄 +36발 즉시 지급!", (1.0, 0.85, 0.2, 1.0))
 
     def reload(self, game_state="PLAYING"):
-        """R 키 입력 시 권총 재장전"""
+        """R 키 입력 시 권총 다단계 전술 재장전 (탄창 분리 -> 결합 -> 슬라이드 전진)"""
         if game_state != "PLAYING" or self.is_reloading or self.ammo >= self.max_ammo:
             return
         if self.reserve_ammo <= 0:
@@ -375,11 +517,13 @@ class CombatSystem:
             return
 
         self.is_reloading = True
-        self.reload_timer = 1.2
+        self.reload_timer = 1.30
+        self.was_slide_locked_before_reload = self.slide_locked
         if self.audio_mgr:
             self.audio_mgr.play_reload()
-        self.ui_mgr.show_hit_marker("재장전 중...", (0.9, 0.9, 0.9, 1.0))
-        self.hit_marker_timer = 1.3
+        status_msg = "빈 탄창 배출 및 슬라이드 장전 중..." if self.slide_locked else "전술 탄창 교체 중..."
+        self.ui_mgr.show_hit_marker(status_msg, (0.9, 0.9, 0.9, 1.0))
+        self.hit_marker_timer = 1.4
 
     def setup_ammo_drops(self, current_stage=1):
         """스테이지 2부터 맵 복도에 3D 밀리터리 탄약 상자 드랍"""
@@ -471,8 +615,8 @@ class CombatSystem:
 
     _update_ammo_ui = update_ammo_ui
 
-    def update(self, dt, px, py, is_moving, is_sprinting):
-        """프레임별 트레이서, 반동/재장전, 밥빙, 탄약 습득 갱신"""
+    def update(self, dt, px=0.0, py=0.0, is_moving=False, is_sprinting=False):
+        """프레임별 트레이서, 탄피 물리, 화약 연기, 슬라이드 블로우백, 반동/재장전, 밥빙, 탄약 습득 갱신"""
         # 총알 궤적 수명 관리
         for tr in self.active_tracers[:]:
             tr["life"] -= dt
@@ -503,24 +647,122 @@ class CombatSystem:
                 self.muzzle_flash_geom.hide()
                 self.render.clearLight(self.muzzle_light_np)
 
-        # 재장전 및 반동 애니메이션
+        # 3D 탄피 물리 갱신 (중력, 궤적, 지면 튕김, 회전)
+        for c in self.active_casings[:]:
+            c["life"] -= dt
+            c["vel"].z -= 9.8 * dt
+            c["pos"] += c["vel"] * dt
+            c["rot"] += c["spin"] * dt
+            if c["pos"].z <= 0.03:
+                c["pos"].z = 0.03
+                c["vel"].z = -c["vel"].z * 0.32
+                c["vel"].x *= 0.60
+                c["vel"].y *= 0.60
+                c["spin"] *= 0.65
+
+            c["node"].setPos(c["pos"])
+            c["node"].setHpr(c["rot"])
+
+            if c["life"] <= 0.0:
+                if not c["node"].isEmpty():
+                    c["node"].removeNode()
+                self.active_casings.remove(c)
+
+        # 총구 잔여 가스 연기 갱신 (열상승, 팽창, 페이드아웃)
+        for s in self.smoke_particles[:]:
+            s["timer"] -= dt
+            s["vel"].z += 0.35 * dt
+            s["pos"] += s["vel"] * dt
+            s["scale"] += dt * 0.12
+            s["node"].setPos(s["pos"])
+            s["node"].setScale(s["scale"])
+            alpha = max(0.0, (s["timer"] / s["max_timer"]) * 0.35)
+            s["cube"].setColorScale(1, 1, 1, alpha)
+
+            if s["timer"] <= 0.0:
+                if not s["node"].isEmpty():
+                    s["node"].removeNode()
+                self.smoke_particles.remove(s)
+
+        # 현실적 슬라이드 블로우백 및 공이치기 애니메이션
+        if self.slide_timer > 0.0:
+            self.slide_timer = max(0.0, self.slide_timer - dt)
+            half_dur = self.slide_blowback_duration * 0.5
+            if self.slide_timer > half_dur:
+                # 1단계: 슬라이드 급속 후퇴 (0.0 -> -0.055m)
+                t_rear = (self.slide_blowback_duration - self.slide_timer) / half_dur
+                self.slide_node.setPos(0, self.slide_max_travel * t_rear, 0)
+                self.hammer_node.setP(-42 * t_rear)
+            else:
+                # 2단계: 복좌 전진 (잔탄 0이면 후퇴 고정 유지)
+                if self.slide_locked:
+                    self.slide_node.setPos(0, self.slide_max_travel, 0)
+                    self.hammer_node.setP(-42)
+                else:
+                    t_fwd = self.slide_timer / half_dur
+                    self.slide_node.setPos(0, self.slide_max_travel * t_fwd, 0)
+                    self.hammer_node.setP(-42)
+        elif not self.is_reloading:
+            if self.slide_locked:
+                self.slide_node.setPos(0, self.slide_max_travel, 0)
+                self.hammer_node.setP(-42)
+            else:
+                self.slide_node.setPos(0, 0, 0)
+                self.hammer_node.setP(-42)
+
+        # 현실적 다단계 재장전 애니메이션 및 반동
         if self.is_reloading:
-            self.reload_timer -= dt
-            t_rel = max(0.0, self.reload_timer / 1.2)
-            tilt = math.sin(t_rel * math.pi)
-            self.recoil_node.setPos(0, -0.07 * tilt, -0.10 * tilt)
-            self.recoil_node.setP(-26.0 * tilt)
+            self.reload_timer = max(0.0, self.reload_timer - dt)
+            total_dur = 1.30
+            p = 1.0 - (self.reload_timer / total_dur)  # 0.0 -> 1.0
+
+            # 1단계 (0.0 ~ 0.35): 총기 왼쪽 틸트 & 탄창 배출 낙하
+            if p < 0.35:
+                sub_p = p / 0.35
+                self.recoil_node.setR(-22.0 * math.sin(sub_p * math.pi * 0.5))
+                self.recoil_node.setP(-18.0 * math.sin(sub_p * math.pi * 0.5))
+                drop_z = sub_p * 0.32
+                self.mag_node.setPos(0, -drop_z * 0.28, -drop_z)
+                self.mag_node.setScale(max(0.05, 1.0 - sub_p * 0.8))
+
+            # 2단계 (0.35 ~ 0.78): 새 탄창 꺼내어 탄창구 삽입 및 찰칵 결합
+            elif p < 0.78:
+                sub_p = (p - 0.35) / 0.43
+                self.recoil_node.setR(-22.0 * (1.0 - sub_p * 0.3))
+                self.recoil_node.setP(-18.0 * (1.0 - sub_p * 0.3))
+                rise_z = (1.0 - min(1.0, sub_p * 1.1)) * 0.28
+                self.mag_node.setScale(1.0)
+                self.mag_node.setPos(0, -rise_z * 0.28, -rise_z)
+
+            # 3단계 (0.78 ~ 1.0): 슬라이드 전진 격발 준비 (슬라이드 스톱 릴리즈) 및 총기 복귀
+            else:
+                sub_p = (p - 0.78) / 0.22
+                self.mag_node.setPos(0, 0, 0)
+                self.mag_node.setScale(1.0)
+                # 슬라이드가 걸려있던 경우 멈치를 눌러 전진!
+                if self.was_slide_locked_before_reload:
+                    self.slide_locked = False
+                    self.slide_node.setPos(0, 0, 0)
+
+                self.recoil_node.setR(-22.0 * 0.7 * (1.0 - sub_p))
+                self.recoil_node.setP(-18.0 * 0.7 * (1.0 - sub_p))
 
             if self.reload_timer <= 0.0:
                 self.is_reloading = False
+                self.slide_locked = False
+                self.slide_node.setPos(0, 0, 0)
                 self.recoil_node.setPos(0, 0, 0)
                 self.recoil_node.setP(0)
+                self.recoil_node.setR(0)
+                self.mag_node.setPos(0, 0, 0)
+                self.mag_node.setScale(1.0)
+
                 needed = self.max_ammo - self.ammo
                 transferred = min(needed, self.reserve_ammo)
                 self.ammo += transferred
                 self.reserve_ammo -= transferred
                 self.ui_mgr.update_ammo(self.ammo, self.max_ammo, self.reserve_ammo)
-                self.ui_mgr.show_hit_marker(f"재장전 완료! (+{transferred}발)", (0.35, 1.0, 0.5, 1.0))
+                self.ui_mgr.show_hit_marker(f"재장전 완료! (+{transferred}발 장전됨)", (0.35, 1.0, 0.5, 1.0))
                 self.hit_marker_timer = 1.5
         elif self.recoil_timer > 0.0:
             self.recoil_timer -= dt
@@ -529,9 +771,11 @@ class CombatSystem:
             recoil_deg = 12.0 if not self.is_aiming else 5.5
             self.recoil_node.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.4) * t_norm)
             self.recoil_node.setP(recoil_deg * t_norm)
+            self.recoil_node.setR(0)
         else:
             self.recoil_node.setPos(0, 0, 0)
             self.recoil_node.setP(0)
+            self.recoil_node.setR(0)
 
         # 피격/알림 타이머
         if self.hit_marker_timer > 0.0:

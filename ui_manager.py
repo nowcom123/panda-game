@@ -13,17 +13,173 @@ import datetime
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.OnscreenImage import OnscreenImage
 from direct.gui.DirectGui import DirectButton, DirectFrame, DGG
-from panda3d.core import TextNode, TransparencyAttrib
+from panda3d.core import TextNode, TransparencyAttrib, LineSegs
 from constants import CURSED_RELICS
 
 
-class ImageCrosshair(OnscreenImage):
-    """하위 호환 및 텍스처 교체를 지원하는 고해상도 그래픽 크로스헤어"""
+class TacticalCrosshair:
+    """
+    LineSegs 기반 전술 레티클 시스템.
+    텍스처 카드(OnscreenImage)의 투명도 렌더링 결함으로 인한 검은 사각형 현상을 원천 방지하며,
+    모든 해상도(FHD, QHD, 4K)에서 왜곡 없이 날카로운 벡터 조준선을 투영합니다.
+    """
+    def __init__(self, parent, **kwargs):
+        self.root = parent.attachNewNode("tactical_crosshair")
+        self.root.setBin("fixed", 25)
+        self.root.setDepthTest(False)
+        self.root.setDepthWrite(False)
+        self.scale = 1.0
+        self._build_geometry()
+
+    def _build_geometry(self):
+        # 1. 기본 전술 조준선 (정밀 센터 닷 + 4방향 십자선 + 전술 브래킷)
+        ls = LineSegs("reticle_default")
+        ls.setColor(0.92, 0.96, 1.0, 0.90)
+        ls.setThickness(2.0)
+
+        # 센터 닷
+        ls.moveTo(0, 0, -0.0015)
+        ls.drawTo(0, 0, 0.0015)
+
+        # 4방향 틱 (중앙 여백 확보)
+        gap = 0.008
+        t_len = 0.022
+        # 상
+        ls.moveTo(0, 0, gap)
+        ls.drawTo(0, 0, gap + t_len)
+        # 하
+        ls.moveTo(0, 0, -gap)
+        ls.drawTo(0, 0, -(gap + t_len))
+        # 좌
+        ls.moveTo(-gap, 0, 0)
+        ls.drawTo(-(gap + t_len), 0, 0)
+        # 우
+        ls.moveTo(gap, 0, 0)
+        ls.drawTo(gap + t_len, 0, 0)
+
+        # 전술 코너 브래킷 [ ]
+        b_pos = 0.040
+        b_len = 0.010
+        # 우상
+        ls.moveTo(b_pos - b_len, 0, b_pos)
+        ls.drawTo(b_pos, 0, b_pos)
+        ls.drawTo(b_pos, 0, b_pos - b_len)
+        # 좌상
+        ls.moveTo(-b_pos + b_len, 0, b_pos)
+        ls.drawTo(-b_pos, 0, b_pos)
+        ls.drawTo(-b_pos, 0, b_pos - b_len)
+        # 우하
+        ls.moveTo(b_pos - b_len, 0, -b_pos)
+        ls.drawTo(b_pos, 0, -b_pos)
+        ls.drawTo(b_pos, 0, -b_pos + b_len)
+        # 좌하
+        ls.moveTo(-b_pos + b_len, 0, -b_pos)
+        ls.drawTo(-b_pos, 0, -b_pos)
+        ls.drawTo(-b_pos, 0, -b_pos + b_len)
+
+        self.default_geom = self.root.attachNewNode(ls.create())
+
+        # 2. 적중(Hit) 피격 마커 (선홍색 X자 틱)
+        ls_hit = LineSegs("reticle_hit")
+        ls_hit.setColor(1.0, 0.22, 0.22, 0.95)
+        ls_hit.setThickness(2.6)
+        hs = 0.006
+        he = 0.022
+        ls_hit.moveTo(hs, 0, hs)
+        ls_hit.drawTo(he, 0, he)
+        ls_hit.moveTo(-hs, 0, hs)
+        ls_hit.drawTo(-he, 0, he)
+        ls_hit.moveTo(hs, 0, -hs)
+        ls_hit.drawTo(he, 0, -he)
+        ls_hit.moveTo(-hs, 0, -hs)
+        ls_hit.drawTo(-he, 0, -he)
+        self.hit_geom = self.root.attachNewNode(ls_hit.create())
+        self.hit_geom.hide()
+
+        # 3. 치명타(Crit) 피격 마커 (황금빛 스타버스트 및 다이아몬드)
+        ls_crit = LineSegs("reticle_crit")
+        ls_crit.setColor(1.0, 0.88, 0.15, 1.0)
+        ls_crit.setThickness(3.0)
+        cs = 0.008
+        ce = 0.030
+        ls_crit.moveTo(cs, 0, cs)
+        ls_crit.drawTo(ce, 0, ce)
+        ls_crit.moveTo(-cs, 0, cs)
+        ls_crit.drawTo(-ce, 0, ce)
+        ls_crit.moveTo(cs, 0, -cs)
+        ls_crit.drawTo(ce, 0, -ce)
+        ls_crit.moveTo(-cs, 0, -cs)
+        ls_crit.drawTo(-ce, 0, -ce)
+        d_len = 0.018
+        ls_crit.moveTo(0, 0, d_len)
+        ls_crit.drawTo(d_len * 0.45, 0, 0)
+        ls_crit.drawTo(0, 0, -d_len)
+        ls_crit.drawTo(-d_len * 0.45, 0, 0)
+        ls_crit.drawTo(0, 0, d_len)
+        self.crit_geom = self.root.attachNewNode(ls_crit.create())
+        self.crit_geom.hide()
+
+    def show(self):
+        self.root.show()
+
+    def hide(self):
+        self.root.hide()
+
+    def isHidden(self):
+        return self.root.isHidden()
+
+    def setScale(self, s, *args):
+        if isinstance(s, (int, float)):
+            self.root.setScale(s, s, s)
+        else:
+            self.root.setScale(s)
+
+    def getScale(self):
+        return self.root.getScale()
+
+    def setPos(self, x, y=None, z=None):
+        if y is None and z is None:
+            self.root.setPos(x)
+        else:
+            self.root.setPos(x, y, z)
+
+    def getPos(self):
+        return self.root.getPos()
+
+    def setTransparency(self, mode):
+        pass
+
+    def setBin(self, bin_name, sort_order):
+        self.root.setBin(bin_name, sort_order)
+
     def setText(self, text):
         pass
 
     def setFg(self, fg):
         pass
+
+    def setImage(self, img_path):
+        if 'crit' in str(img_path):
+            self.trigger_hit(is_crit=True)
+        elif 'hit' in str(img_path):
+            self.trigger_hit(is_crit=False)
+        else:
+            self.reset_hit()
+
+    def trigger_hit(self, is_crit=False):
+        if is_crit:
+            self.hit_geom.hide()
+            self.crit_geom.show()
+        else:
+            self.crit_geom.hide()
+            self.hit_geom.show()
+
+    def reset_hit(self):
+        self.hit_geom.hide()
+        self.crit_geom.hide()
+
+
+ImageCrosshair = TacticalCrosshair
 
 
 class UIManager:
@@ -113,15 +269,11 @@ class UIManager:
         self.damage_flash.setBin("fixed", 3)
         self.damage_flash_alpha = 0.0
 
-        # 3. 고해상도 그래픽 크로스헤어
-        self.crosshair = ImageCrosshair(
-            image="assets/ui/crosshair_default.png",
-            pos=(0, 0, 0),
-            scale=0.038,
+        # 3. LineSegs 기반 무결점 전술 크로스헤어 (검은 배경 박스 원천 제거)
+        self.crosshair = TacticalCrosshair(
             parent=self.base.aspect2d
         )
-        self.crosshair.setTransparency(TransparencyAttrib.MAlpha)
-        self.crosshair.setBin("fixed", 10)
+        self.crosshair.setBin("fixed", 25)
         self.crosshair_hit_timer = 0.0
         self.hit_marker_timer = 0.0
 
@@ -722,7 +874,9 @@ class UIManager:
     def trigger_crosshair_hit(self, is_kill=False, is_crit=False):
         """몬스터 타격 시 크로스헤어 적중 마커 표시 (치명타 시 골드 마커)"""
         self.crosshair_hit_timer = 0.22 if is_crit else 0.18
-        if hasattr(self.crosshair, 'setImage'):
+        if hasattr(self.crosshair, 'trigger_hit'):
+            self.crosshair.trigger_hit(is_crit=is_crit)
+        elif hasattr(self.crosshair, 'setImage'):
             if is_crit:
                 self.crosshair.setImage("assets/ui/crosshair_crit.png")
                 self.crosshair.setScale(0.054)
@@ -756,7 +910,9 @@ class UIManager:
         if self.crosshair_hit_timer > 0.0:
             self.crosshair_hit_timer = max(0.0, self.crosshair_hit_timer - dt)
             if self.crosshair_hit_timer <= 0.0:
-                if hasattr(self.crosshair, 'setImage'):
+                if hasattr(self.crosshair, 'reset_hit'):
+                    self.crosshair.reset_hit()
+                elif hasattr(self.crosshair, 'setImage'):
                     self.crosshair.setImage("assets/ui/crosshair_default.png")
                     self.crosshair.setScale(0.038)
 
