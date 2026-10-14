@@ -52,6 +52,7 @@ class PlayerController:
         self.shake_intensity = 0.0
 
         # 이동 및 발자국
+        self.is_moving = False
         self.last_move_dir = Vec3(0, 0, 0)
         self.footstep_timer = 0.0
         self.heartbeat_accum = 0.0
@@ -510,4 +511,5 @@ class PlayerController:
         else:
             self.heartbeat_accum = 0.0
 
+        self.is_moving = is_moving
         return is_moving, self.is_sprinting, view_changed

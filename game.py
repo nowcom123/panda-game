@@ -1451,7 +1451,7 @@ class LiminalInfiniteLoop(ShowBase):
             self.beacon_light_np.node().setColor((0.35 * pulse, 1.5 * pulse, 0.55 * pulse, 1.0))
 
         # 13. HUD 텍스트 캐싱 및 실시간 피격 효과 애니메이션 갱신
-        self.ui_mgr.update(dt, player_pos=(px, py), camera_heading=getattr(self.player, 'heading', 0.0))
+        self.ui_mgr.update(dt, player_pos=(px, py), camera_heading=getattr(self.player, 'heading', 0.0), is_moving=is_moving, is_sprinting=is_sprinting)
         self.ui_mgr.update_timer(self.time_left, self.current_stage)
         self.ui_mgr.update_hud(px, py, getattr(self, 'escape_pos', None), getattr(self.player, 'heading', 0.0))
 

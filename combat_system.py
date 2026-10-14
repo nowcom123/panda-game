@@ -64,6 +64,11 @@ class CombatSystem:
         self.ads_hip_hpr = Vec3(2.5, 1.0, -1.0)
         self.ads_aim_hpr = Vec3(0.0, 0.0, 0.0)
 
+        # 지향사격(Hip-fire) 탄퍼짐 및 크로스헤어 흔들림 상태
+        self.hipfire_bloom = 0.0
+        self.is_moving = False
+        self.is_sprinting = False
+
         # 뷰모델 지오메트리 구축
         self._setup_viewmodel()
 
@@ -325,9 +330,53 @@ class CombatSystem:
             self.audio_mgr.play_gunshot()
         self.ui_mgr.update_ammo(self.ammo, self.max_ammo, self.reserve_ammo)
 
+        # 지향사격(Hip-fire) vs 우클릭 정밀조준(ADS) 명중률 및 탄퍼짐(Spread) 산출
+        # 우클릭 정밀조준(ADS) 시: 100% 핀포인트 정밀 레이저 명중률 (spread = 0.0)
+        # 일반 지향사격(Hip-fire) 시: 크로스헤어 팽창 및 급격한 흔들림(Jitter Shake)과 함께 거리/이동에 따른 탄퍼짐 발생
+        cam_quat = self.camera.getQuat()
+        cam_fwd = cam_quat.getForward()
+        cam_right = cam_quat.getRight()
+        cam_up = cam_quat.getUp()
+
+        is_moving = getattr(player, 'is_moving', False) or getattr(self, 'is_moving', False)
+        is_sprinting = getattr(player, 'is_sprinting', False) or getattr(self, 'is_sprinting', False)
+        is_sliding = getattr(player, 'is_sliding', False)
+
+        if self.ads_alpha >= 0.85:
+            # 우클릭 정밀조준(ADS): 핀포인트 레이저 사격
+            spread = 0.0
+            ray_dir = cam_fwd
+        else:
+            # 일반 지향사격: 조준 상태 및 이동 속도에 따른 탄퍼짐 각도 계산
+            hip_factor = 1.0 - self.ads_alpha
+            base_spread = 0.040  # 정지 상태 기본 탄퍼짐 (~2.3도 각도 편차)
+            if is_sprinting or is_sliding:
+                base_spread *= 2.40  # 전력질주 / 슬라이딩 중 (~5.5도)
+            elif is_moving:
+                base_spread *= 1.65  # 보행 이동 중 (~3.8도)
+
+            # 연속 격발 시 탄퍼짐 누적 패널티
+            base_spread += getattr(self, 'hipfire_bloom', 0.0)
+            self.hipfire_bloom = min(0.080, getattr(self, 'hipfire_bloom', 0.0) + 0.022)
+
+            spread = base_spread * hip_factor
+
+            # 원형 디스크 탄퍼짐 편차 벡터 산출
+            ang = random.uniform(0.0, 2.0 * math.pi)
+            rad = (random.uniform(0.0, 1.0) ** 0.5) * spread
+            def_x = math.cos(ang) * rad
+            def_y = math.sin(ang) * rad
+
+            ray_dir = (cam_fwd + cam_right * def_x + cam_up * def_y).normalized()
+
+            # 크로스헤어 격발 팽창 및 고주파 전술 흔들림(Jitter Shake) 발동!
+            if hasattr(self.ui_mgr, 'trigger_hipfire_kick'):
+                self.ui_mgr.trigger_hipfire_kick(kick_bloom=0.72, shake_mag=0.024, shake_dur=0.18)
+            elif hasattr(self.ui_mgr, 'crosshair') and hasattr(self.ui_mgr.crosshair, 'trigger_hipfire_kick'):
+                self.ui_mgr.crosshair.trigger_hipfire_kick(kick_bloom=0.72, shake_mag=0.024, shake_dur=0.18)
+
         # 1. 벽체 충돌 레이캐스트 (벽 관통 사격 원천 차단)
         ray_origin = self.camera.getPos()
-        ray_dir = self.camera.getQuat().getForward()
         chunks = getattr(self.base, 'chunks', {})
         wall_dist, wall_hit_pos = raycast_walls(chunks, ray_origin, ray_dir, max_dist=55.0)
 
@@ -580,6 +629,7 @@ class CombatSystem:
         self.recoil_timer = 0.0
         self.muzzle_timer = 0.0
         self.hit_marker_timer = 0.0
+        self.hipfire_bloom = 0.0
 
         for tr in self.active_tracers:
             if tr.get("np") and not tr["np"].isEmpty():
@@ -602,6 +652,13 @@ class CombatSystem:
 
     def update(self, dt, px=0.0, py=0.0, is_moving=False, is_sprinting=False):
         """프레임별 트레이서, 탄피 물리, 화약 연기, 슬라이드 블로우백, 반동/재장전, 밥빙, 탄약 습득 갱신"""
+        self.is_moving = is_moving
+        self.is_sprinting = is_sprinting
+
+        # 지향사격 연사 탄퍼짐 블룸 부드러운 감쇠
+        if hasattr(self, 'hipfire_bloom') and self.hipfire_bloom > 0.0:
+            self.hipfire_bloom = max(0.0, self.hipfire_bloom - 0.12 * dt)
+
         # 총알 궤적 수명 관리
         for tr in self.active_tracers[:]:
             tr["life"] -= dt

@@ -29,20 +29,33 @@ class TacticalCrosshair:
         self.root.setDepthTest(False)
         self.root.setDepthWrite(False)
         self.scale = 1.0
+        self.base_pos = (0.0, 0.0, 0.0)
+
+        # 다이내믹 탄퍼짐(블룸) 및 흔들림(셰이크) 상태 변수
+        self.current_bloom = 1.0
+        self.target_bloom = 1.0
+        self.shake_timer = 0.0
+        self.shake_duration = 0.18
+        self.shake_magnitude = 0.0
+
         self._build_geometry()
 
     def _build_geometry(self):
-        # 1. 기본 전술 조준선 (정밀 센터 닷 + 4방향 십자선 + 전술 브래킷)
+        # 1-A. 고정 센터 닷 (중앙 초정밀 조준점 - 스케일 불변)
+        ls_dot = LineSegs("reticle_center_dot")
+        ls_dot.setColor(0.92, 0.96, 1.0, 0.95)
+        ls_dot.setThickness(2.5)
+        ls_dot.moveTo(0, 0, -0.0015)
+        ls_dot.drawTo(0, 0, 0.0015)
+        self.dot_geom = self.root.attachNewNode(ls_dot.create())
+
+        # 1-B. 다이내믹 십자선 & 전술 브래킷 (탄퍼짐/이동/격발 시 외곽으로 팽창)
         ls = LineSegs("reticle_default")
         ls.setColor(0.92, 0.96, 1.0, 0.90)
         ls.setThickness(2.0)
 
-        # 센터 닷
-        ls.moveTo(0, 0, -0.0015)
-        ls.drawTo(0, 0, 0.0015)
-
         # 4방향 틱 (중앙 여백 확보)
-        gap = 0.008
+        gap = 0.009
         t_len = 0.022
         # 상
         ls.moveTo(0, 0, gap)
@@ -77,7 +90,8 @@ class TacticalCrosshair:
         ls.drawTo(-b_pos, 0, -b_pos)
         ls.drawTo(-b_pos, 0, -b_pos + b_len)
 
-        self.default_geom = self.root.attachNewNode(ls.create())
+        self.reticle_geom = self.root.attachNewNode(ls.create())
+        self.default_geom = self.reticle_geom  # 하위 호환성 유지
 
         # 2. 적중(Hit) 피격 마커 (선홍색 X자 틱)
         ls_hit = LineSegs("reticle_hit")
@@ -139,9 +153,13 @@ class TacticalCrosshair:
 
     def setPos(self, x, y=None, z=None):
         if y is None and z is None:
-            self.root.setPos(x)
+            if hasattr(x, '__getitem__'):
+                self.base_pos = (float(x[0]), float(x[1]), float(x[2]) if len(x) > 2 else 0.0)
+            else:
+                self.base_pos = (float(x), 0.0, 0.0)
         else:
-            self.root.setPos(x, y, z)
+            self.base_pos = (float(x), float(y if y is not None else 0.0), float(z if z is not None else 0.0))
+        self.root.setPos(*self.base_pos)
 
     def getPos(self):
         return self.root.getPos()
@@ -177,6 +195,46 @@ class TacticalCrosshair:
     def reset_hit(self):
         self.hit_geom.hide()
         self.crit_geom.hide()
+
+    def trigger_hipfire_kick(self, kick_bloom=0.72, shake_mag=0.024, shake_dur=0.18):
+        """지향사격(Hip-fire) 시 크로스헤어 격발 팽창 및 급격한 고주파 흔들림(Jitter Shake) 연출"""
+        self.current_bloom = min(2.5, self.current_bloom + kick_bloom)
+        self.shake_timer = shake_dur
+        self.shake_duration = max(0.01, shake_dur)
+        self.shake_magnitude = shake_mag
+
+    def update(self, dt, is_moving=False, is_sprinting=False):
+        """매 프레임 이동 상태에 따른 블룸 크기 조절 및 사격 후 반동 복구, 흔들림 감쇠"""
+        if is_sprinting:
+            move_bloom = 1.65
+        elif is_moving:
+            move_bloom = 1.25
+        else:
+            move_bloom = 1.0
+
+        # 사격 반동으로 팽창된 블룸이 이동 목표치로 부드럽게 복구
+        if self.current_bloom > move_bloom:
+            self.current_bloom = max(move_bloom, self.current_bloom - 4.5 * dt)
+        else:
+            self.current_bloom = min(move_bloom, self.current_bloom + 3.0 * dt)
+
+        # 조준선 외곽선에 블룸 스케일 적용 (센터 닷은 정밀 유지)
+        if hasattr(self, 'reticle_geom') and not self.reticle_geom.isEmpty():
+            self.reticle_geom.setScale(self.current_bloom, 1.0, self.current_bloom)
+        elif hasattr(self, 'default_geom') and not self.default_geom.isEmpty():
+            self.default_geom.setScale(self.current_bloom, 1.0, self.current_bloom)
+
+        # 지향사격 반동 흔들림(Jitter Shake) 고주파 연출
+        if self.shake_timer > 0.0:
+            self.shake_timer = max(0.0, self.shake_timer - dt)
+            progress = self.shake_timer / self.shake_duration
+            cur_mag = self.shake_magnitude * (progress ** 1.1)
+            jitter_x = random.uniform(-1.0, 1.0) * cur_mag
+            jitter_z = random.uniform(-1.0, 1.0) * cur_mag
+            bx, by, bz = self.base_pos
+            self.root.setPos(bx + jitter_x, by, bz + jitter_z)
+        else:
+            self.root.setPos(*self.base_pos)
 
 
 def create_damage_indicator_geom():
@@ -1003,8 +1061,16 @@ class UIManager:
         if hasattr(self, 'vignette_blood') and self.vignette_blood:
             self.vignette_blood.setColorScale(1, 1, 1, self.damage_flash_alpha)
 
-    def update(self, dt, player_pos=None, camera_heading=None):
-        """HUD 실시간 애니메이션 (피격 플래시/방향 인디케이터 페이드아웃, 크로스헤어 복구, 정전 경보 맥동)"""
+    def trigger_hipfire_kick(self, kick_bloom=0.72, shake_mag=0.024, shake_dur=0.18):
+        """지향사격(Hip-fire) 시 크로스헤어 격발 팽창 및 고주파 흔들림(Jitter Shake) 발동"""
+        if hasattr(self, 'crosshair') and hasattr(self.crosshair, 'trigger_hipfire_kick'):
+            self.crosshair.trigger_hipfire_kick(kick_bloom=kick_bloom, shake_mag=shake_mag, shake_dur=shake_dur)
+
+    def update(self, dt, player_pos=None, camera_heading=None, is_moving=False, is_sprinting=False):
+        """HUD 실시간 애니메이션 (피격 플래시/방향 인디케이터 페이드아웃, 크로스헤어 블룸/흔들림 복구, 정전 경보 맥동)"""
+        # 크로스헤어 다이내믹 블룸 및 반동 흔들림 갱신
+        if hasattr(self, 'crosshair') and hasattr(self.crosshair, 'update'):
+            self.crosshair.update(dt, is_moving=is_moving, is_sprinting=is_sprinting)
         # 피격 방향 인디케이터 갱신 (실시간 카메라 회전 연동 및 페이드아웃)
         for ind in self.damage_indicators[:]:
             ind["timer"] -= dt
