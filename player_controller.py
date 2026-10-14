@@ -54,6 +54,8 @@ class PlayerController:
         # 이동 및 발자국
         self.last_move_dir = Vec3(0, 0, 0)
         self.footstep_timer = 0.0
+        self.heartbeat_accum = 0.0
+        self.is_aiming = False
 
         # 키보드 입력 상태
         self.key_map = {
@@ -61,8 +63,8 @@ class PlayerController:
             "shift": 0
         }
 
-    def setup_input(self, on_shoot, on_reload):
-        """키보드 및 마우스 조작 이벤트 등록"""
+    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_scan=None):
+        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 바이오 스캐너)"""
         self.base.disableMouse()
         self.lock_mouse(True)
 
@@ -96,13 +98,33 @@ class PlayerController:
         # 마우스 좌클릭 사격
         self.base.accept("mouse1", on_shoot)
 
+        # 마우스 우클릭 정밀 조준(ADS)
+        if on_aim_start:
+            self.base.accept("mouse3", self._on_aim_down, [on_aim_start])
+        if on_aim_stop:
+            self.base.accept("mouse3-up", self._on_aim_up, [on_aim_stop])
+
         # R 키 재장전
         self.base.accept("r", on_reload)
         self.base.accept("shift-r", on_reload)
         self.base.accept("R", on_reload)
 
+        # TAB / M 키 바이오 스캐너 레이더 펄스
+        if on_scan:
+            self.base.accept("tab", on_scan)
+            self.base.accept("m", on_scan)
+            self.base.accept("M", on_scan)
+
         # ESC 마우스 커서 해제/잠금 토글
         self.base.accept("escape", self.toggle_mouse_lock)
+
+    def _on_aim_down(self, cb):
+        self.is_aiming = True
+        cb()
+
+    def _on_aim_up(self, cb):
+        self.is_aiming = False
+        cb()
 
     def _set_key(self, key, state):
         self.key_map[key] = state
@@ -365,7 +387,8 @@ class PlayerController:
             move_dir.normalize()
             self.last_move_dir = move_dir
             base_speed = SPRINT_SPEED if self.is_sprinting else WALK_SPEED
-            speed = base_speed * self.speed_mult * cur_slow
+            aim_mult = 0.78 if self.is_aiming else 1.0
+            speed = base_speed * self.speed_mult * cur_slow * aim_mult
             disp = move_dir * speed * dt
 
             # 발자국 소리 주기
@@ -383,5 +406,18 @@ class PlayerController:
         else:
             self.last_move_dir = Vec3(0, 0, 0)
             self.footstep_timer = 0.35
+
+        # 5. 빈사 상태(HP < 30) 심장박동 효과음 및 붉은 비네트 맥동
+        if 0.0 < self.hp < 30.0:
+            hb_interval = 0.50 + 0.50 * (self.hp / 30.0)
+            self.heartbeat_accum += dt
+            if self.heartbeat_accum >= hb_interval:
+                self.heartbeat_accum = 0.0
+                if self.audio_mgr:
+                    self.audio_mgr.play_heartbeat()
+                if self.ui_mgr and hasattr(self.ui_mgr, 'trigger_low_hp_pulse'):
+                    self.ui_mgr.trigger_low_hp_pulse(0.38)
+        else:
+            self.heartbeat_accum = 0.0
 
         return is_moving, self.is_sprinting, view_changed

@@ -184,9 +184,13 @@ class LiminalInfiniteLoop(ShowBase):
             self, self.win, self.camera, self.mouseWatcherNode,
             self.audio_mgr, self.ui_mgr
         )
+        self.scan_cooldown = 0.0
         self.player.setup_input(
             on_shoot=self.shoot_pistol,
-            on_reload=self.reload_pistol
+            on_reload=self.reload_pistol,
+            on_aim_start=self.combat.start_aim,
+            on_aim_stop=self.combat.stop_aim,
+            on_scan=self.activate_bio_scanner
         )
 
         # 7. 게임 상태 및 5분(300초) 타이머 설정
@@ -244,6 +248,53 @@ class LiminalInfiniteLoop(ShowBase):
 
     def reload_pistol(self):
         self.combat.reload(self.game_state)
+
+    def activate_bio_scanner(self):
+        """[TAB] / [M] 전술 바이오 소나 펄스: 반경 38m 내 괴물 개체수 및 최단거리 탐지"""
+        if self.game_state != "PLAYING":
+            return
+        if self.scan_cooldown > 0.0:
+            self.ui_mgr.show_scanner_result(f"[ 스캐너 재충전 중: {self.scan_cooldown:.1f}초 남음 ]")
+            return
+
+        self.scan_cooldown = 4.0
+        self.audio_mgr.play_sonar_ping()
+
+        px, py = self.camera.getX(), self.camera.getY()
+        scan_radius = 38.0
+        detected = []
+        for m in self.monsters:
+            if getattr(m, 'hp', 0) > 0 and not getattr(m, 'is_corpse', False):
+                dist = math.hypot(m.pos.x - px, m.pos.y - py)
+                if dist <= scan_radius:
+                    detected.append((dist, m))
+
+        if not detected:
+            self.ui_mgr.show_scanner_result("[ 바이오 소나: 38m 반경 내 적성 생체 반응 없음 (SAFE) ]")
+        else:
+            detected.sort(key=lambda x: x[0])
+            min_dist, closest_m = detected[0]
+            m_name = getattr(closest_m, 'name', '괴물')
+            count = len(detected)
+
+            dx = closest_m.pos.x - px
+            dy = closest_m.pos.y - py
+            world_deg = math.degrees(math.atan2(-dx, dy)) % 360
+            cam_h = self.camera.getH() % 360
+            rel_deg = (world_deg - cam_h) % 360
+            if rel_deg <= 45 or rel_deg >= 315:
+                dir_str = "전방 (12시)"
+            elif 45 < rel_deg <= 135:
+                dir_str = "우측 (3시)"
+            elif 135 < rel_deg <= 225:
+                dir_str = "후방 (6시)"
+            else:
+                dir_str = "좌측 (9시)"
+
+            self.ui_mgr.show_scanner_result(
+                f"[ 바이오 소나 탐지: 적성 생체 {count}개체 발견! ]\n"
+                f"최단 위협: {m_name} ({min_dist:.1f}m 거리, {dir_str})"
+            )
 
     def exit_game(self):
         self.destroy()
@@ -378,6 +429,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.ui_mgr.hide_blackout_warning()
 
         # 전투 서브시스템 리셋
+        self.scan_cooldown = 0.0
+        self.combat.stop_aim()
         self.combat.reset_state(self.current_stage, keep_ammo=False)
 
         # 비동기 작업 정리
@@ -434,6 +487,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.setup_escape_portal()
 
         # 전투 서브시스템: 탄약 보급
+        self.scan_cooldown = 0.0
+        self.combat.stop_aim()
         self.combat.ammo = self.combat.max_ammo
         self.combat.reserve_ammo += 24
         self.combat.reset_state(self.current_stage, keep_ammo=True)
@@ -911,7 +966,11 @@ class LiminalInfiniteLoop(ShowBase):
                 # 던전 크롤러: 스탯 분배 및 상점 모달 팝업 & 다음 스테이지 준비
                 self.game_state = "SHOP"
                 self.player.lock_mouse(False)
-                self.ui_mgr.show_stage_clear_shop(self.current_stage, self.player, self.combat, self.on_shop_closed)
+                self.combat.stop_aim()
+                self.ui_mgr.show_stage_clear_shop(
+                    self.current_stage, self.player, self.combat,
+                    self.on_shop_closed, on_victory_callback=self.trigger_victory
+                )
                 return True
             else:
                 msg = f"[ 비상문 개방 중: {progress_sec:.1f}s / 5.0s  [{bar_str}] ]\n[ 경고: 문이 열릴 때까지 괴물의 접근을 저지하세요! ]"
@@ -969,6 +1028,10 @@ class LiminalInfiniteLoop(ShowBase):
         is_moving, is_sprinting, view_changed = self.player.update(dt, self.chunks)
         if is_moving:
             self.update_chunks()
+
+        # 5-1. 바이오 스캐너 쿨다운 갱신
+        if self.scan_cooldown > 0.0:
+            self.scan_cooldown = max(0.0, self.scan_cooldown - dt)
 
         # 6. 괴물 군단 AI 및 공격 판정
         px, py = self.camera.getX(), self.camera.getY()

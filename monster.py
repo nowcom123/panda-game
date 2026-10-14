@@ -165,8 +165,9 @@ class LongBlackSerpent:
 
     def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
         """플레이어 사격 레이캐스트와 뱀 머리/14마디 마디별 충돌 판정"""
-        # 머리 및 주요 마디들의 월드 좌표 수집
-        targets = [(self.pos.x, self.pos.y, self.pos.z + 0.3, 1.1)] # head: radius 1.1m
+        self.last_hit_was_head = False
+        # 머리 및 주요 마디들의 월드 좌표 수집 (is_head 플래그 포함)
+        targets = [(self.pos.x, self.pos.y, self.pos.z + 0.3, 1.1, True)] # head: radius 1.1m
         h_rad = math.radians(self.node.getH())
         cos_h, sin_h = math.cos(h_rad), math.sin(h_rad)
         for i in range(0, 14, 2):
@@ -175,9 +176,9 @@ class LongBlackSerpent:
             # 로컬 Y 오프셋을 월드 위치로 변환
             wx = self.pos.x + (-sin_h * by)
             wy = self.pos.y + (cos_h * by)
-            targets.append((wx, wy, self.pos.z, 0.95))
+            targets.append((wx, wy, self.pos.z, 0.95, False))
 
-        for tx, ty, tz, r in targets:
+        for tx, ty, tz, r, is_head in targets:
             vx = tx - ray_o.x
             vy = ty - ray_o.y
             vz = tz - ray_o.z
@@ -188,6 +189,7 @@ class LongBlackSerpent:
                 cz = ray_o.z + t * ray_d.z
                 dist_sq = (tx - cx)**2 + (ty - cy)**2 + (tz - cz)**2
                 if dist_sq <= r * r:
+                    self.last_hit_was_head = is_head
                     return True, t
         return False, 999.0
 
@@ -500,14 +502,15 @@ class TallSkeletonMonster:
 
     def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
         """플레이어 사격 레이캐스트와 4.2m 해골 괴물 전신(두개골, 흉곽, 골반 등) 충돌 판정"""
+        self.last_hit_was_head = False
         targets = [
-            (self.pos.x, self.pos.y, self.pos.z + 1.0, 0.70), # 하체/다리
-            (self.pos.x, self.pos.y, self.pos.z + 1.85, 0.75), # 골반
-            (self.pos.x, self.pos.y, self.pos.z + 2.65, 0.85), # 흉곽/갈비뼈
-            (self.pos.x, self.pos.y, self.pos.z + 3.35, 0.80), # 쇄골/어깨
-            (self.pos.x, self.pos.y, self.pos.z + 3.85, 0.80), # 쩍 벌어진 두개골
+            (self.pos.x, self.pos.y, self.pos.z + 3.85, 0.80, True), # 쩍 벌어진 두개골 (헤드샷!)
+            (self.pos.x, self.pos.y, self.pos.z + 3.35, 0.70, False), # 쇄골/어깨
+            (self.pos.x, self.pos.y, self.pos.z + 2.65, 0.80, False), # 흉곽/갈비뼈
+            (self.pos.x, self.pos.y, self.pos.z + 1.85, 0.75, False), # 골반
+            (self.pos.x, self.pos.y, self.pos.z + 1.0, 0.70, False), # 하체/다리
         ]
-        for tx, ty, tz, r in targets:
+        for tx, ty, tz, r, is_head in targets:
             vx = tx - ray_o.x
             vy = ty - ray_o.y
             vz = tz - ray_o.z
@@ -518,6 +521,7 @@ class TallSkeletonMonster:
                 cz = ray_o.z + t * ray_d.z
                 dist_sq = (tx - cx)**2 + (ty - cy)**2 + (tz - cz)**2
                 if dist_sq <= r * r:
+                    self.last_hit_was_head = is_head
                     return True, t
         return False, 999.0
 
@@ -788,12 +792,13 @@ class AbominableMudOrc:
             self.node.removeNode()
 
     def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
+        self.last_hit_was_head = False
         targets = [
-            (self.pos.x, self.pos.y, self.pos.z + 1.0, 0.85),
-            (self.pos.x, self.pos.y, self.pos.z + 1.8, 0.80),
-            (self.pos.x, self.pos.y, self.pos.z + 2.3, 0.55)
+            (self.pos.x, self.pos.y, self.pos.z + 2.3, 0.60, True), # 턱/머리 (헤드샷!)
+            (self.pos.x, self.pos.y, self.pos.z + 1.8, 0.80, False),
+            (self.pos.x, self.pos.y, self.pos.z + 1.0, 0.85, False)
         ]
-        for tx, ty, tz, r in targets:
+        for tx, ty, tz, r, is_head in targets:
             vx = tx - ray_o.x
             vy = ty - ray_o.y
             vz = tz - ray_o.z
@@ -803,6 +808,7 @@ class AbominableMudOrc:
                 cy = ray_o.y + t * ray_d.y
                 cz = ray_o.z + t * ray_d.z
                 if (tx - cx)**2 + (ty - cy)**2 + (tz - cz)**2 <= r * r:
+                    self.last_hit_was_head = is_head
                     return True, t
         return False, 999.0
 
@@ -1074,12 +1080,13 @@ class AlluringAshWitch:
             self.node.removeNode()
 
     def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
+        self.last_hit_was_head = False
         targets = [
-            (self.pos.x, self.pos.y, self.pos.z + 0.6, 0.65),
-            (self.pos.x, self.pos.y, self.pos.z + 1.4, 0.55),
-            (self.pos.x, self.pos.y, self.pos.z + 2.0, 0.55)
+            (self.pos.x, self.pos.y, self.pos.z + 2.0, 0.55, True), # 마녀 머리 (헤드샷!)
+            (self.pos.x, self.pos.y, self.pos.z + 1.4, 0.55, False),
+            (self.pos.x, self.pos.y, self.pos.z + 0.6, 0.65, False)
         ]
-        for tx, ty, tz, r in targets:
+        for tx, ty, tz, r, is_head in targets:
             vx = tx - ray_o.x
             vy = ty - ray_o.y
             vz = tz - ray_o.z
@@ -1089,6 +1096,7 @@ class AlluringAshWitch:
                 cy = ray_o.y + t * ray_d.y
                 cz = ray_o.z + t * ray_d.z
                 if (tx - cx)**2 + (ty - cy)**2 + (tz - cz)**2 <= r * r:
+                    self.last_hit_was_head = is_head
                     return True, t
         return False, 999.0
 

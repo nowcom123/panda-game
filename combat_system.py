@@ -96,8 +96,30 @@ class CombatSystem:
         # 정전 상태
         self.is_blackout = False
 
+        # 정밀 조준(ADS: Aim Down Sights) 상태
+        self.is_aiming = False
+        self.ads_alpha = 0.0
+        self.ads_hip_pos = Vec3(0.30, 0.74, -0.26)
+        self.ads_aim_pos = Vec3(0.00, 0.58, -0.165)
+        self.ads_hip_hpr = Vec3(3.0, 1.5, 0)
+        self.ads_aim_hpr = Vec3(0.0, 0.0, 0)
+
         # 뷰모델 지오메트리 구축
         self._setup_viewmodel()
+
+    def start_aim(self):
+        """우클릭 정밀 조준(ADS) 시작"""
+        if not self.is_aiming:
+            self.is_aiming = True
+            if self.audio_mgr:
+                self.audio_mgr.play_ads(True)
+
+    def stop_aim(self):
+        """우클릭 정밀 조준(ADS) 해제"""
+        if self.is_aiming:
+            self.is_aiming = False
+            if self.audio_mgr:
+                self.audio_mgr.play_ads(False)
 
     def _setup_viewmodel(self):
         """1인칭 듀얼 뷰모델: 왼손 손전등 & 오른손 12발 권총"""
@@ -234,12 +256,20 @@ class CombatSystem:
             else:
                 dmg = getattr(player, 'attack_power', 35.0) if player else 35.0
 
+            # 헤드샷 치명타(Critical Hit) 판정: 2.0배 증폭 데미지!
+            is_crit = getattr(closest_monster, 'last_hit_was_head', False)
+            if is_crit:
+                dmg *= 2.0
+
             is_dead = closest_monster.take_damage(dmg)
             m_name = getattr(closest_monster, 'name', '괴물')
 
             # 몬스터 피격 효과: 크로스헤어 피격 마커 & 3D 핏빛 파티클 분출
-            self.ui_mgr.trigger_crosshair_hit(is_kill=is_dead)
+            self.ui_mgr.trigger_crosshair_hit(is_kill=is_dead, is_crit=is_crit)
             self.spawn_hit_particles(impact_world, is_blood=True)
+
+            if is_crit and self.audio_mgr:
+                self.audio_mgr.play_crit_hit()
 
             if is_dead:
                 exp_gain = getattr(closest_monster, 'exp_value', 35)
@@ -258,8 +288,12 @@ class CombatSystem:
                 if player:
                     player.gain_exp(exp_gain)
             else:
-                self.ui_mgr.show_hit_marker("")
-                self.hit_marker_timer = 0.0
+                if is_crit:
+                    self.ui_mgr.show_hit_marker(f"★ 헤드샷 치명타! (-{int(dmg)} HP) ★", (1.0, 0.88, 0.20, 1.0))
+                    self.hit_marker_timer = 1.0
+                else:
+                    self.ui_mgr.show_hit_marker("")
+                    self.hit_marker_timer = 0.0
 
             if self.audio_mgr:
                 if "뱀" in m_name:
@@ -491,8 +525,10 @@ class CombatSystem:
         elif self.recoil_timer > 0.0:
             self.recoil_timer -= dt
             t_norm = max(0.0, self.recoil_timer / 0.10)
-            self.recoil_node.setPos(0, -0.05 * t_norm, 0.02 * t_norm)
-            self.recoil_node.setP(12.0 * t_norm)
+            recoil_dist = 0.05 if not self.is_aiming else 0.024
+            recoil_deg = 12.0 if not self.is_aiming else 5.5
+            self.recoil_node.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.4) * t_norm)
+            self.recoil_node.setP(recoil_deg * t_norm)
         else:
             self.recoil_node.setPos(0, 0, 0)
             self.recoil_node.setP(0)
@@ -521,15 +557,37 @@ class CombatSystem:
                     self.ammo_drops.remove(drop)
                     self.ui_mgr.update_ammo(self.ammo, self.max_ammo, self.reserve_ammo)
 
-        # 뷰모델 보행 밥빙 & 호흡 스웨이
+        # 정밀 조준(ADS) 부드러운 위치/화각 보간
+        ads_speed = 10.0
+        if self.is_aiming:
+            self.ads_alpha = min(1.0, self.ads_alpha + ads_speed * dt)
+        else:
+            self.ads_alpha = max(0.0, self.ads_alpha - ads_speed * dt)
+
+        cur_pos = self.ads_hip_pos * (1.0 - self.ads_alpha) + self.ads_aim_pos * self.ads_alpha
+        cur_hpr = self.ads_hip_hpr * (1.0 - self.ads_alpha) + self.ads_aim_hpr * self.ads_alpha
+        self.vm_pistol.setPos(cur_pos)
+        self.vm_pistol.setHpr(cur_hpr)
+
+        # 카메라 FOV 줌 (60도 -> 47도)
+        if hasattr(self.base, 'camLens') and self.base.camLens:
+            cur_fov = 60.0 * (1.0 - self.ads_alpha) + 47.0 * self.ads_alpha
+            self.base.camLens.setFov(cur_fov)
+
+        # 조준 중 크로스헤어 투명화 (가늠쇠 조준 유도)
+        if hasattr(self.ui_mgr, 'set_crosshair_visible'):
+            self.ui_mgr.set_crosshair_visible(self.ads_alpha < 0.45)
+
+        # 뷰모델 보행 밥빙 & 호흡 스웨이 (조준 중에는 밥빙이 억제됨)
+        bob_mult = 1.0 - self.ads_alpha * 0.75
         if is_moving:
             self.bobbing_time += dt * (14.0 if is_sprinting else 8.5)
-            bob_x = math.sin(self.bobbing_time * 0.5) * 0.012
-            bob_y = abs(math.cos(self.bobbing_time)) * 0.014
+            bob_x = math.sin(self.bobbing_time * 0.5) * 0.012 * bob_mult
+            bob_y = abs(math.cos(self.bobbing_time)) * 0.014 * bob_mult
             self.vm_root.setPos(bob_x, 0, -bob_y)
         else:
             self.bobbing_time += dt * 2.0
-            sway_z = math.sin(self.bobbing_time) * 0.003
+            sway_z = math.sin(self.bobbing_time) * 0.003 * bob_mult
             self.vm_root.setPos(0, 0, sway_z)
     def set_blackout_mode(self, is_active: bool):
         """정전 비상등 핏빛 조명 모드 전환"""

@@ -77,6 +77,7 @@ class UIManager:
         self.damage_flash.setBin("fixed", 5)
         self.damage_flash_alpha = 0.0
         self.crosshair_hit_timer = 0.0
+        self.hit_marker_timer = 0.0
 
         self.timer_text = OnscreenText(
             text="[ 탈출 제한시간: 01:00 ]",
@@ -177,9 +178,9 @@ class UIManager:
         self.blackout_pulse_timer = 0.0
 
         self.guide_text = OnscreenText(
-            text="[WASD] 8방향 이동  |  [Shift] 달리기  |  [좌클릭] 사격  |  [R] 재장전",
+            text="[WASD] 이동  |  [Shift] 달리기  |  [우클릭] 정밀조준(ADS)  |  [좌클릭] 사격  |  [R] 재장전  |  [Tab] 생체스캔",
             pos=(0, -0.93),
-            scale=0.038,
+            scale=0.036,
             fg=(0.9, 0.9, 0.8, 0.85),
             align=TextNode.ACenter,
             mayChange=False,
@@ -459,20 +460,26 @@ class UIManager:
         self.hit_marker_text.setText("")
         self.stage_clear_banner.hide()
 
-    def show_hit_marker(self, text, color=(1.0, 0.85, 0.2, 1.0)):
+    def show_hit_marker(self, text, color=None, fg=None):
         """피격/적중/알림 표시"""
+        c = fg if fg is not None else (color if color is not None else (1.0, 0.85, 0.2, 1.0))
         self.hit_marker_text.setText(text)
-        self.hit_marker_text.setFg(color)
+        self.hit_marker_text.setFg(c)
+        self.hit_marker_timer = 2.2
 
     def trigger_player_damage_flash(self, intensity=0.60):
         """플레이어 피격 시 화면 붉은 플래시 효과"""
         self.damage_flash_alpha = intensity
         self.damage_flash['frameColor'] = (0.85, 0.05, 0.05, self.damage_flash_alpha)
 
-    def trigger_crosshair_hit(self, is_kill=False):
-        """몬스터 타격 시 크로스헤어 적중 마커 표시"""
-        self.crosshair_hit_timer = 0.18
-        if is_kill:
+    def trigger_crosshair_hit(self, is_kill=False, is_crit=False):
+        """몬스터 타격 시 크로스헤어 적중 마커 표시 (치명타 시 골드 마커)"""
+        self.crosshair_hit_timer = 0.22 if is_crit else 0.18
+        if is_crit:
+            self.crosshair.setText("※")
+            self.crosshair.setScale(0.096)
+            self.crosshair.setFg((1.0, 0.88, 0.15, 1.0))
+        elif is_kill:
             self.crosshair.setText("X")
             self.crosshair.setScale(0.088)
             self.crosshair.setFg((1.0, 0.20, 0.20, 1.0))
@@ -480,6 +487,19 @@ class UIManager:
             self.crosshair.setText("x")
             self.crosshair.setScale(0.078)
             self.crosshair.setFg((1.0, 0.40, 0.40, 1.0))
+
+    def set_crosshair_visible(self, visible: bool):
+        """정밀 조준(ADS) 시 크로스헤어 표시/숨김 제어"""
+        if hasattr(self, 'crosshair') and self.crosshair:
+            if visible:
+                self.crosshair.show()
+            else:
+                self.crosshair.hide()
+
+    def trigger_low_hp_pulse(self, intensity=0.40):
+        """체력 30 미만 빈사 상태 시 심장박동 화면 붉은 펄스"""
+        self.damage_flash_alpha = max(self.damage_flash_alpha, intensity)
+        self.damage_flash['frameColor'] = (0.75, 0.04, 0.04, self.damage_flash_alpha)
 
     def update(self, dt):
         """HUD 실시간 애니메이션 (피격 플래시 페이드아웃, 크로스헤어 복구, 정전 경보 맥동)"""
@@ -493,6 +513,11 @@ class UIManager:
                 self.crosshair.setText("+")
                 self.crosshair.setScale(0.065)
                 self.crosshair.setFg((1.0, 1.0, 1.0, 0.85))
+
+        if self.hit_marker_timer > 0.0:
+            self.hit_marker_timer -= dt
+            if self.hit_marker_timer <= 0.0:
+                self.hit_marker_text.setText("")
 
         if hasattr(self, 'blackout_banner') and not self.blackout_banner.isHidden():
             self.blackout_pulse_timer += dt * 6.5
@@ -1009,6 +1034,22 @@ class UIManager:
             **self.btn_font_kw
         )
 
+        # 미궁 완전 탈출 승리 버튼 (STAGE 3 이상 클리어 시 선택 가능)
+        self.btn_escape_victory = DirectButton(
+            parent=self.shop_modal,
+            text="★ 미궁 완전 탈출 (VICTORY ESCAPE) ★",
+            pos=(0.35, 0, -0.48),
+            scale=0.052,
+            relief=DGG.RAISED,
+            frameColor=(0.12, 0.35, 0.50, 0.98),
+            text_fg=(0.40, 0.95, 1.0, 1.0),
+            borderWidth=(0.006, 0.006),
+            pad=(0.38, 0.16),
+            command=self._confirm_escape_victory,
+            **self.btn_font_kw
+        )
+        self.btn_escape_victory.hide()
+
         self.shop_modal.hide()
 
     def _refresh_shop_labels(self):
@@ -1070,13 +1111,30 @@ class UIManager:
         if self.on_shop_confirm:
             self.on_shop_confirm()
 
-    def show_stage_clear_shop(self, stage, player, combat, on_confirm_callback):
+    def _confirm_escape_victory(self):
+        self.hide_stage_clear_shop()
+        if hasattr(self, 'on_escape_victory') and self.on_escape_victory:
+            self.on_escape_victory()
+
+    def show_stage_clear_shop(self, stage, player, combat, on_confirm_callback, on_victory_callback=None):
         self.shop_player = player
         self.shop_combat = combat
         self.on_shop_confirm = on_confirm_callback
+        self.on_escape_victory = on_victory_callback
         self.shop_title.setText(f"[ STAGE {stage} CLEAR! 스탯 분배 및 보급소 ]")
         self.shop_msg_text.setText("")
         self._refresh_shop_labels()
+
+        # STAGE 3 이상 클리어 시 미궁 완전 탈출 버튼 활성화
+        if stage >= 3 and on_victory_callback is not None:
+            self.btn_start_next.setPos(-0.35, 0, -0.48)
+            self.btn_start_next["text"] = "심연 더 깊이 진입 (NEXT STAGE)"
+            self.btn_escape_victory.setPos(0.35, 0, -0.48)
+            self.btn_escape_victory.show()
+        else:
+            self.btn_start_next.setPos(0, 0, -0.48)
+            self.btn_start_next["text"] = "다음 스테이지 시작 (START NEXT STAGE)"
+            self.btn_escape_victory.hide()
 
         # 미보유 유물 풀에서 무작위 3개 선별
         acquired = set(getattr(player, 'relics', []))
@@ -1103,3 +1161,8 @@ class UIManager:
 
     def hide_stage_clear_shop(self):
         self.shop_modal.hide()
+
+    def show_scanner_result(self, msg):
+        """바이오 스캐너 펄스 탐지 결과 HUD 알림"""
+        self.show_hit_marker(msg, color=(0.35, 0.95, 1.0, 1.0))
+        self.hit_marker_timer = 3.5

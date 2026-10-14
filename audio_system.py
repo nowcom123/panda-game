@@ -86,6 +86,18 @@ class AudioManager:
         slam_p = self._get_path("orc_slam.wav")
         self.orc_slam_sfx = self.loader.loadSfx(slam_p) if slam_p else None
 
+        # 8. 정밀 조준, 치명타, 심장박동, 바이오 소나 효과음
+        crit_p = self._get_path("crit_hit.wav")
+        self.crit_hit_sfx = self.loader.loadSfx(crit_p) if crit_p else None
+        hb_p = self._get_path("heartbeat.wav")
+        self.heartbeat_sfx = self.loader.loadSfx(hb_p) if hb_p else None
+        sonar_p = self._get_path("sonar_ping.wav")
+        self.sonar_ping_sfx = self.loader.loadSfx(sonar_p) if sonar_p else None
+        ads_in_p = self._get_path("ads_in.wav")
+        self.ads_in_sfx = self.loader.loadSfx(ads_in_p) if ads_in_p else None
+        ads_out_p = self._get_path("ads_out.wav")
+        self.ads_out_sfx = self.loader.loadSfx(ads_out_p) if ads_out_p else None
+
     def _get_path(self, fname):
         full_p = os.path.join(self.audio_dir, fname)
         if os.path.exists(full_p):
@@ -240,6 +252,31 @@ class AudioManager:
         if self.orc_slam_sfx:
             self.orc_slam_sfx.setVolume(1.0)
             self.orc_slam_sfx.play()
+
+    def play_crit_hit(self):
+        """헤드샷 치명타 적중 핑 사운드"""
+        if self.crit_hit_sfx:
+            self.crit_hit_sfx.setVolume(0.95)
+            self.crit_hit_sfx.play()
+
+    def play_heartbeat(self):
+        """빈사 위기 저주파 심장박동 사운드"""
+        if self.heartbeat_sfx:
+            self.heartbeat_sfx.setVolume(0.90)
+            self.heartbeat_sfx.play()
+
+    def play_sonar_ping(self):
+        """바이오 소나/레이더 펄스 탐지음"""
+        if self.sonar_ping_sfx:
+            self.sonar_ping_sfx.setVolume(0.85)
+            self.sonar_ping_sfx.play()
+
+    def play_ads(self, is_aiming=True):
+        """정밀 조준 진입/해제 무기 파지음"""
+        snd = self.ads_in_sfx if is_aiming else self.ads_out_sfx
+        if snd:
+            snd.setVolume(0.50)
+            snd.play()
 
     def update(self, dt, dist_serpent, dist_skeleton, s_los, k_los):
         """프레임별 3D 오디오 리스너 및 몬스터 거리 감쇠/포효 갱신"""
