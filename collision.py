@@ -94,3 +94,55 @@ def resolve_collision(chunks, curr_x, curr_y, dx, dy, radius=PLAYER_RADIUS):
     py = max(min_bound, min(max_bound, py))
 
     return px, py
+
+
+def raycast_walls(chunks, ray_origin, ray_dir, max_dist=55.0):
+    """광선(Ray)과 월드 내 AABB 벽체 충돌체 간 최단 교차 거리 및 타격 지점 정밀 계산"""
+    px, py = ray_origin.x, ray_origin.y
+    dx, dy = ray_dir.x, ray_dir.y
+    if math.hypot(dx, dy) < 1e-4:
+        return max_dist, None
+
+    colliders = set()
+    step_samples = (0.0, 8.0, 16.0, 24.0, 32.0, max_dist)
+    for s in step_samples:
+        sx = px + dx * s
+        sy = py + dy * s
+        for col in get_nearby_colliders(chunks, sx, sy, search_dist=5.5):
+            colliders.add(col)
+
+    closest_t = max_dist
+    for min_x, min_y, max_x, max_y in colliders:
+        if (max_x - min_x) < 0.5 and (max_y - min_y) < 0.5:
+            continue
+        p = [-dx, dx, -dy, dy]
+        q = [px - min_x, max_x - px, py - min_y, max_y - py]
+        t0, t1 = 0.0, max_dist
+        hit = True
+        for i in range(4):
+            if abs(p[i]) < 1e-6:
+                if q[i] < 0:
+                    hit = False
+                    break
+            else:
+                t = q[i] / p[i]
+                if p[i] < 0:
+                    if t > t1:
+                        hit = False
+                        break
+                    if t > t0:
+                        t0 = t
+                else:
+                    if t < t0:
+                        hit = False
+                        break
+                    if t < t1:
+                        t1 = t
+        if hit and 0.2 < t0 <= t1 and t0 < closest_t:
+            hit_z = ray_origin.z + ray_dir.z * t0
+            if 0.0 <= hit_z <= 13.0:
+                closest_t = t0
+
+    if closest_t < max_dist:
+        return closest_t, ray_origin + ray_dir * closest_t
+    return max_dist, None

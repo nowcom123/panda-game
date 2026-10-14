@@ -179,6 +179,40 @@ class TacticalCrosshair:
         self.crit_geom.hide()
 
 
+def create_damage_indicator_geom():
+    """피격 방향을 가리키는 고해상도 붉은색 벡터 아크 및 전술 쉐브론 화살표"""
+    ls = LineSegs("damage_direction_indicator")
+    ls.setColor(1.0, 0.08, 0.08, 1.0)
+    ls.setThickness(4.8)
+
+    # 1. 외곽 곡선 아크 (-28도 ~ +28도, 반경 0.44)
+    r_outer = 0.44
+    steps = 14
+    for i in range(steps):
+        a1 = math.radians(-28.0 + (56.0 * i / steps))
+        a2 = math.radians(-28.0 + (56.0 * (i + 1) / steps))
+        ls.moveTo(math.sin(a1) * r_outer, 0, math.cos(a1) * r_outer)
+        ls.drawTo(math.sin(a2) * r_outer, 0, math.cos(a2) * r_outer)
+
+    # 2. 내곽 보조 아크 (-18도 ~ +18도, 반경 0.40)
+    r_inner = 0.40
+    steps_in = 10
+    for i in range(steps_in):
+        a1 = math.radians(-18.0 + (36.0 * i / steps_in))
+        a2 = math.radians(-18.0 + (36.0 * (i + 1) / steps_in))
+        ls.moveTo(math.sin(a1) * r_inner, 0, math.cos(a1) * r_inner)
+        ls.drawTo(math.sin(a2) * r_inner, 0, math.cos(a2) * r_inner)
+
+    # 3. 중앙 정점 전술 화살표 팁 (외부를 향해 뾰족하게 돌출)
+    tip_r = 0.51
+    ls.moveTo(-0.045, 0, 0.43)
+    ls.drawTo(0.0, 0, tip_r)
+    ls.drawTo(0.045, 0, 0.43)
+
+    return ls.create()
+
+
+
 ImageCrosshair = TacticalCrosshair
 
 
@@ -276,6 +310,11 @@ class UIManager:
         self.crosshair.setBin("fixed", 25)
         self.crosshair_hit_timer = 0.0
         self.hit_marker_timer = 0.0
+
+        # 3-2. 플레이어 피격 방향 전술 인디케이터 루트 및 활성 목록
+        self.damage_dir_root = self.base.aspect2d.attachNewNode("damage_dir_root")
+        self.damage_dir_root.setBin("fixed", 24)
+        self.damage_indicators = []
 
         # 4. 상단 목표/나침반 패널
         self.panel_hud_top = OnscreenImage(
@@ -856,6 +895,10 @@ class UIManager:
         self._set_hud_cluster_visible(False)
         self.hit_marker_text.setText("")
         self.stage_clear_banner.hide()
+        for ind in self.damage_indicators:
+            if ind.get("node") and not ind["node"].isEmpty():
+                ind["node"].removeNode()
+        self.damage_indicators = []
 
     def show_hit_marker(self, text, color=None, fg=None):
         """피격/적중/알림 표시"""
@@ -863,6 +906,40 @@ class UIManager:
         self.hit_marker_text.setText(text)
         self.hit_marker_text.setFg(c)
         self.hit_marker_timer = 2.2
+
+    def show_damage_direction(self, source_pos, player_pos, camera_heading):
+        """플레이어 피격 시 공격자가 위치한 3D 월드 방향을 실시간 추적하는 붉은색 전술 인디케이터 표시"""
+        if source_pos is None or player_pos is None:
+            return
+
+        sx = getattr(source_pos, 'x', source_pos[0])
+        sy = getattr(source_pos, 'y', source_pos[1])
+        px = player_pos[0]
+        py = player_pos[1]
+
+        dx = sx - px
+        dy = sy - py
+        if math.hypot(dx, dy) < 1e-4:
+            return
+
+        node = self.damage_dir_root.attachNewNode(create_damage_indicator_geom())
+        node.setLightOff()
+
+        world_bearing = math.degrees(math.atan2(dx, dy))
+        rel_angle = (world_bearing + camera_heading) % 360.0
+        node.setR(rel_angle)
+
+        if len(self.damage_indicators) >= 4:
+            oldest = self.damage_indicators.pop(0)
+            if oldest.get("node") and not oldest["node"].isEmpty():
+                oldest["node"].removeNode()
+
+        self.damage_indicators.append({
+            "node": node,
+            "source": (sx, sy),
+            "timer": 1.4,
+            "max_timer": 1.4
+        })
 
     def trigger_player_damage_flash(self, intensity=0.60):
         """플레이어 피격 시 화면 붉은 핏빛 비네트 효과"""
@@ -899,8 +976,27 @@ class UIManager:
         if hasattr(self, 'vignette_blood') and self.vignette_blood:
             self.vignette_blood.setColorScale(1, 1, 1, self.damage_flash_alpha)
 
-    def update(self, dt):
-        """HUD 실시간 애니메이션 (피격 플래시 페이드아웃, 크로스헤어 복구, 정전 경보 맥동)"""
+    def update(self, dt, player_pos=None, camera_heading=None):
+        """HUD 실시간 애니메이션 (피격 플래시/방향 인디케이터 페이드아웃, 크로스헤어 복구, 정전 경보 맥동)"""
+        # 피격 방향 인디케이터 갱신 (실시간 카메라 회전 연동 및 페이드아웃)
+        for ind in self.damage_indicators[:]:
+            ind["timer"] -= dt
+            if ind["timer"] <= 0.0:
+                if ind.get("node") and not ind["node"].isEmpty():
+                    ind["node"].removeNode()
+                self.damage_indicators.remove(ind)
+                continue
+
+            alpha = max(0.0, ind["timer"] / ind["max_timer"])
+            if ind.get("node") and not ind["node"].isEmpty():
+                ind["node"].setColorScale(1.0, 1.0, 1.0, alpha)
+                if player_pos is not None and camera_heading is not None:
+                    dx = ind["source"][0] - player_pos[0]
+                    dy = ind["source"][1] - player_pos[1]
+                    world_bearing = math.degrees(math.atan2(dx, dy))
+                    rel_angle = (world_bearing + camera_heading) % 360.0
+                    ind["node"].setR(rel_angle)
+
         if self.damage_flash_alpha > 0.0:
             self.damage_flash_alpha = max(0.0, self.damage_flash_alpha - dt * 2.5)
             self.damage_flash['frameColor'] = (0.85, 0.05, 0.05, self.damage_flash_alpha)

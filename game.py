@@ -184,6 +184,7 @@ class LiminalInfiniteLoop(ShowBase):
             self, self.win, self.camera, self.mouseWatcherNode,
             self.audio_mgr, self.ui_mgr
         )
+        self.player.world_root = self.world_root
         self.scan_cooldown = 0.0
         self.player.setup_input(
             on_shoot=self.shoot_pistol,
@@ -783,7 +784,7 @@ class LiminalInfiniteLoop(ShowBase):
             # 1. 근접 공격 판정
             attack_range = 1.95 if isinstance(m, (TallSkeletonMonster, AbominableMudOrc)) else 1.45
             if dist <= attack_range and m.stun_timer <= 0.0:
-                is_dead = self.player.take_damage(m.attack_damage)
+                is_dead = self.player.take_damage(m.attack_damage, source_pos=(mx, my))
                 m.update(dt, is_moving=False, is_attacking=True)
                 if is_dead:
                     self.trigger_game_over(killer=m, reason="killed")
@@ -930,7 +931,7 @@ class LiminalInfiniteLoop(ShowBase):
             dist_p = math.hypot(fb.pos.x - px, fb.pos.y - py)
             dz = abs(fb.pos.z - pz)
             if dist_p < 0.95 and dz < 1.6:
-                is_dead = self.player.take_damage(fb.damage)
+                is_dead = self.player.take_damage(fb.damage, source_pos=(fb.pos.x, fb.pos.y))
                 fb.destroy()
                 self.fireballs.remove(fb)
                 if is_dead:
@@ -1019,7 +1020,7 @@ class LiminalInfiniteLoop(ShowBase):
             return cont
 
         if self.game_over or self.game_state == "GAME_OVER":
-            self.ui_mgr.update(dt)
+            self.ui_mgr.update(dt, player_pos=(self.camera.getX(), self.camera.getY()), camera_heading=getattr(self.player, 'heading', 0.0))
             if self.killer_monster is not None:
                 killer = self.killer_monster
                 px, py = self.camera.getX(), self.camera.getY()
@@ -1120,7 +1121,7 @@ class LiminalInfiniteLoop(ShowBase):
             self.beacon_light_np.node().setColor((0.35 * pulse, 1.5 * pulse, 0.55 * pulse, 1.0))
 
         # 13. HUD 텍스트 캐싱 및 실시간 피격 효과 애니메이션 갱신
-        self.ui_mgr.update(dt)
+        self.ui_mgr.update(dt, player_pos=(px, py), camera_heading=getattr(self.player, 'heading', 0.0))
         self.ui_mgr.update_timer(self.time_left, self.current_stage)
         self.ui_mgr.update_hud(px, py, getattr(self, 'escape_pos', None), getattr(self.player, 'heading', 0.0))
 

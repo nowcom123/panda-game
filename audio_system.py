@@ -99,6 +99,12 @@ class AudioManager:
         self.ads_out_sfx = self.loader.loadSfx(ads_out_p) if ads_out_p else None
         explode_p = self._get_path("monster_explode.wav")
         self.monster_explode_sfx = self.loader.loadSfx(explode_p) if explode_p else None
+        wire_launch_p = self._get_path("wire_launch.wav")
+        self.wire_launch_sfx = self.loader.loadSfx(wire_launch_p) if wire_launch_p else None
+        wire_latch_p = self._get_path("wire_latch.wav")
+        self.wire_latch_sfx = self.loader.loadSfx(wire_latch_p) if wire_latch_p else None
+        wire_reel_p = self._get_path("wire_reel.wav")
+        self.wire_reel_sfx = self.loader.loadSfx(wire_reel_p) if wire_reel_p else None
 
     def _get_path(self, fname):
         full_p = os.path.join(self.audio_dir, fname)
@@ -285,6 +291,24 @@ class AudioManager:
         if self.monster_explode_sfx:
             self.monster_explode_sfx.setVolume(1.0)
             self.monster_explode_sfx.play()
+
+    def play_wire_launch(self):
+        """스페이스바 전술 와이어 고속 사출음"""
+        if self.wire_launch_sfx:
+            self.wire_launch_sfx.setVolume(0.85)
+            self.wire_launch_sfx.play()
+
+    def play_wire_latch(self):
+        """와이어 벽면 앵커 훅 꽂힘 및 텐션 체결음"""
+        if self.wire_latch_sfx:
+            self.wire_latch_sfx.setVolume(0.95)
+            self.wire_latch_sfx.play()
+
+    def play_wire_reel(self):
+        """와이어 견인 모터 고속 릴링음"""
+        if self.wire_reel_sfx:
+            self.wire_reel_sfx.setVolume(0.70)
+            self.wire_reel_sfx.play()
 
     def update(self, dt, dist_serpent, dist_skeleton, s_los, k_los):
         """프레임별 3D 오디오 리스너 및 몬스터 거리 감쇠/포효 갱신"""
