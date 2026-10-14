@@ -315,6 +315,7 @@ class UIManager:
         self._setup_intro_ui()
         self._setup_rank_ui()
         self._setup_shop_ui()
+        self._setup_inventory_ui()
 
     def _set_bar_percentage(self, fill_img, pct, cx, cz, hw, hh):
         """이미지 기반 프로그레스바의 가로 스케일 및 왼쪽 정렬 앵커 오프셋 계산"""
@@ -641,10 +642,22 @@ class UIManager:
         self.blackout_banner.hide()
         self.blackout_pulse_timer = 0.0
 
-        self.guide_text = OnscreenText(
-            text="[WASD] 이동  |  [Space] 슬라이드  |  [G] 전술수류탄  |  [우클릭] 정밀조준  |  [좌클릭] 사격  |  [R] 재장전  |  [Tab] 생체스캔",
-            pos=(0, -0.93),
+        # 인게임 전술 퀵슬롯 HUD (소모품 수량 실시간 표시)
+        self.quickslot_text = OnscreenText(
+            text="[1] 응급키트: 2개  |  [2] 아드레날린: 1개  |  [3] 탄약팩: 2개  |  [4] 수류탄: 1개  |  [Tab/I] 배낭",
+            pos=(0, -0.88),
             scale=0.024,
+            fg=(0.35, 0.95, 1.0, 0.95),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.guide_text = OnscreenText(
+            text="[WASD] 이동  |  [Space] 슬라이드  |  [G] 전술수류탄  |  [우클릭] 정밀조준  |  [좌클릭] 사격  |  [R] 재장전  |  [Tab/I] 인벤토리",
+            pos=(0, -0.93),
+            scale=0.022,
             fg=(0.9, 0.9, 0.8, 0.85),
             align=TextNode.ACenter,
             mayChange=False,
@@ -935,6 +948,7 @@ class UIManager:
             getattr(self, 'icon_ammo', None),
             getattr(self, 'ammo_text', None),
             getattr(self, 'skills_status_text', None),
+            getattr(self, 'quickslot_text', None),
             getattr(self, 'guide_text', None),
         ]
         for n in nodes:
@@ -950,6 +964,8 @@ class UIManager:
                 self.bar_fill_defense.hide()
             if hasattr(self, 'door_status_text') and self.door_status_text:
                 self.door_status_text.hide()
+            if hasattr(self, 'inv_modal') and self.inv_modal:
+                self.inv_modal.hide()
 
     def show_intro(self):
         """인트로 화면 표시"""
@@ -1802,7 +1818,442 @@ class UIManager:
     def hide_stage_clear_shop(self):
         self.shop_modal.hide()
 
-    def show_scanner_result(self, msg):
-        """바이오 스캐너 펄스 탐지 결과 HUD 알림"""
-        self.show_hit_marker(msg, color=(0.35, 0.95, 1.0, 1.0))
-        self.hit_marker_timer = 3.5
+    # --- [전술 군용 인벤토리 배낭 모달 시스템] ---
+    def _setup_inventory_ui(self):
+        self.inv_player = None
+        self.inv_combat = None
+        self.on_use_item_callback = None
+        self.on_close_inventory = None
+        self.selected_inv_slot = 0
+
+        # 메인 반투명 흑요석 전술 모달 배경
+        self.inv_modal = DirectFrame(
+            image='assets/ui/panel_modal_bg.png',
+            relief=None,
+            frameSize=(-1.28, 1.28, -0.88, 0.88),
+            scale=(1.0, 1, 1.0),
+            pos=(0, 0, 0)
+        )
+        self.inv_modal.setTransparency(TransparencyAttrib.MAlpha)
+
+        # 1. 헤더: 타이틀 & 닫기 버튼
+        self.inv_title = OnscreenText(
+            text="[ TACTICAL INVENTORY - 전술 군용 배낭 ]",
+            parent=self.inv_modal,
+            pos=(0, 0.74),
+            scale=0.038,
+            fg=(0.40, 0.92, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+        self.inv_subtitle = OnscreenText(
+            text="생존 소모품 보급 현황 및 장비 관리  |  단축키 [1~4] 인게임 즉시 사용 가능",
+            parent=self.inv_modal,
+            pos=(0, 0.67),
+            scale=0.022,
+            fg=(0.78, 0.85, 0.92, 0.90),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+        self.btn_close_inv = DirectButton(
+            parent=self.inv_modal,
+            image=('assets/ui/btn_danger_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_danger_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
+            text="[ X 닫기 (TAB / ESC) ]",
+            pos=(0.96, 0, 0.73),
+            scale=(0.26, 1, 0.046),
+            text_scale=((0.046 / 0.26) * 0.44, 0.44),
+            text_pos=(0, -0.14),
+            text_fg=(1.0, 0.85, 0.85, 1.0),
+            command=self.hide_inventory,
+            **self.btn_font_kw
+        )
+        self.btn_close_inv.setTransparency(TransparencyAttrib.MAlpha)
+
+        # 2. 좌측 칼럼: 생존자 RPG 종합 스탯 & 무기 제원 (x = -0.80)
+        self.inv_left_title = OnscreenText(
+            text="■ 생존자 상태 및 무기 제원",
+            parent=self.inv_modal,
+            pos=(-1.14, 0.58),
+            scale=0.027,
+            fg=(0.95, 0.82, 0.35, 1.0),
+            align=TextNode.ALeft,
+            **self.font_kw
+        )
+
+        self.inv_stats_text = OnscreenText(
+            text="",
+            parent=self.inv_modal,
+            pos=(-1.14, 0.50),
+            scale=0.021,
+            fg=(0.90, 0.94, 0.98, 0.95),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ALeft,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 3. 중앙 칼럼: 소지품 6슬롯 전술 배낭 그리드
+        self.inv_grid_title = OnscreenText(
+            text="■ 전술 보급품 및 소지품 (6 슬롯)",
+            parent=self.inv_modal,
+            pos=(-0.28, 0.58),
+            scale=0.027,
+            fg=(0.35, 0.95, 1.0, 1.0),
+            align=TextNode.ALeft,
+            **self.font_kw
+        )
+
+        self.inv_slots = []
+        slot_coords = [
+            (-0.16, 0.40), (0.16, 0.40),   # Row 1 (Quickslots 1, 2)
+            (-0.16, 0.16), (0.16, 0.16),   # Row 2 (Quickslots 3, 4)
+            (-0.16, -0.08), (0.16, -0.08)  # Row 3 (Slots 5, 6)
+        ]
+
+        for idx, (sx, sz) in enumerate(slot_coords):
+            slot_btn = DirectButton(
+                parent=self.inv_modal,
+                image=('assets/ui/slot_bg_normal.png', 'assets/ui/slot_bg_selected.png', 'assets/ui/slot_bg_selected.png', 'assets/ui/slot_bg_normal.png'),
+                relief=None,
+                pos=(sx, 0, sz),
+                scale=(0.14, 1, 0.11),
+                command=self._select_inventory_slot,
+                extraArgs=[idx]
+            )
+            slot_btn.setTransparency(TransparencyAttrib.MAlpha)
+
+            slot_icon = OnscreenImage(
+                image='assets/ui/item_medkit.png',
+                parent=slot_btn,
+                scale=(0.46, 1, 0.46),
+                pos=(0, 0, 0.05)
+            )
+            slot_icon.setTransparency(TransparencyAttrib.MAlpha)
+            slot_icon.hide()
+
+            slot_tag = OnscreenText(
+                text=f"[{idx+1}]" if idx < 4 else "",
+                parent=slot_btn,
+                pos=(-0.38, 0.30),
+                scale=(0.18, 0.22),
+                fg=(0.40, 0.95, 1.0, 1.0),
+                shadow=(0, 0, 0, 0.95),
+                align=TextNode.ALeft,
+                mayChange=True,
+                **self.font_kw
+            )
+
+            slot_count = OnscreenText(
+                text="",
+                parent=slot_btn,
+                pos=(0.38, -0.32),
+                scale=(0.18, 0.22),
+                fg=(1.0, 0.90, 0.35, 1.0),
+                shadow=(0, 0, 0, 0.95),
+                align=TextNode.ARight,
+                mayChange=True,
+                **self.font_kw
+            )
+
+            slot_name = OnscreenText(
+                text="[ 빈 슬롯 ]",
+                parent=slot_btn,
+                pos=(0, -0.44),
+                scale=(0.13, 0.16),
+                fg=(0.70, 0.75, 0.82, 0.90),
+                align=TextNode.ACenter,
+                mayChange=True,
+                **self.font_kw
+            )
+
+            self.inv_slots.append({
+                "btn": slot_btn,
+                "icon": slot_icon,
+                "tag": slot_tag,
+                "count": slot_count,
+                "name": slot_name
+            })
+
+        # 4. 우측 칼럼: 선택된 아이템 상세 정보 및 사용 패널 (x = 0.78)
+        self.inv_right_title = OnscreenText(
+            text="■ 아이템 상세 정보 (INFO)",
+            parent=self.inv_modal,
+            pos=(0.44, 0.58),
+            scale=0.027,
+            fg=(0.40, 0.95, 0.60, 1.0),
+            align=TextNode.ALeft,
+            **self.font_kw
+        )
+
+        self.inv_detail_icon = OnscreenImage(
+            image='assets/ui/item_medkit.png',
+            parent=self.inv_modal,
+            scale=(0.10, 1, 0.10),
+            pos=(0.78, 0, 0.40)
+        )
+        self.inv_detail_icon.setTransparency(TransparencyAttrib.MAlpha)
+
+        self.inv_detail_name = OnscreenText(
+            text="[ 선택된 아이템 없음 ]",
+            parent=self.inv_modal,
+            pos=(0.78, 0.27),
+            scale=0.028,
+            fg=(1.0, 1.0, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.inv_detail_meta = OnscreenText(
+            text="분류: -  |  보유 수량: -",
+            parent=self.inv_modal,
+            pos=(0.78, 0.21),
+            scale=0.021,
+            fg=(0.75, 0.82, 0.90, 0.90),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.inv_detail_desc = OnscreenText(
+            text="아이템을 선택하면 상세 정보 및 사용법이 표시됩니다.",
+            parent=self.inv_modal,
+            pos=(0.48, 0.13),
+            scale=0.021,
+            fg=(0.88, 0.92, 0.96, 0.95),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ALeft,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.btn_use_item = DirectButton(
+            parent=self.inv_modal,
+            image=('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
+            text="[ 사용하기 (USE ITEM) ]",
+            pos=(0.78, 0, -0.06),
+            scale=(0.36, 1, 0.052),
+            text_scale=((0.052 / 0.36) * 0.48, 0.48),
+            text_pos=(0, -0.15),
+            text_fg=(0.35, 1.0, 0.55, 1.0),
+            command=self._on_click_use_inventory_item,
+            **self.btn_font_kw
+        )
+        self.btn_use_item.setTransparency(TransparencyAttrib.MAlpha)
+
+        self.inv_msg_text = OnscreenText(
+            text="",
+            parent=self.inv_modal,
+            pos=(0.78, -0.15),
+            scale=0.022,
+            fg=(0.40, 1.0, 0.60, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 5. 하단 칼럼: 장착된 고대 저주받은 유물 목록 (z = -0.32 ~ -0.58)
+        self.inv_relics_title = OnscreenText(
+            text="■ 장착된 고대 미궁의 저주받은 유물 (CURSED RELICS)",
+            parent=self.inv_modal,
+            pos=(0, -0.30),
+            scale=0.026,
+            fg=(0.95, 0.72, 1.0, 1.0),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+        self.inv_relic_labels = []
+        r_xs = [-0.85, -0.28, 0.28, 0.85]
+        for i in range(4):
+            lbl = OnscreenText(
+                text="[ 빈 유물 슬롯 ]",
+                parent=self.inv_modal,
+                pos=(r_xs[i], -0.38),
+                scale=0.020,
+                fg=(0.60, 0.60, 0.65, 0.85),
+                shadow=(0, 0, 0, 0.95),
+                align=TextNode.ACenter,
+                mayChange=True,
+                **self.font_kw
+            )
+            self.inv_relic_labels.append(lbl)
+
+        # 6. 하단 안내 텍스트
+        self.inv_footer_text = OnscreenText(
+            text="[1~4] 키로 인게임에서 배낭을 열지 않고 즉시 사용 가능  |  [TAB] / [I] / [ESC] 키로 배낭 닫기",
+            parent=self.inv_modal,
+            pos=(0, -0.52),
+            scale=0.021,
+            fg=(0.65, 0.75, 0.85, 0.80),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+        self.inv_modal.hide()
+
+    def is_inventory_open(self):
+        """인벤토리 모달이 열려 있는지 확인"""
+        return hasattr(self, 'inv_modal') and not self.inv_modal.isHidden()
+
+    def show_inventory(self, player, combat, on_use_item_callback=None, on_close_callback=None):
+        """전술 인벤토리 배낭 모달 오픈"""
+        self.inv_player = player
+        self.inv_combat = combat
+        self.on_use_item_callback = on_use_item_callback
+        self.on_close_inventory = on_close_callback
+        self.inv_msg_text.setText("")
+        self._refresh_inventory_ui()
+        self.inv_modal.show()
+
+    def hide_inventory(self):
+        """전술 인벤토리 배낭 모달 닫기"""
+        if hasattr(self, 'inv_modal'):
+            self.inv_modal.hide()
+        if hasattr(self, 'on_close_inventory') and self.on_close_inventory:
+            cb = self.on_close_inventory
+            self.on_close_inventory = None
+            cb()
+
+    def _select_inventory_slot(self, slot_idx):
+        """인벤토리 슬롯 클릭 시 아이템 선택 및 상세 패널 갱신"""
+        self.selected_inv_slot = slot_idx
+        self.inv_msg_text.setText("")
+        self._refresh_inventory_ui()
+
+    def _on_click_use_inventory_item(self):
+        """선택된 아이템 [사용하기] 클릭 이벤트"""
+        if not self.inv_player:
+            return
+        inv = getattr(self.inv_player, 'inventory', [])
+        if self.selected_inv_slot < len(inv):
+            item = inv[self.selected_inv_slot]
+            if self.on_use_item_callback:
+                self.on_use_item_callback(item["id"])
+            self._refresh_inventory_ui()
+
+    def _refresh_inventory_ui(self):
+        """인벤토리 스탯, 슬롯 그리드, 상세 정보 패널 실시간 갱신"""
+        if not self.inv_player:
+            return
+
+        p = self.inv_player
+        c = self.inv_combat
+        inv = getattr(p, 'inventory', [])
+
+        # 1. 좌측 스탯 텍스트 갱신
+        lvl = getattr(p, 'level', 1)
+        exp = int(getattr(p, 'exp', 0))
+        exp_next = int(getattr(p, 'exp_to_next', 100))
+        hp = int(getattr(p, 'hp', 100))
+        max_hp = int(getattr(p, 'max_hp', 100))
+        atk = int(p.get_attack_power()) if hasattr(p, 'get_attack_power') else int(getattr(p, 'attack_power', 35))
+        spd_pct = int(getattr(p, 'speed_mult', 1.0) * (1.30 if getattr(p, 'speed_boost_timer', 0.0) > 0.0 else 1.0) * 100)
+        stamina = int(getattr(p, 'stamina', 100))
+        max_stamina = int(getattr(p, 'max_stamina', 100))
+        sp = getattr(p, 'stat_points', 0)
+
+        ammo = c.ammo if c else 12
+        max_ammo = c.max_ammo if c else 12
+        res_ammo = c.reserve_ammo if c else 0
+
+        stats_str = (
+            f"• 레벨: LV.{lvl}  [경험치: {exp} / {exp_next}]\n"
+            f"• 체력: {hp} / {max_hp} HP\n"
+            f"• 공격력: {atk} DMG  (기본: {int(getattr(p, 'attack_power', 35))})\n"
+            f"• 이동 속도: {spd_pct}%\n"
+            f"• 스테미나: {stamina} / {max_stamina}\n"
+            f"• 미분배 스탯: {sp} P\n"
+            f"-----------------------------------------\n"
+            f"[주무기] 9mm Tactical Combat Pistol\n"
+            f"• 장전 탄약: {ammo} / {max_ammo}발 (예비: {res_ammo}발)\n"
+            f"• 조준 기구: 3점 삼중수소 야간 조준기\n"
+            f"  (우클릭 시 100% 핀포인트 명중률)\n"
+            f"-----------------------------------------\n"
+            f"[보조장비] M67 전술 파열 수류탄 [G]\n"
+            f"[전술기동] 컴뱃 슬라이드 & 회피 [Space]"
+        )
+        self.inv_stats_text.setText(stats_str)
+
+        # 2. 중앙 소지품 슬롯 그리드 갱신
+        for idx, slot_ui in enumerate(self.inv_slots):
+            if idx < len(inv):
+                item = inv[idx]
+                cnt = item.get("count", 0)
+                qs = item.get("quick_slot")
+                slot_ui["icon"].setImage(item["icon"])
+                slot_ui["icon"].show()
+                slot_ui["tag"].setText(f"[{qs}]" if qs else "")
+                slot_ui["count"].setText(f"x{cnt}")
+                slot_ui["name"].setText(item["name"])
+                slot_ui["name"].setFg(item.get("rarity_color", (0.9, 0.9, 0.9, 1.0)))
+
+                if idx == self.selected_inv_slot:
+                    slot_ui["btn"]["image"] = 'assets/ui/slot_bg_selected.png'
+                else:
+                    slot_ui["btn"]["image"] = 'assets/ui/slot_bg_normal.png'
+            else:
+                slot_ui["icon"].hide()
+                slot_ui["tag"].setText("")
+                slot_ui["count"].setText("")
+                slot_ui["name"].setText("[ 빈 슬롯 ]")
+                slot_ui["name"].setFg((0.45, 0.50, 0.58, 0.70))
+                slot_ui["btn"]["image"] = 'assets/ui/slot_bg_normal.png'
+
+        # 3. 우측 상세 정보 패널 갱신
+        if self.selected_inv_slot < len(inv):
+            sel_item = inv[self.selected_inv_slot]
+            self.inv_detail_icon.setImage(sel_item["icon"])
+            self.inv_detail_icon.show()
+            self.inv_detail_name.setText(f"[ {sel_item['name']} ]")
+            self.inv_detail_name.setFg(sel_item.get("rarity_color", (1, 1, 1, 1)))
+
+            qs_str = f" | [단축키 {sel_item['quick_slot']}번]" if sel_item.get("quick_slot") else ""
+            self.inv_detail_meta.setText(f"분류: {sel_item['category']}  |  보유: {sel_item['count']}/{sel_item.get('max_count', 99)}개{qs_str}")
+            self.inv_detail_desc.setText(sel_item["desc"])
+
+            if sel_item["count"] > 0:
+                self.btn_use_item["state"] = DGG.NORMAL
+                self.btn_use_item["text"] = "[ 사용하기 (USE ITEM) ]"
+            else:
+                self.btn_use_item["state"] = DGG.DISABLED
+                self.btn_use_item["text"] = "[ 수량 소진 (EMPTY) ]"
+        else:
+            self.inv_detail_icon.hide()
+            self.inv_detail_name.setText("[ 빈 슬롯 ]")
+            self.inv_detail_name.setFg((0.6, 0.6, 0.6, 1.0))
+            self.inv_detail_meta.setText("아이템이 없습니다.")
+            self.inv_detail_desc.setText("소지품 슬롯을 선택하면 상세 정보 및 사용법이 표시됩니다.")
+            self.btn_use_item["state"] = DGG.DISABLED
+            self.btn_use_item["text"] = "[ 사용 불가 ]"
+
+        # 4. 하단 유물 슬롯 갱신
+        relics = getattr(p, 'relics', [])
+        for i, lbl in enumerate(self.inv_relic_labels):
+            if i < len(relics):
+                rid = relics[i]
+                r_info = CURSED_RELICS.get(rid, {"name": rid, "icon": "🔮", "pro": "강화", "con": "저주"})
+                lbl.setText(f"{r_info.get('icon', '🔮')} {r_info.get('name', rid)}\n(+{r_info.get('pro', '')})")
+                lbl.setFg((0.95, 0.80, 1.0, 1.0))
+            else:
+                lbl.setText("[ 빈 유물 슬롯 ]\n(스테이지 클리어 시 획득)")
+                lbl.setFg((0.50, 0.52, 0.58, 0.70))
+
+    def update_quickslots_hud(self, inventory):
+        """인게임 HUD 전술 퀵슬롯 실시간 수량 텍스트 갱신"""
+        counts = {1: 0, 2: 0, 3: 0, 4: 0}
+        for item in inventory:
+            qs = item.get("quick_slot")
+            if qs in counts:
+                counts[qs] = item.get("count", 0)
+        txt = f"[1] 응급키트: {counts[1]}개  |  [2] 아드레날린: {counts[2]}개  |  [3] 탄약팩: {counts[3]}개  |  [4] 수류탄: {counts[4]}개  |  [Tab/I] 배낭"
+        if hasattr(self, 'quickslot_text'):
+            self.quickslot_text.setText(txt)

@@ -86,13 +86,17 @@ class AudioManager:
         slam_p = self._get_path("orc_slam.wav")
         self.orc_slam_sfx = self.loader.loadSfx(slam_p) if slam_p else None
 
-        # 8. 정밀 조준, 치명타, 심장박동, 바이오 소나 효과음
+        # 8. 정밀 조준, 치명타, 심장박동, 인벤토리/아이템 효과음
         crit_p = self._get_path("crit_hit.wav")
         self.crit_hit_sfx = self.loader.loadSfx(crit_p) if crit_p else None
         hb_p = self._get_path("heartbeat.wav")
         self.heartbeat_sfx = self.loader.loadSfx(hb_p) if hb_p else None
-        sonar_p = self._get_path("sonar_ping.wav")
-        self.sonar_ping_sfx = self.loader.loadSfx(sonar_p) if sonar_p else None
+        inv_open_p = self._get_path("inventory_open.wav")
+        self.inv_open_sfx = self.loader.loadSfx(inv_open_p) if inv_open_p else None
+        inv_close_p = self._get_path("inventory_close.wav")
+        self.inv_close_sfx = self.loader.loadSfx(inv_close_p) if inv_close_p else None
+        item_use_p = self._get_path("item_use.wav")
+        self.item_use_sfx = self.loader.loadSfx(item_use_p) if item_use_p else None
         ads_in_p = self._get_path("ads_in.wav")
         self.ads_in_sfx = self.loader.loadSfx(ads_in_p) if ads_in_p else None
         ads_out_p = self._get_path("ads_out.wav")
@@ -275,11 +279,19 @@ class AudioManager:
             self.heartbeat_sfx.setVolume(0.90)
             self.heartbeat_sfx.play()
 
-    def play_sonar_ping(self):
-        """바이오 소나/레이더 펄스 탐지음"""
-        if self.sonar_ping_sfx:
-            self.sonar_ping_sfx.setVolume(0.85)
-            self.sonar_ping_sfx.play()
+
+    def play_inventory_toggle(self, is_open):
+        """전술 인벤토리 개폐 효과음"""
+        snd = self.inv_open_sfx if is_open else self.inv_close_sfx
+        if snd:
+            snd.setVolume(0.85)
+            snd.play()
+
+    def play_item_use(self):
+        """소모품 사용 효과음 (주사기/키트/탄약)"""
+        if self.item_use_sfx:
+            self.item_use_sfx.setVolume(0.90)
+            self.item_use_sfx.play()
 
     def play_ads(self, is_aiming=True):
         """정밀 조준 진입/해제 무기 파지음"""

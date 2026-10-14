@@ -461,6 +461,14 @@ class CombatSystem:
                     closest_monster.turn_into_corpse(audio_mgr=self.audio_mgr)
                 if player:
                     player.gain_exp(exp_gain)
+                    # 몬스터 처치 시 전술 전리품 보급품 드랍 (35% 확률로 응급키트/아드레날린/탄약팩/수류탄 획득)
+                    if hasattr(player, 'add_item') and random.random() < 0.35:
+                        drop_id = random.choice(["medkit", "adrenaline", "ammo_pack", "frag_grenade", "combat_stim"])
+                        ok, item_name = player.add_item(drop_id, 1)
+                        if ok:
+                            self.ui_mgr.show_hit_marker(f"★ 전리품 획득: [{item_name}] (배낭: [Tab])", (0.35, 1.0, 0.65, 1.0))
+                            if hasattr(self.base, '_update_quickslot_hud'):
+                                self.base._update_quickslot_hud()
             else:
                 if is_crit:
                     self.ui_mgr.show_hit_marker(f"★ 헤드샷 치명타! (-{int(dmg)} HP) ★", (1.0, 0.88, 0.20, 1.0))

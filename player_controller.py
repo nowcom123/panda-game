@@ -12,6 +12,65 @@ from constants import (
 from collision import resolve_collision, raycast_walls
 
 
+ITEM_CATALOG = {
+    "medkit": {
+        "id": "medkit",
+        "name": "군용 응급치료 키트",
+        "category": "의료 소모품",
+        "rarity": "RARE",
+        "rarity_color": (0.35, 1.0, 0.60, 1.0),
+        "icon": "assets/ui/item_medkit.png",
+        "max_count": 5,
+        "desc": "고농축 지혈제 및 나노 봉합 드레싱.\n사용 시 체력 +50 HP를 즉각 회복합니다.\n[단축키 1번]으로 즉시 사용 가능.",
+        "quick_slot": 1
+    },
+    "adrenaline": {
+        "id": "adrenaline",
+        "name": "전술 아드레날린 주사기",
+        "category": "전술 각성제",
+        "rarity": "EPIC",
+        "rarity_color": (0.25, 0.85, 1.0, 1.0),
+        "icon": "assets/ui/item_adrenaline.png",
+        "max_count": 3,
+        "desc": "전투 호르몬 자동 주입기.\n사용 시 스테미나 100% 즉시 회복 및\n10초간 이동 속도 +30% 가속 버프 부여.\n[단축키 2번]으로 즉시 사용 가능.",
+        "quick_slot": 2
+    },
+    "ammo_pack": {
+        "id": "ammo_pack",
+        "name": "9mm 예비 탄약 상자",
+        "category": "탄약 보급품",
+        "rarity": "COMMON",
+        "rarity_color": (1.0, 0.88, 0.35, 1.0),
+        "icon": "assets/ui/item_ammo.png",
+        "max_count": 8,
+        "desc": "권총용 철갑 탄약 묶음 상자.\n사용 시 예비 탄약 +18발을 즉각 탄띠에 보충합니다.\n[단축키 3번]으로 즉시 사용 가능.",
+        "quick_slot": 3
+    },
+    "frag_grenade": {
+        "id": "frag_grenade",
+        "name": "M67 파열 수류탄 팩",
+        "category": "투척 폭발물",
+        "rarity": "UNCOMMON",
+        "rarity_color": (0.65, 0.95, 0.25, 1.0),
+        "icon": "assets/ui/item_grenade.png",
+        "max_count": 4,
+        "desc": "반경 6.5m 대인 살상 파열 수류탄.\n사용 시 수류탄 쿨다운을 즉시 리셋하고 즉시 투척 준비를 마칩니다.\n[단축키 4번]으로 즉시 사용 가능.",
+        "quick_slot": 4
+    },
+    "combat_stim": {
+        "id": "combat_stim",
+        "name": "생체 공격 강화제",
+        "category": "특수 약물",
+        "rarity": "LEGENDARY",
+        "rarity_color": (0.95, 0.45, 0.95, 1.0),
+        "icon": "assets/ui/item_stim.png",
+        "max_count": 3,
+        "desc": "근신경 반응을 극대화하는 바이오 자극제.\n사용 시 15초간 총기 공격력 +40% 증폭 버프를 부여합니다.",
+        "quick_slot": None
+    }
+}
+
+
 class PlayerController:
     def __init__(self, base, win, camera, mouse_watcher, audio_mgr, ui_mgr):
         self.base = base
@@ -66,14 +125,24 @@ class PlayerController:
         self.slide_dir = Vec3(0, 0, 0)
         self.slide_speed = 0.0
 
+        # 전술 인벤토리 소지품 초기화 (기본 생존 보급품)
+        self.inventory = [
+            dict(ITEM_CATALOG["medkit"], count=2),
+            dict(ITEM_CATALOG["adrenaline"], count=1),
+            dict(ITEM_CATALOG["ammo_pack"], count=2),
+            dict(ITEM_CATALOG["frag_grenade"], count=1),
+        ]
+        self.speed_boost_timer = 0.0
+        self.stim_boost_timer = 0.0
+
         # 키보드 입력 상태
         self.key_map = {
             "w": 0, "s": 0, "a": 0, "d": 0,
             "shift": 0
         }
 
-    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_scan=None, on_grenade=None):
-        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 바이오 스캐너, 슬라이드, 수류탄)"""
+    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_inventory=None, on_quick_use=None, on_grenade=None, on_escape=None):
+        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 인벤토리, 퀵슬롯, 슬라이드, 수류탄)"""
         self.base.disableMouse()
         self.lock_mouse(True)
 
@@ -121,14 +190,19 @@ class PlayerController:
         self.base.accept("shift-r", on_reload)
         self.base.accept("R", on_reload)
 
-        # TAB / M 키 바이오 스캐너 레이더 펄스
-        if on_scan:
-            self.base.accept("tab", on_scan)
-            self.base.accept("m", on_scan)
-            self.base.accept("M", on_scan)
+        # TAB / I 키 전술 인벤토리 열기/닫기 토글
+        if on_inventory:
+            for inv_k in ["tab", "i", "I"]:
+                self.base.accept(inv_k, on_inventory)
 
-        # ESC 마우스 커서 해제/잠금 토글
-        self.base.accept("escape", self.toggle_mouse_lock)
+        # 1, 2, 3, 4 인게임 전술 퀵슬롯 즉시 사용
+        if on_quick_use:
+            for num_k in ["1", "2", "3", "4"]:
+                self.base.accept(num_k, on_quick_use, [int(num_k)])
+
+        # ESC 마우스 커서 해제 / 인벤토리 닫기 토글
+        self.on_escape = on_escape
+        self.base.accept("escape", self._on_escape_pressed)
 
         # Space 전술 컴뱃 슬라이드 & 긴급 회피 기동
         for sp_evt in ["space", "shift-space", "control-space", "alt-space"]:
@@ -138,6 +212,94 @@ class PlayerController:
         if on_grenade:
             for g_evt in ["g", "G", "shift-g", "shift-G"]:
                 self.base.accept(g_evt, on_grenade)
+
+    def _on_escape_pressed(self):
+        if hasattr(self, 'on_escape') and self.on_escape:
+            self.on_escape()
+        else:
+            self.toggle_mouse_lock()
+
+    def reset_inventory(self):
+        """새 게임 시작 시 기본 생존 보급품으로 리셋"""
+        self.inventory = [
+            dict(ITEM_CATALOG["medkit"], count=2),
+            dict(ITEM_CATALOG["adrenaline"], count=1),
+            dict(ITEM_CATALOG["ammo_pack"], count=2),
+            dict(ITEM_CATALOG["frag_grenade"], count=1),
+        ]
+        self.speed_boost_timer = 0.0
+        self.stim_boost_timer = 0.0
+
+    def add_item(self, item_id, count=1):
+        """인벤토리에 아이템 획득 및 수량 추가"""
+        for item in self.inventory:
+            if item["id"] == item_id:
+                max_c = item.get("max_count", 99)
+                if item["count"] >= max_c:
+                    return False, f"[{item['name']}]의 최대 소지 수량을 초과했습니다."
+                item["count"] = min(max_c, item["count"] + count)
+                return True, item["name"]
+
+        if item_id in ITEM_CATALOG:
+            new_item = dict(ITEM_CATALOG[item_id], count=min(ITEM_CATALOG[item_id].get("max_count", 99), count))
+            self.inventory.append(new_item)
+            return True, new_item["name"]
+        return False, "알 수 없는 아이템입니다."
+
+    def use_item(self, item_id, combat_system=None, game_instance=None):
+        """소지품 아이템 사용 및 효과 발동"""
+        target_item = None
+        for item in self.inventory:
+            if item["id"] == item_id:
+                target_item = item
+                break
+
+        if not target_item or target_item["count"] <= 0:
+            return False, "사용할 수 있는 잔여 수량이 없습니다."
+
+        iid = target_item["id"]
+        if iid == "medkit":
+            if self.hp >= self.max_hp:
+                return False, "이미 체력이 100% 가득 차 있습니다!"
+            self.heal(50.0)
+            target_item["count"] -= 1
+            return True, f"군용 응급키트 사용: 체력 +50 HP 회복! (현재: {int(self.hp)}/{int(self.max_hp)})"
+
+        elif iid == "adrenaline":
+            self.stamina = self.max_stamina
+            self.speed_boost_timer = 10.0
+            target_item["count"] -= 1
+            return True, "전술 아드레날린 주사: 스테미나 100% 회복 및 10초간 이동속도 +30% 가속!"
+
+        elif iid == "ammo_pack":
+            if combat_system:
+                combat_system.reserve_ammo += 18
+                combat_system.update_ammo_ui()
+            target_item["count"] -= 1
+            return True, "9mm 탄약 상자 개봉: 권총 예비 탄약 +18발 보급 완료!"
+
+        elif iid == "frag_grenade":
+            if game_instance:
+                game_instance.grenade_cooldown = 0.0
+                if hasattr(game_instance, 'ui_mgr') and hasattr(game_instance.ui_mgr, 'update_skills_hud'):
+                    slide_ready = getattr(self, 'slide_cooldown', 0.0) <= 0.0
+                    game_instance.ui_mgr.update_skills_hud(slide_ready, 0.0)
+            target_item["count"] -= 1
+            return True, "파열 수류탄 보급: 즉시 투척 준비 완료 [G]!"
+
+        elif iid == "combat_stim":
+            self.stim_boost_timer = 15.0
+            target_item["count"] -= 1
+            return True, "생체 공격 강화제 투여: 15초간 총기 공격력 +40% 증폭!"
+
+        return False, "사용할 수 없는 아이템입니다."
+
+    def use_quick_slot(self, slot_num, combat_system=None, game_instance=None):
+        """[1~4]번 단축키 퀵슬롯 아이템 즉시 사용"""
+        for item in self.inventory:
+            if item.get("quick_slot") == slot_num:
+                return self.use_item(item["id"], combat_system, game_instance)
+        return False, f"[{slot_num}]번 퀵슬롯에 등록된 아이템이 없습니다."
 
     def trigger_slide(self):
         """[Space] 전술 컴뱃 슬라이드 & 긴급 회피 대시 (낮은 자세로 미끄러지며 사격 가능)"""
@@ -202,12 +364,14 @@ class PlayerController:
         return leveled
 
     def get_attack_power(self, blackout_active=False):
-        """저주받은 유물 효과가 반영된 최종 공격력 산출"""
+        """저주받은 유물 및 전투 자극제 효과가 반영된 최종 공격력 산출"""
         dmg = self.attack_power
         if "glass_cannon" in self.relics:
             dmg *= 1.80  # 공격력 +80%
         if "abyssal_reaper" in self.relics and blackout_active:
             dmg *= 2.50  # 정전 중 공격력 2.5배
+        if getattr(self, 'stim_boost_timer', 0.0) > 0.0:
+            dmg *= 1.40  # 생체 공격 강화제 공격력 +40%
         return dmg
 
     def take_damage(self, amount, source_pos=None):
@@ -384,6 +548,12 @@ class PlayerController:
                 self.hp_drain_accum = 0.0
                 self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
 
+        # 아드레날린 및 전투 자극제 버프 타이머 갱신
+        if getattr(self, 'speed_boost_timer', 0.0) > 0.0:
+            self.speed_boost_timer = max(0.0, self.speed_boost_timer - dt)
+        if getattr(self, 'stim_boost_timer', 0.0) > 0.0:
+            self.stim_boost_timer = max(0.0, self.stim_boost_timer - dt)
+
         # 2. 키보드 입력 상태 감지
         base_mouse_watcher = self.mouse_watcher
         shift_held = bool(self.key_map["shift"])
@@ -479,7 +649,8 @@ class PlayerController:
                 self.last_move_dir = move_dir
                 base_speed = SPRINT_SPEED if self.is_sprinting else WALK_SPEED
                 aim_mult = 0.78 if self.is_aiming else 1.0
-                speed = base_speed * self.speed_mult * cur_slow * aim_mult
+                speed_boost = 1.30 if getattr(self, 'speed_boost_timer', 0.0) > 0.0 else 1.0
+                speed = base_speed * self.speed_mult * cur_slow * aim_mult * speed_boost
                 disp = move_dir * speed * dt
 
                 # 발자국 소리 주기

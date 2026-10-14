@@ -441,14 +441,15 @@ class LiminalInfiniteLoop(ShowBase):
             self.audio_mgr, self.ui_mgr
         )
         self.player.world_root = self.world_root
-        self.scan_cooldown = 0.0
         self.player.setup_input(
             on_shoot=self.shoot_pistol,
             on_reload=self.reload_pistol,
             on_aim_start=self.combat.start_aim,
             on_aim_stop=self.combat.stop_aim,
-            on_scan=self.activate_bio_scanner,
-            on_grenade=self.throw_grenade
+            on_grenade=self.throw_grenade,
+            on_inventory=self.toggle_inventory,
+            on_quick_use=self.use_quick_slot,
+            on_escape=self.handle_escape
         )
 
         # 7. 게임 상태 및 5분(300초) 타이머 설정
@@ -522,52 +523,69 @@ class LiminalInfiniteLoop(ShowBase):
     def reload_pistol(self):
         self.combat.reload(self.game_state)
 
-    def activate_bio_scanner(self):
-        """[TAB] / [M] 전술 바이오 소나 펄스: 반경 38m 내 괴물 개체수 및 최단거리 탐지"""
+    def toggle_inventory(self):
+        """[Tab] 또는 [I] 키로 전술 인벤토리 배낭 창 토글"""
+        if self.game_state == "PLAYING":
+            self.open_inventory()
+        elif self.game_state == "INVENTORY":
+            self.close_inventory()
+
+    def open_inventory(self):
+        """전술 인벤토리 오픈 및 마우스 잠금 해제, 게임 루프 일시정지"""
         if self.game_state != "PLAYING":
             return
-        if self.scan_cooldown > 0.0:
-            self.ui_mgr.show_scanner_result(f"[ 스캐너 재충전 중: {self.scan_cooldown:.1f}초 남음 ]")
+        self.game_state = "INVENTORY"
+        self.player.lock_mouse(False)
+        self.combat.stop_aim()
+        self.audio_mgr.play_inventory_toggle(True)
+        self.ui_mgr.show_inventory(
+            player=self.player,
+            combat=self.combat,
+            on_use_item_callback=self._on_inventory_use_item,
+            on_close_callback=self.close_inventory
+        )
+
+    def close_inventory(self):
+        """전술 인벤토리 닫기 및 마우스 잠금 복원, 게임 루프 재개"""
+        if self.game_state != "INVENTORY":
             return
+        self.game_state = "PLAYING"
+        self.ui_mgr.hide_inventory()
+        self.player.lock_mouse(True)
+        self.audio_mgr.play_inventory_toggle(False)
+        self._update_quickslot_hud()
 
-        self.scan_cooldown = 4.0
-        self.audio_mgr.play_sonar_ping()
-
-        px, py = self.camera.getX(), self.camera.getY()
-        scan_radius = 38.0
-        detected = []
-        for m in self.monsters:
-            if getattr(m, 'hp', 0) > 0 and not getattr(m, 'is_corpse', False):
-                dist = math.hypot(m.pos.x - px, m.pos.y - py)
-                if dist <= scan_radius:
-                    detected.append((dist, m))
-
-        if not detected:
-            self.ui_mgr.show_scanner_result("[ 바이오 소나: 38m 반경 내 적성 생체 반응 없음 (SAFE) ]")
+    def handle_escape(self):
+        """[ESC] 키 입력 처리: 인벤토리 열려있으면 닫기, 아니면 마우스 락 토글"""
+        if self.game_state == "INVENTORY":
+            self.close_inventory()
         else:
-            detected.sort(key=lambda x: x[0])
-            min_dist, closest_m = detected[0]
-            m_name = getattr(closest_m, 'name', '괴물')
-            count = len(detected)
+            self.player.lock_mouse(not self.player.mouse_locked)
 
-            dx = closest_m.pos.x - px
-            dy = closest_m.pos.y - py
-            world_deg = math.degrees(math.atan2(-dx, dy)) % 360
-            cam_h = self.camera.getH() % 360
-            rel_deg = (world_deg - cam_h) % 360
-            if rel_deg <= 45 or rel_deg >= 315:
-                dir_str = "전방 (12시)"
-            elif 45 < rel_deg <= 135:
-                dir_str = "우측 (3시)"
-            elif 135 < rel_deg <= 225:
-                dir_str = "후방 (6시)"
-            else:
-                dir_str = "좌측 (9시)"
+    def _on_inventory_use_item(self, item_id):
+        """인벤토리 모달 내 [사용하기] 클릭 콜백"""
+        success, msg = self.player.use_item(item_id, self.combat, self)
+        if success:
+            self.audio_mgr.play_item_use()
+        self.ui_mgr.inv_msg_text.setText(msg)
+        self.ui_mgr._refresh_inventory_ui()
+        self._update_quickslot_hud()
 
-            self.ui_mgr.show_scanner_result(
-                f"[ 바이오 소나 탐지: 적성 생체 {count}개체 발견! ]\n"
-                f"최단 위협: {m_name} ({min_dist:.1f}m 거리, {dir_str})"
-            )
+    def use_quick_slot(self, slot_num):
+        """[1~4] 키로 배낭을 열지 않고 전술 퀵슬롯 아이템 즉시 사용"""
+        if self.game_state != "PLAYING":
+            return
+        success, msg = self.player.use_quick_slot(slot_num, self.combat, self)
+        if success:
+            self.audio_mgr.play_item_use()
+            self.ui_mgr.show_hit_marker(msg)
+        else:
+            self.ui_mgr.show_hit_marker(f"[ 사용 불가 ] {msg}")
+        self._update_quickslot_hud()
+
+    def _update_quickslot_hud(self):
+        """하단 퀵슬롯 HUD 텍스트 갱신"""
+        self.ui_mgr.update_quickslots_hud(self.player.inventory)
 
     def exit_game(self):
         self.destroy()
@@ -749,9 +767,10 @@ class LiminalInfiniteLoop(ShowBase):
         self.ui_mgr.hide_blackout_warning()
 
         # 전투 서브시스템 리셋
-        self.scan_cooldown = 0.0
         self.combat.stop_aim()
         self.combat.reset_state(self.current_stage, keep_ammo=False)
+        self.player.reset_inventory()
+        self._update_quickslot_hud()
 
         # 비동기 작업 정리
         for fut in self.active_chunk_futures.values():
@@ -807,11 +826,11 @@ class LiminalInfiniteLoop(ShowBase):
         self.setup_escape_portal()
 
         # 전투 서브시스템: 탄약 보급
-        self.scan_cooldown = 0.0
         self.combat.stop_aim()
         self.combat.ammo = self.combat.max_ammo
         self.combat.reserve_ammo += 24
         self.combat.reset_state(self.current_stage, keep_ammo=True)
+        self._update_quickslot_hud()
 
         # 안개 복구
         self.liminal_fog.setColor(FOG_COLOR)
@@ -1341,8 +1360,8 @@ class LiminalInfiniteLoop(ShowBase):
             self.update_chunks()
             return cont
 
-        # 2. 상점 모달 상태 시 업데이트 정지
-        if self.game_state == "SHOP":
+        # 2. 상점 및 인벤토리 모달 상태 시 업데이트 정지
+        if self.game_state in ("SHOP", "INVENTORY"):
             return cont
 
         # 3. 승리 및 게임 오버 상태 처리
@@ -1368,10 +1387,6 @@ class LiminalInfiniteLoop(ShowBase):
         is_moving, is_sprinting, view_changed = self.player.update(dt, self.chunks)
         if is_moving:
             self.update_chunks()
-
-        # 5-1. 바이오 스캐너 쿨다운 갱신
-        if self.scan_cooldown > 0.0:
-            self.scan_cooldown = max(0.0, self.scan_cooldown - dt)
 
         # 6. 괴물 군단 AI 및 공격 판정
         px, py = self.camera.getX(), self.camera.getY()
