@@ -282,8 +282,8 @@ class CombatSystem:
             if not oldest["node"].isEmpty():
                 oldest["node"].removeNode()
 
-    def shoot(self, monsters, player=None, game_state="PLAYING"):
-        """권총 사격 및 다중 몬스터 대상 레이캐스트 적중 판정 (벽체 엄폐 판정 포함)"""
+    def shoot(self, monsters, player=None, game_state="PLAYING", hazard_barrels=None):
+        """권총 사격 및 다중 몬스터 대상 레이캐스트 적중 판정 (벽체 엄폐 판정 및 폭발 드럼통 포함)"""
         if game_state != "PLAYING" or self.is_reloading or self.shoot_cooldown > 0.0:
             return
 
@@ -331,9 +331,19 @@ class CombatSystem:
         chunks = getattr(self.base, 'chunks', {})
         wall_dist, wall_hit_pos = raycast_walls(chunks, ray_origin, ray_dir, max_dist=55.0)
 
-        # 2. 다중 몬스터 대상 레이캐스트 히트스캔 (벽 너머의 몬스터는 피격되지 않음)
+        # 2. 다중 몬스터 및 유류 드럼통 대상 레이캐스트 히트스캔
         closest_monster = None
+        closest_barrel = None
         min_hit_dist = wall_dist
+
+        if hazard_barrels:
+            for b in hazard_barrels:
+                if getattr(b, 'is_destroyed', False):
+                    continue
+                is_hit, hit_dist = b.is_hit_by_ray(ray_origin, ray_dir)
+                if is_hit and hit_dist < min_hit_dist:
+                    min_hit_dist = hit_dist
+                    closest_barrel = b
 
         monster_list = monsters if isinstance(monsters, (list, tuple)) else [monsters]
         for m in monster_list:
@@ -343,8 +353,17 @@ class CombatSystem:
             if is_hit and hit_dist < min_hit_dist:
                 min_hit_dist = hit_dist
                 closest_monster = m
+                closest_barrel = None
 
-        if closest_monster is not None:
+        if closest_barrel is not None:
+            # 폭발성 유류 드럼통 피격 -> 점화 카운트다운
+            tracer_dist = min_hit_dist
+            impact_world = ray_origin + ray_dir * tracer_dist
+            self.ui_mgr.trigger_crosshair_hit(is_kill=True, is_crit=True)
+            self.spawn_hit_particles(impact_world, is_blood=False)
+            closest_barrel.ignite()
+
+        elif closest_monster is not None:
             # 몬스터 타격
             tracer_dist = min_hit_dist
             impact_world = ray_origin + ray_dir * tracer_dist
@@ -372,6 +391,13 @@ class CombatSystem:
 
             if is_dead:
                 exp_gain = getattr(closest_monster, 'exp_value', 35)
+
+                # 슬라이딩 킬 스타일 보너스
+                if player and getattr(player, 'is_sliding', False):
+                    exp_gain += 75
+                    if hasattr(self.ui_mgr, 'show_style_kill'):
+                        self.ui_mgr.show_style_kill("⚡ [ SLIDE KILL! ] ⚡", "+75 EXP", (0.35, 0.95, 1.0, 1.0))
+
                 # 정전 중 처치 시 경험치 2배 & 비상 탄약 보급 (+6발)
                 if blackout_active:
                     exp_gain *= 2

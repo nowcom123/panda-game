@@ -584,12 +584,38 @@ class UIManager:
         self.blackout_pulse_timer = 0.0
 
         self.guide_text = OnscreenText(
-            text="[WASD] 이동  |  [Shift] 달리기  |  [우클릭] 정밀조준(ADS)  |  [좌클릭] 사격  |  [R] 재장전  |  [Tab] 생체스캔",
+            text="[WASD] 이동  |  [Space] 슬라이드  |  [G] 전술수류탄  |  [우클릭] 정밀조준  |  [좌클릭] 사격  |  [R] 재장전  |  [Tab] 생체스캔",
             pos=(0, -0.93),
             scale=0.024,
             fg=(0.9, 0.9, 0.8, 0.85),
             align=TextNode.ACenter,
             mayChange=False,
+            **self.font_kw
+        )
+
+        # 스타일 킬 & 콤보 어나운서 배너 (화면 중앙 상단)
+        self.style_kill_banner = OnscreenText(
+            text="",
+            pos=(0, 0.48),
+            scale=0.046,
+            fg=(1.0, 0.85, 0.2, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+        self.style_kill_banner.hide()
+        self.style_kill_timer = 0.0
+
+        # 전술 스킬 (Space 슬라이드 / G 수류탄) 쿨다운 HUD 인디케이터
+        self.skills_status_text = OnscreenText(
+            text="[SPACE] 슬라이드: READY   |   [G] 수류탄: READY",
+            pos=(1.28, -0.74),
+            scale=0.024,
+            fg=(0.35, 1.0, 0.65, 0.95),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ARight,
+            mayChange=True,
             **self.font_kw
         )
 
@@ -850,6 +876,7 @@ class UIManager:
             getattr(self, 'panel_hud_ammo', None),
             getattr(self, 'icon_ammo', None),
             getattr(self, 'ammo_text', None),
+            getattr(self, 'skills_status_text', None),
             getattr(self, 'guide_text', None),
         ]
         for n in nodes:
@@ -1017,10 +1044,34 @@ class UIManager:
             if self.hit_marker_timer <= 0.0:
                 self.hit_marker_text.setText("")
 
+        if hasattr(self, 'style_kill_timer') and self.style_kill_timer > 0.0:
+            self.style_kill_timer = max(0.0, self.style_kill_timer - dt)
+            if self.style_kill_timer <= 0.0 and hasattr(self, 'style_kill_banner'):
+                self.style_kill_banner.hide()
+
         if hasattr(self, 'blackout_banner') and not self.blackout_banner.isHidden():
             self.blackout_pulse_timer += dt * 6.5
             alpha = 0.55 + 0.45 * math.sin(self.blackout_pulse_timer)
             self.blackout_banner.setFg((1.0, 0.15, 0.15, alpha))
+
+    def show_style_kill(self, title, bonus_str="", color=(1.0, 0.85, 0.2, 1.0)):
+        """스타일 킬 / 콤보 어나운서 팝업 표시"""
+        display_text = f"{title}   {bonus_str}" if bonus_str else title
+        self.style_kill_banner.setText(display_text)
+        self.style_kill_banner.setFg(color)
+        self.style_kill_banner.show()
+        self.style_kill_timer = 1.8
+
+    def update_skills_hud(self, slide_ready, grenade_timer, grenade_max=9.0):
+        """슬라이드 및 수류탄 쿨다운 실시간 텍스트 갱신"""
+        slide_str = "READY" if slide_ready else "COOL"
+        gr_str = "READY" if grenade_timer <= 0.0 else f"{grenade_timer:.1f}s"
+        txt = f"[SPACE] 슬라이드: {slide_str}   |   [G] 수류탄: {gr_str}"
+        self.skills_status_text.setText(txt)
+        if slide_ready and grenade_timer <= 0.0:
+            self.skills_status_text.setFg((0.35, 1.0, 0.65, 0.95))
+        elif not slide_ready or grenade_timer > 0.0:
+            self.skills_status_text.setFg((1.0, 0.85, 0.40, 0.95))
 
     def show_blackout_warning(self):
         """정전 프로토콜 발동 경고 배너 표시"""

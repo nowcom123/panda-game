@@ -99,12 +99,14 @@ class AudioManager:
         self.ads_out_sfx = self.loader.loadSfx(ads_out_p) if ads_out_p else None
         explode_p = self._get_path("monster_explode.wav")
         self.monster_explode_sfx = self.loader.loadSfx(explode_p) if explode_p else None
-        wire_launch_p = self._get_path("wire_launch.wav")
-        self.wire_launch_sfx = self.loader.loadSfx(wire_launch_p) if wire_launch_p else None
-        wire_latch_p = self._get_path("wire_latch.wav")
-        self.wire_latch_sfx = self.loader.loadSfx(wire_latch_p) if wire_latch_p else None
-        wire_reel_p = self._get_path("wire_reel.wav")
-        self.wire_reel_sfx = self.loader.loadSfx(wire_reel_p) if wire_reel_p else None
+        slide_p = self._get_path("slide.wav")
+        self.slide_sfx = self.loader.loadSfx(slide_p) if slide_p else None
+        grenade_throw_p = self._get_path("grenade_throw.wav")
+        self.grenade_throw_sfx = self.loader.loadSfx(grenade_throw_p) if grenade_throw_p else None
+        grenade_blast_p = self._get_path("grenade_blast.wav")
+        self.grenade_blast_sfx = self.loader.loadSfx(grenade_blast_p) if grenade_blast_p else None
+        barrel_ignite_p = self._get_path("barrel_ignite.wav")
+        self.barrel_ignite_sfx = self.loader.loadSfx(barrel_ignite_p) if barrel_ignite_p else None
 
     def _get_path(self, fname):
         full_p = os.path.join(self.audio_dir, fname)
@@ -292,23 +294,29 @@ class AudioManager:
             self.monster_explode_sfx.setVolume(1.0)
             self.monster_explode_sfx.play()
 
-    def play_wire_launch(self):
-        """스페이스바 전술 와이어 고속 사출음"""
-        if self.wire_launch_sfx:
-            self.wire_launch_sfx.setVolume(0.85)
-            self.wire_launch_sfx.play()
+    def play_slide(self):
+        """스페이스바 전술 슬라이딩 지면 마찰 풍절음"""
+        if self.slide_sfx:
+            self.slide_sfx.setVolume(0.90)
+            self.slide_sfx.play()
 
-    def play_wire_latch(self):
-        """와이어 벽면 앵커 훅 꽂힘 및 텐션 체결음"""
-        if self.wire_latch_sfx:
-            self.wire_latch_sfx.setVolume(0.95)
-            self.wire_latch_sfx.play()
+    def play_grenade_throw(self):
+        """[G] 키 전술 파열 수류탄 핀 해제 및 투척음"""
+        if self.grenade_throw_sfx:
+            self.grenade_throw_sfx.setVolume(0.95)
+            self.grenade_throw_sfx.play()
 
-    def play_wire_reel(self):
-        """와이어 견인 모터 고속 릴링음"""
-        if self.wire_reel_sfx:
-            self.wire_reel_sfx.setVolume(0.70)
-            self.wire_reel_sfx.play()
+    def play_grenade_blast(self):
+        """전술 수류탄 대규모 파열 폭발 및 충격파음"""
+        if self.grenade_blast_sfx:
+            self.grenade_blast_sfx.setVolume(1.0)
+            self.grenade_blast_sfx.play()
+
+    def play_barrel_ignite(self):
+        """폭발성 유류 드럼통 관통 점화 및 분출음"""
+        if self.barrel_ignite_sfx:
+            self.barrel_ignite_sfx.setVolume(0.95)
+            self.barrel_ignite_sfx.play()
 
     def update(self, dt, dist_serpent, dist_skeleton, s_los, k_los):
         """프레임별 3D 오디오 리스너 및 몬스터 거리 감쇠/포효 갱신"""

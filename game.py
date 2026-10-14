@@ -115,6 +115,259 @@ class GroundShockwave:
             self.node.removeNode()
 
 
+class FragGrenade:
+    """[G] 키로 투척하는 3D 물리 바운싱 전술 파열 수류탄"""
+    def __init__(self, render, start_pos, throw_dir, audio_mgr):
+        self.render = render
+        self.audio_mgr = audio_mgr
+        self.pos = Vec3(start_pos)
+        self.vel = Vec3(throw_dir.x, throw_dir.y, throw_dir.z + 0.18) * 17.5
+        self.timer = 1.45  # 1.45초 지연 신관
+        self.is_exploded = False
+
+        self.node = render.attachNewNode("frag_grenade")
+        self.node.setPos(self.pos)
+
+        body = make_cube("gr_body", 0.16, 0.16, 0.22, LColor(0.24, 0.35, 0.18, 1.0))
+        body.reparentTo(self.node)
+        cap = make_cube("gr_cap", 0.09, 0.09, 0.08, LColor(0.70, 0.60, 0.22, 1.0))
+        cap.setPos(0, 0, 0.13)
+        cap.reparentTo(self.node)
+        pin = make_cube("gr_pin", 0.04, 0.04, 0.05, LColor(0.9, 0.9, 0.9, 1.0))
+        pin.setPos(0.06, 0, 0.15)
+        pin.reparentTo(self.node)
+
+        self.rot_speed = Vec3(random.uniform(-400, 400), random.uniform(-400, 400), random.uniform(-400, 400))
+
+    def update(self, dt, chunks, monsters):
+        if self.is_exploded:
+            return False
+
+        self.vel.z -= 13.5 * dt
+        next_pos = self.pos + self.vel * dt
+
+        if next_pos.z <= 0.12:
+            next_pos.z = 0.12
+            self.vel.z = -self.vel.z * 0.40
+            self.vel.x *= 0.70
+            self.vel.y *= 0.70
+
+        cx = int(math.floor(self.pos.x / CHUNK_SIZE))
+        cy = int(math.floor(self.pos.y / CHUNK_SIZE))
+        cols = get_nearby_colliders(chunks, cx, cy)
+        for min_x, min_y, max_x, max_y in cols:
+            if min_x - 0.12 <= next_pos.x <= max_x + 0.12 and min_y - 0.12 <= next_pos.y <= max_y + 0.12:
+                self.vel.x = -self.vel.x * 0.45
+                self.vel.y = -self.vel.y * 0.45
+                break
+
+        self.pos = next_pos
+        self.node.setPos(self.pos)
+        self.node.setHpr(
+            self.node.getH() + self.rot_speed.x * dt,
+            self.node.getP() + self.rot_speed.y * dt,
+            self.node.getR() + self.rot_speed.z * dt
+        )
+
+        for m in monsters:
+            if getattr(m, 'hp', 0) > 0 and not getattr(m, 'is_corpse', False):
+                if math.hypot(m.pos.x - self.pos.x, m.pos.y - self.pos.y) < 1.15:
+                    return False
+
+        self.timer -= dt
+        return self.timer > 0.0
+
+    def explode(self, monsters, player, ui_mgr, hazard_barrels=None):
+        if self.is_exploded:
+            return
+        self.is_exploded = True
+
+        if self.audio_mgr and hasattr(self.audio_mgr, 'play_grenade_blast'):
+            self.audio_mgr.play_grenade_blast()
+
+        pl = PointLight('grenade_flash_light')
+        pl.setColor((3.5, 1.8, 0.4, 1.0))
+        pl.setAttenuation((1.0, 0.08, 0.015))
+        light_np = self.node.attachNewNode(pl)
+        self.render.setLight(light_np)
+
+        if player and hasattr(player, 'trigger_quake_shake'):
+            player.trigger_quake_shake(intensity=3.2, duration=0.60)
+
+        blast_radius = 6.5
+        blast_dmg = 260.0
+        kill_count = 0
+
+        for m in monsters:
+            if getattr(m, 'hp', 0) > 0 and not getattr(m, 'is_corpse', False):
+                d = math.hypot(m.pos.x - self.pos.x, m.pos.y - self.pos.y)
+                if d <= blast_radius:
+                    falloff = max(0.35, 1.0 - (d / blast_radius))
+                    dmg = blast_dmg * falloff
+                    is_dead = m.take_damage(dmg)
+                    if is_dead:
+                        kill_count += 1
+                        if hasattr(m, 'turn_into_corpse'):
+                            m.turn_into_corpse(audio_mgr=self.audio_mgr)
+                        if player and hasattr(player, 'gain_exp'):
+                            player.gain_exp(getattr(m, 'exp_value', 35) + 30)
+
+        if hazard_barrels:
+            for b in hazard_barrels:
+                if not b.is_destroyed:
+                    db = math.hypot(b.pos.x - self.pos.x, b.pos.y - self.pos.y)
+                    if db <= blast_radius:
+                        b.ignite()
+
+        if kill_count >= 2 and ui_mgr:
+            ui_mgr.show_style_kill(f"💥 [ GRENADE MULTI-KILL! ×{kill_count} ] 💥", f"+{kill_count * 80} EXP", (1.0, 0.75, 0.2, 1.0))
+        elif kill_count == 1 and ui_mgr:
+            ui_mgr.show_style_kill("💥 [ GRENADE KILL! ] 💥", "+50 EXP", (1.0, 0.75, 0.2, 1.0))
+
+        self.render.clearLight(light_np)
+        light_np.removeNode()
+        self.destroy()
+
+    def destroy(self):
+        if hasattr(self, 'node') and not self.node.isEmpty():
+            self.node.removeNode()
+
+
+class HazardBarrel:
+    """던전 복도에 배치되는 붉은색 고위험 폭발성 유류 드럼통"""
+    def __init__(self, render, x, y, audio_mgr):
+        self.render = render
+        self.pos = Vec3(x, y, 0.0)
+        self.audio_mgr = audio_mgr
+        self.is_ignited = False
+        self.fuse_timer = 0.42
+        self.is_destroyed = False
+
+        self.node = render.attachNewNode("hazard_barrel")
+        self.node.setPos(self.pos)
+
+        make_cube_to(self.node, 0.65, 0.65, 1.15, LColor(0.85, 0.12, 0.08, 1.0), 0, 0, 0.58)
+        make_cube_to(self.node, 0.70, 0.70, 0.12, LColor(0.15, 0.15, 0.15, 1.0), 0, 0, 0.95)
+        make_cube_to(self.node, 0.70, 0.70, 0.12, LColor(0.15, 0.15, 0.15, 1.0), 0, 0, 0.20)
+        make_cube_to(self.node, 0.67, 0.67, 0.22, LColor(0.95, 0.85, 0.10, 1.0), 0, 0, 0.58)
+
+        self.fire_node = None
+
+    def is_hit_by_ray(self, ray_origin, ray_dir):
+        """총탄 레이캐스트 AABB 충돌 검사 (반경 0.38m, 높이 1.25m)"""
+        if self.is_destroyed:
+            return False, 999.0
+
+        min_x, max_x = self.pos.x - 0.38, self.pos.x + 0.38
+        min_y, max_y = self.pos.y - 0.38, self.pos.y + 0.38
+        min_z, max_z = 0.0, 1.25
+
+        dx, dy, dz = ray_dir.x, ray_dir.y, ray_dir.z
+        px, py, pz = ray_origin.x, ray_origin.y, ray_origin.z
+
+        t_min = 0.0
+        t_max = 55.0
+
+        for p_comp, d_comp, lo, hi in [(px, dx, min_x, max_x), (py, dy, min_y, max_y), (pz, dz, min_z, max_z)]:
+            if abs(d_comp) < 1e-6:
+                if p_comp < lo or p_comp > hi:
+                    return False, 999.0
+            else:
+                t1 = (lo - p_comp) / d_comp
+                t2 = (hi - p_comp) / d_comp
+                if t1 > t2:
+                    t1, t2 = t2, t1
+                t_min = max(t_min, t1)
+                t_max = min(t_max, t2)
+                if t_min > t_max:
+                    return False, 999.0
+
+        if t_min > 0.2:
+            return True, t_min
+        return False, 999.0
+
+    def ignite(self):
+        """총격 관통 시 점화되어 화염 분출 및 폭발 대기"""
+        if self.is_ignited or self.is_destroyed:
+            return
+        self.is_ignited = True
+        if self.audio_mgr and hasattr(self.audio_mgr, 'play_barrel_ignite'):
+            self.audio_mgr.play_barrel_ignite()
+
+        self.fire_node = make_cube("barrel_fire", 0.30, 0.30, 0.40, LColor(1.0, 0.70, 0.15, 1.0))
+        self.fire_node.setPos(0, 0, 1.25)
+        self.fire_node.setLightOff()
+        self.fire_node.reparentTo(self.node)
+
+    def update(self, dt, monsters, player, ui_mgr, hazard_barrels=None):
+        if not self.is_ignited or self.is_destroyed:
+            return True
+
+        self.fuse_timer -= dt
+        if self.fire_node and not self.fire_node.isEmpty():
+            sc = 1.0 + random.uniform(-0.25, 0.35)
+            self.fire_node.setScale(sc, sc, sc * 1.3)
+
+        if self.fuse_timer <= 0.0:
+            self.explode(monsters, player, ui_mgr, hazard_barrels)
+            return False
+        return True
+
+    def explode(self, monsters, player, ui_mgr, hazard_barrels=None):
+        if self.is_destroyed:
+            return
+        self.is_destroyed = True
+
+        if self.audio_mgr and hasattr(self.audio_mgr, 'play_grenade_blast'):
+            self.audio_mgr.play_grenade_blast()
+
+        if player and hasattr(player, 'trigger_quake_shake'):
+            player.trigger_quake_shake(intensity=3.6, duration=0.70)
+
+        blast_radius = 8.0
+        blast_dmg = 350.0
+        kill_count = 0
+
+        for m in monsters:
+            if getattr(m, 'hp', 0) > 0 and not getattr(m, 'is_corpse', False):
+                d = math.hypot(m.pos.x - self.pos.x, m.pos.y - self.pos.y)
+                if d <= blast_radius:
+                    falloff = max(0.40, 1.0 - (d / blast_radius))
+                    dmg = blast_dmg * falloff
+                    is_dead = m.take_damage(dmg)
+                    if is_dead:
+                        kill_count += 1
+                        if hasattr(m, 'turn_into_corpse'):
+                            m.turn_into_corpse(audio_mgr=self.audio_mgr)
+                        if player and hasattr(player, 'gain_exp'):
+                            player.gain_exp(getattr(m, 'exp_value', 35) + 50)
+
+        if player:
+            dp = math.hypot(player.camera.getX() - self.pos.x, player.camera.getY() - self.pos.y)
+            if dp < 3.2:
+                player.take_damage(16.0, source_pos=(self.pos.x, self.pos.y))
+
+        if hazard_barrels:
+            for b in hazard_barrels:
+                if b is not self and not b.is_destroyed:
+                    db = math.hypot(b.pos.x - self.pos.x, b.pos.y - self.pos.y)
+                    if db <= 6.5:
+                        b.ignite()
+
+        if ui_mgr:
+            if kill_count > 0:
+                ui_mgr.show_style_kill("🔥 [ BARREL CHAIN BLAST! ] 🔥", f"×{kill_count} 처치! +{kill_count * 100} EXP", (1.0, 0.35, 0.1, 1.0))
+            else:
+                ui_mgr.show_style_kill("🔥 [ HAZARD BARREL DETONATED ] 🔥", "", (1.0, 0.4, 0.1, 1.0))
+
+        self.destroy()
+
+    def destroy(self):
+        self.is_destroyed = True
+        if hasattr(self, 'node') and not self.node.isEmpty():
+            self.node.removeNode()
+
+
 class LiminalInfiniteLoop(ShowBase):
     def __init__(self):
         super().__init__()
@@ -157,6 +410,9 @@ class LiminalInfiniteLoop(ShowBase):
         self.killer_monster = None
         self.fireballs = []
         self.shockwaves = []
+        self.grenades = []
+        self.grenade_cooldown = 0.0
+        self.hazard_barrels = []
 
         # 5-1. 정전 프로토콜 (Blackout & Crimson Protocol) 상태
         self.blackout_active = False
@@ -191,7 +447,8 @@ class LiminalInfiniteLoop(ShowBase):
             on_reload=self.reload_pistol,
             on_aim_start=self.combat.start_aim,
             on_aim_stop=self.combat.stop_aim,
-            on_scan=self.activate_bio_scanner
+            on_scan=self.activate_bio_scanner,
+            on_grenade=self.throw_grenade
         )
 
         # 7. 게임 상태 및 5분(300초) 타이머 설정
@@ -245,7 +502,22 @@ class LiminalInfiniteLoop(ShowBase):
 
     # --- 사용자 액션 포워딩 ---
     def shoot_pistol(self):
-        self.combat.shoot(self.monsters, self.player, self.game_state)
+        self.combat.shoot(self.monsters, self.player, self.game_state, hazard_barrels=self.hazard_barrels)
+
+    def throw_grenade(self):
+        """[G] 키 전술 파열 수류탄 투척 (1.45초 후 반경 6.5m 대폭발)"""
+        if self.game_state != "PLAYING":
+            return
+        if self.grenade_cooldown > 0.0:
+            return
+        self.grenade_cooldown = 9.0
+        if self.audio_mgr and hasattr(self.audio_mgr, 'play_grenade_throw'):
+            self.audio_mgr.play_grenade_throw()
+        cam_quat = self.camera.getQuat()
+        cam_fwd = cam_quat.getForward()
+        start_pos = self.camera.getPos() + cam_fwd * 0.45
+        gr = FragGrenade(self.world_root, start_pos, cam_fwd, self.audio_mgr)
+        self.grenades.append(gr)
 
     def reload_pistol(self):
         self.combat.reload(self.game_state)
@@ -401,6 +673,49 @@ class LiminalInfiniteLoop(ShowBase):
         first_skel = next((m for m in self.monsters if isinstance(m, TallSkeletonMonster)), None)
         if first_serpent and first_skel:
             self.audio_mgr.attach_monsters(first_serpent, first_skel)
+
+        # 복도 폭발성 유류 드럼통 배치
+        self.spawn_hazard_barrels()
+
+    def spawn_hazard_barrels(self):
+        """던전 복도 코너/교차로에 붉은색 고위험 유류 드럼통 6~8개 배치"""
+        for b in self.hazard_barrels:
+            b.destroy()
+        self.hazard_barrels.clear()
+
+        min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 2
+        max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 3
+        spawn_x = 1.5 * CELL_SIZE
+        spawn_y = 1.5 * CELL_SIZE
+
+        candidates = []
+        for gx in range(min_cell, max_cell, 2):
+            for gy in range(min_cell, max_cell, 2):
+                if (gx % 3 == 1 or gy % 3 == 1) and not cell_has_pillar(gx, gy):
+                    bx = (gx + 0.35) * CELL_SIZE
+                    by = (gy + 0.35) * CELL_SIZE
+                    if math.hypot(bx - spawn_x, by - spawn_y) >= 16.0:
+                        candidates.append((bx, by))
+
+        selected = random.sample(candidates, min(len(candidates), 7)) if candidates else []
+        for bx, by in selected:
+            barrel = HazardBarrel(self.world_root, bx, by, self.audio_mgr)
+            self.hazard_barrels.append(barrel)
+
+    def clear_projectiles(self):
+        """스테이지 전환/리셋 시 발사체, 충격파, 수류탄, 유류 드럼통 일괄 정리"""
+        for fb in self.fireballs:
+            fb.destroy()
+        self.fireballs.clear()
+        for sw in self.shockwaves:
+            sw.destroy()
+        self.shockwaves.clear()
+        for gr in self.grenades:
+            gr.destroy()
+        self.grenades.clear()
+        for b in self.hazard_barrels:
+            b.destroy()
+        self.hazard_barrels.clear()
 
     def restart_game(self):
         """던전 게임 초기화 (체력, 몬스터 군단, 5분 타이머, 탈출구)"""
@@ -945,6 +1260,21 @@ class LiminalInfiniteLoop(ShowBase):
                 sw.destroy()
                 self.shockwaves.remove(sw)
 
+        # 3. 전술 파열 수류탄 갱신 및 폭발
+        for gr in self.grenades[:]:
+            alive = gr.update(dt, self.chunks, self.monsters)
+            if not alive:
+                gr.explode(self.monsters, self.player, self.ui_mgr, self.hazard_barrels)
+                if gr in self.grenades:
+                    self.grenades.remove(gr)
+
+        # 4. 폭발성 유류 드럼통 점화 및 폭발 갱신
+        for b in self.hazard_barrels[:]:
+            alive = b.update(dt, self.monsters, self.player, self.ui_mgr, self.hazard_barrels)
+            if not alive:
+                if b in self.hazard_barrels:
+                    self.hazard_barrels.remove(b)
+
         return False
 
     def _update_door_defense(self, dt, px, py):
@@ -1124,6 +1454,12 @@ class LiminalInfiniteLoop(ShowBase):
         self.ui_mgr.update(dt, player_pos=(px, py), camera_heading=getattr(self.player, 'heading', 0.0))
         self.ui_mgr.update_timer(self.time_left, self.current_stage)
         self.ui_mgr.update_hud(px, py, getattr(self, 'escape_pos', None), getattr(self.player, 'heading', 0.0))
+
+        # 전술 스킬 (슬라이드 / 수류탄) HUD 실시간 갱신
+        if self.grenade_cooldown > 0.0:
+            self.grenade_cooldown = max(0.0, self.grenade_cooldown - dt)
+        slide_ready = getattr(self.player, 'slide_cooldown', 0.0) <= 0.0
+        self.ui_mgr.update_skills_hud(slide_ready, self.grenade_cooldown)
 
         return cont
 

@@ -5,12 +5,11 @@ Player Controller Module
 """
 
 import math
-from panda3d.core import WindowProperties, Vec3, KeyboardButton, LineSegs, LColor
+from panda3d.core import WindowProperties, Vec3, KeyboardButton, LColor
 from constants import (
     PLAYER_RADIUS, PLAYER_EYE_HEIGHT, WALK_SPEED, SPRINT_SPEED, WALL_HEIGHT
 )
 from collision import resolve_collision, raycast_walls
-from geometry import make_cube_to
 
 
 class PlayerController:
@@ -58,15 +57,13 @@ class PlayerController:
         self.heartbeat_accum = 0.0
         self.is_aiming = False
 
-        # 스페이스바 전술 와이어(Grappling Wire) 시스템
-        self.is_grappling = False
-        self.grapple_target = None
-        self.wire_node = None
-        self.wire_anchor_node = None
-        self.wire_cooldown = 0.0
-        self.wire_reel_timer = 0.0
-        self.last_chunks = {}
-        self.world_root = None
+        # 스페이스바 전술 컴뱃 슬라이드 & 긴급 회피 대시
+        self.is_sliding = False
+        self.slide_timer = 0.0
+        self.slide_duration = 0.62
+        self.slide_cooldown = 0.0
+        self.slide_dir = Vec3(0, 0, 0)
+        self.slide_speed = 0.0
 
         # 키보드 입력 상태
         self.key_map = {
@@ -74,8 +71,8 @@ class PlayerController:
             "shift": 0
         }
 
-    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_scan=None):
-        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 바이오 스캐너)"""
+    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_scan=None, on_grenade=None):
+        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 바이오 스캐너, 슬라이드, 수류탄)"""
         self.base.disableMouse()
         self.lock_mouse(True)
 
@@ -132,101 +129,39 @@ class PlayerController:
         # ESC 마우스 커서 해제/잠금 토글
         self.base.accept("escape", self.toggle_mouse_lock)
 
-        # Space 전술 와이어(Grappling Hook) 발사 및 해제
+        # Space 전술 컴뱃 슬라이드 & 긴급 회피 기동
         for sp_evt in ["space", "shift-space", "control-space", "alt-space"]:
-            self.base.accept(sp_evt, self.trigger_grapple_wire)
+            self.base.accept(sp_evt, self.trigger_slide)
 
-    def trigger_grapple_wire(self):
-        """[Space] 전술 와이어(Grappling Hook) 발사: 벽에 꽂아 고속 이동하거나 이미 이동 중이면 즉시 분리"""
-        if self.is_grappling:
-            # 이미 와이어로 이동 중일 때 스페이스바를 다시 누르면 와이어 분리
-            self.stop_grapple(give_momentum=True)
+        # G 전술 파열 수류탄 투척
+        if on_grenade:
+            for g_evt in ["g", "G", "shift-g", "shift-G"]:
+                self.base.accept(g_evt, on_grenade)
+
+    def trigger_slide(self):
+        """[Space] 전술 컴뱃 슬라이드 & 긴급 회피 대시 (낮은 자세로 미끄러지며 사격 가능)"""
+        if self.slide_cooldown > 0.0 or self.is_sliding:
+            return
+        if self.stamina < 12.0:
             return
 
-        if self.wire_cooldown > 0.0:
-            return
+        # 슬라이딩 방향 결정 (이동 중이면 이동 방향, 정지 상태면 전방 시선 방향)
+        if self.last_move_dir.lengthSquared() > 0.01:
+            slide_vec = Vec3(self.last_move_dir)
+        else:
+            h_rad = math.radians(self.heading)
+            slide_vec = Vec3(-math.sin(h_rad), math.cos(h_rad), 0)
+        slide_vec.normalize()
 
-        cam_pos = self.camera.getPos()
-        h_rad = math.radians(self.heading)
-        p_rad = math.radians(self.pitch)
-        cos_p = math.cos(p_rad)
-        ray_dir = Vec3(-math.sin(h_rad) * cos_p, math.cos(h_rad) * cos_p, math.sin(p_rad))
-        ray_dir.normalize()
+        self.is_sliding = True
+        self.slide_timer = self.slide_duration
+        self.slide_cooldown = 0.82
+        self.slide_dir = slide_vec
+        self.slide_speed = 15.2 * self.speed_mult
+        self.stamina = max(0.0, self.stamina - 14.0)
 
-        # 던전 벽 충돌 광선 추적 (최대 38m)
-        hit_dist, hit_pos = raycast_walls(self.last_chunks, cam_pos, ray_dir, max_dist=38.0)
-        if hit_pos is None:
-            if self.audio_mgr and hasattr(self.audio_mgr, 'play_wire_launch'):
-                self.audio_mgr.play_wire_launch()
-            if hasattr(self.ui_mgr, 'show_notification'):
-                self.ui_mgr.show_notification("[ 와이어 유효 거리 초과 (사거리: 38m) ]", 1.2)
-            return
-
-        # 벽에 꽂힘 성공
-        self.is_grappling = True
-        self.grapple_target = hit_pos
-        self.wire_cooldown = 0.35
-        self.wire_reel_timer = 0.0
-
-        if self.audio_mgr:
-            if hasattr(self.audio_mgr, 'play_wire_launch'):
-                self.audio_mgr.play_wire_launch()
-            if hasattr(self.audio_mgr, 'play_wire_latch'):
-                self.audio_mgr.play_wire_latch()
-
-        # 벽에 꽂힌 앵커 시각 효과 노드 생성
-        parent_node = self.world_root if self.world_root else (self.base.render if hasattr(self.base, 'render') else None)
-        if parent_node:
-            if self.wire_anchor_node and not self.wire_anchor_node.isEmpty():
-                self.wire_anchor_node.removeNode()
-            self.wire_anchor_node = parent_node.attachNewNode("wire_anchor")
-            make_cube_to(self.wire_anchor_node, 0.22, 0.22, 0.22, (0.85, 0.88, 0.95, 1.0), 0, 0, 0)
-            self.wire_anchor_node.setPos(hit_pos)
-
-        self._update_wire_mesh()
-
-    def _update_wire_mesh(self):
-        """플레이어와 벽 앵커를 연결하는 3D 사이언 발광 전술 와이어 선분 렌더링"""
-        if not self.is_grappling or not self.grapple_target:
-            if self.wire_node and not self.wire_node.isEmpty():
-                self.wire_node.removeNode()
-                self.wire_node = None
-            return
-
-        if self.wire_node and not self.wire_node.isEmpty():
-            self.wire_node.removeNode()
-            self.wire_node = None
-
-        cam_pos = self.camera.getPos()
-        h_rad = math.radians(self.heading)
-        p_rad = math.radians(self.pitch)
-        cos_p = math.cos(p_rad)
-        fw = Vec3(-math.sin(h_rad) * cos_p, math.cos(h_rad) * cos_p, math.sin(p_rad))
-        rt = Vec3(math.cos(h_rad), math.sin(h_rad), 0)
-        up = rt.cross(fw)
-        wire_start = cam_pos + fw * 0.45 + rt * 0.20 - up * 0.16
-
-        ls = LineSegs("grapple_wire_seg")
-        ls.setColor(LColor(0.20, 0.92, 1.0, 0.95))
-        ls.setThickness(2.8)
-        ls.moveTo(wire_start)
-        ls.drawTo(self.grapple_target)
-
-        parent_node = self.world_root if self.world_root else (self.base.render if hasattr(self.base, 'render') else None)
-        if parent_node:
-            self.wire_node = parent_node.attachNewNode(ls.create())
-            self.wire_node.setLightOff()
-
-    def stop_grapple(self, give_momentum=True):
-        """와이어 연결 해제 및 앵커/선분 정리"""
-        self.is_grappling = False
-        self.grapple_target = None
-        if self.wire_node and not self.wire_node.isEmpty():
-            self.wire_node.removeNode()
-            self.wire_node = None
-        if self.wire_anchor_node and not self.wire_anchor_node.isEmpty():
-            self.wire_anchor_node.removeNode()
-            self.wire_anchor_node = None
+        if self.audio_mgr and hasattr(self.audio_mgr, 'play_slide'):
+            self.audio_mgr.play_slide()
 
     def _on_aim_down(self, cb):
         self.is_aiming = True
@@ -377,7 +312,9 @@ class PlayerController:
 
     def reset_position(self, x, y, z=PLAYER_EYE_HEIGHT, heading=0.0, pitch=0.0):
         """플레이어 위치 및 시선 초기화"""
-        self.stop_grapple(give_momentum=False)
+        self.is_sliding = False
+        self.slide_timer = 0.0
+        self.slide_cooldown = 0.0
         self.heading = heading
         self.pitch = pitch
         self.camera.setPos(x, y, z)
@@ -394,9 +331,8 @@ class PlayerController:
 
     def update(self, dt, chunks):
         """마우스 시선 제어, 8방향 이동 및 충돌 슬라이딩 처리"""
-        self.last_chunks = chunks
-        if self.wire_cooldown > 0.0:
-            self.wire_cooldown = max(0.0, self.wire_cooldown - dt)
+        if self.slide_cooldown > 0.0:
+            self.slide_cooldown = max(0.0, self.slide_cooldown - dt)
 
         if self.invincible_timer > 0.0:
             self.invincible_timer = max(0.0, self.invincible_timer - dt)
@@ -502,50 +438,41 @@ class PlayerController:
 
         self.ui_mgr.update_stamina(self.stamina, self.max_stamina, self.is_sprinting, self.stamina_exhausted)
 
-        # 4. 전술 와이어 견인 이동 또는 지면 이동 및 정밀 충돌 슬라이딩
-        if self.is_grappling and self.grapple_target:
-            curr_pos = self.camera.getPos()
-            diff = self.grapple_target - curr_pos
-            dist = diff.length()
+        # 4. 전술 컴뱃 슬라이딩 이동 또는 일반 지면 이동
+        if self.is_sliding:
+            self.slide_timer = max(0.0, self.slide_timer - dt)
+            progress = 1.0 - (self.slide_timer / self.slide_duration)  # 0.0 -> 1.0
 
-            self.wire_reel_timer += dt
-            if self.wire_reel_timer >= 0.28:
-                self.wire_reel_timer = 0.0
-                if self.audio_mgr and hasattr(self.audio_mgr, 'play_wire_reel'):
-                    self.audio_mgr.play_wire_reel()
+            # 지면 마찰에 따른 속도 감속 (15.2 -> 6.5 m/s)
+            cur_speed = self.slide_speed * (1.0 - 0.58 * progress) * cur_slow
+            disp = self.slide_dir * cur_speed * dt
 
-            if dist <= 1.8:
-                # 벽면 도달 시 자동 와이어 분리
-                self.stop_grapple(give_momentum=False)
+            # 슬라이딩 시 시선 고도 낮추기 (1.7m -> 0.92m 크라우치 슬라이드 -> 복귀)
+            crouch_height = 0.92
+            if progress < 0.65:
+                t_in = min(1.0, progress / 0.18)
+                cur_z = PLAYER_EYE_HEIGHT + (crouch_height - PLAYER_EYE_HEIGHT) * t_in
             else:
-                pull_dir = Vec3(diff)
-                pull_dir.normalize()
-                pull_speed = 22.0  # 초당 22m의 강력한 와이어 견인력
+                t_out = (progress - 0.65) / 0.35
+                cur_z = crouch_height + (PLAYER_EYE_HEIGHT - crouch_height) * t_out
 
-                # 수평 이동 충돌 슬라이딩 (벽에 박히지 않고 부드럽게 미끄러짐)
-                disp_x = pull_dir.x * pull_speed * dt
-                disp_y = pull_dir.y * pull_speed * dt
-                new_x, new_y = resolve_collision(chunks, curr_pos.x, curr_pos.y, disp_x, disp_y, radius=PLAYER_RADIUS)
+            curr_pos = self.camera.getPos()
+            new_x, new_y = resolve_collision(chunks, curr_pos.x, curr_pos.y, disp.x, disp.y, radius=PLAYER_RADIUS)
+            self.camera.setPos(new_x, new_y, cur_z)
 
-                # 수직 고도 이동 (목표 앵커 지점까지 상승, 천장/벽 높이 미만 제한)
-                new_z = curr_pos.z + pull_dir.z * pull_speed * dt
-                min_eye = PLAYER_EYE_HEIGHT
-                max_eye = min(WALL_HEIGHT - 0.5, self.grapple_target.z)
-                new_z = max(min_eye, min(max_eye, new_z))
+            # 슬라이딩 시 카메라 다이내믹 뱅킹 틸트 (좌우 2.5도 기울임)
+            tilt_r = math.sin(progress * math.pi) * 2.6
+            self.camera.setR(tilt_r)
 
-                self.camera.setPos(new_x, new_y, new_z)
-                self._update_wire_mesh()
-                view_changed = True
-                is_moving = True
+            view_changed = True
+            is_moving = True
+
+            if self.slide_timer <= 0.0:
+                self.is_sliding = False
+                self.camera.setPos(new_x, new_y, PLAYER_EYE_HEIGHT)
+                self.camera.setR(0.0)
         else:
-            # 공중에 떠 있는 경우(와이어 이동 후 또는 분리 시) 지면으로 부드러운 중력 낙하
-            curr_z = self.camera.getZ()
-            if curr_z > PLAYER_EYE_HEIGHT:
-                fall_speed = 12.0
-                new_z = max(PLAYER_EYE_HEIGHT, curr_z - fall_speed * dt)
-                self.camera.setZ(new_z)
-                view_changed = True
-
+            # 일반 지면 이동 및 정밀 충돌 슬라이딩
             if is_moving:
                 move_dir.normalize()
                 self.last_move_dir = move_dir
@@ -564,7 +491,7 @@ class PlayerController:
 
                 curr_pos = self.camera.getPos()
                 new_x, new_y = resolve_collision(chunks, curr_pos.x, curr_pos.y, disp.x, disp.y, radius=PLAYER_RADIUS)
-                self.camera.setPos(new_x, new_y, self.camera.getZ())
+                self.camera.setPos(new_x, new_y, PLAYER_EYE_HEIGHT)
                 view_changed = True
             else:
                 self.last_move_dir = Vec3(0, 0, 0)
