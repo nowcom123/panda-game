@@ -97,6 +97,8 @@ class AudioManager:
         self.ads_in_sfx = self.loader.loadSfx(ads_in_p) if ads_in_p else None
         ads_out_p = self._get_path("ads_out.wav")
         self.ads_out_sfx = self.loader.loadSfx(ads_out_p) if ads_out_p else None
+        explode_p = self._get_path("monster_explode.wav")
+        self.monster_explode_sfx = self.loader.loadSfx(explode_p) if explode_p else None
 
     def _get_path(self, fname):
         full_p = os.path.join(self.audio_dir, fname)
@@ -277,6 +279,12 @@ class AudioManager:
         if snd:
             snd.setVolume(0.50)
             snd.play()
+
+    def play_monster_explode(self):
+        """몬스터 사망 시 신체 폭발 및 파편화 파열음"""
+        if self.monster_explode_sfx:
+            self.monster_explode_sfx.setVolume(1.0)
+            self.monster_explode_sfx.play()
 
     def update(self, dt, dist_serpent, dist_skeleton, s_los, k_los):
         """프레임별 3D 오디오 리스너 및 몬스터 거리 감쇠/포효 갱신"""

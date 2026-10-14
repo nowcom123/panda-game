@@ -386,9 +386,13 @@ class LiminalInfiniteLoop(ShowBase):
             spawn_plan.append(AbominableMudOrc)
             spawn_plan.append(AlluringAshWitch)
 
+        stage_hp_mult = 1.0 + (stage - 1) * 0.25
         for i, cls in enumerate(spawn_plan):
             pos = candidates[i % len(candidates)] if candidates else (spawn_x + 30.0 + i * 10, spawn_y + 30.0)
             monster = cls(self.render, pos[0], pos[1])
+            if stage > 1:
+                monster.max_hp = int(monster.max_hp * stage_hp_mult)
+                monster.hp = monster.max_hp
             self.monsters.append(monster)
 
         # 오디오 관리자에 첫 번째 뱀/해골 부착
@@ -766,7 +770,7 @@ class LiminalInfiniteLoop(ShowBase):
             if getattr(m, 'hp', 1) <= 0:
                 # 사망한 몬스터: 시체로 전환하고 활성 몬스터 목록에서 제외하여 시체 목록으로 이전
                 if not getattr(m, 'is_corpse', False) and hasattr(m, 'turn_into_corpse'):
-                    m.turn_into_corpse()
+                    m.turn_into_corpse(audio_mgr=self.audio_mgr)
                 self.monsters.remove(m)
                 self.corpses.append(m)
                 continue
@@ -892,6 +896,11 @@ class LiminalInfiniteLoop(ShowBase):
                 m.update_pos(new_x, new_y, dt, ndx, ndy)
             else:
                 m.update(dt, is_moving=False)
+
+        # 사망한 몬스터들의 비산 파편 물리 및 폭발 섬광 조명 갱신
+        for c in self.corpses:
+            if hasattr(c, 'update_debris'):
+                c.update_debris(dt)
 
         return False, closest_dist
 

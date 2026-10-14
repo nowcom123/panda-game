@@ -434,7 +434,7 @@ class CombatSystem:
                     player.heal(12.0)
 
                 if hasattr(closest_monster, 'turn_into_corpse'):
-                    closest_monster.turn_into_corpse()
+                    closest_monster.turn_into_corpse(audio_mgr=self.audio_mgr)
                 if player:
                     player.gain_exp(exp_gain)
             else:

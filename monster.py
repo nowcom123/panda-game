@@ -1,6 +1,214 @@
 import math
+import random
 from panda3d.core import Vec3, LColor, PointLight, ClockObject, NodePath
 from geometry import make_cube
+
+
+def create_monster_explosion(parent, pos, monster_type, audio_mgr=None):
+    """
+    몬스터 사망 시 신체 파편화 3D 폭발 시뮬레이션
+    - 두개골, 갈비뼈, 척추, 엄니, 비늘 마디, 살점, 갑주, 불타는 마력 불씨 등 35개 내외의 고체 파편 큐브 생성
+    - 사방 360도 방사형 폭발 속도 (Horizontal 3.0~8.5 m/s, Upward 2.5~7.5 m/s) 및 3축 고속 텀블링 회전
+    - 바닥 탄성 튕김 및 마찰 감쇠 물리 시뮬레이션
+    - 순간 고광도 폭발 섬광 조명(PointLight) 및 바닥 핏자국 크레이터 생성
+    - 파열 폭발 사운드 재생
+    """
+    if audio_mgr and hasattr(audio_mgr, 'play_monster_explode'):
+        audio_mgr.play_monster_explode()
+
+    # 1. 순간 폭발 섬광 라이트
+    blast_light = PointLight(f"{monster_type}_blast_light")
+    if monster_type == "skeleton":
+        blast_light.setColor((1.4, 2.0, 2.8, 1.0))
+    elif monster_type == "orc":
+        blast_light.setColor((3.0, 1.4, 0.4, 1.0))
+    elif monster_type == "serpent":
+        blast_light.setColor((2.6, 0.4, 0.6, 1.0))
+    else:  # witch
+        blast_light.setColor((2.4, 0.6, 2.6, 1.0))
+    blast_light.setAttenuation((1.0, 0.20, 0.08))
+    blast_np = parent.attachNewNode(blast_light)
+    blast_np.setPos(pos.x, pos.y, pos.z + 1.2)
+    parent.setLight(blast_np)
+
+    # 2. 바닥 핏자국 / 유혈 크레이터 생성
+    if monster_type == "skeleton":
+        blood_col = LColor(0.24, 0.03, 0.03, 0.95)
+        pw, pd = 2.8, 2.8
+    elif monster_type == "orc":
+        blood_col = LColor(0.18, 0.08, 0.03, 0.95)
+        pw, pd = 3.4, 3.4
+    elif monster_type == "serpent":
+        blood_col = LColor(0.16, 0.02, 0.02, 0.95)
+        pw, pd = 3.0, 3.0
+    else:
+        blood_col = LColor(0.18, 0.04, 0.08, 0.95)
+        pw, pd = 2.6, 2.6
+    puddle = make_cube(f"{monster_type}_splatter", pw, pd, 0.015, blood_col)
+    puddle.reparentTo(parent)
+    puddle.setPos(pos.x, pos.y, 0.02)
+    puddle.setLightOff()
+
+    # 3. 몬스터 타입별 파편 청사진 (Blueprint)
+    debris_blueprints = []
+    if monster_type == "skeleton":
+        ivory = LColor(0.88, 0.86, 0.78, 1.0)
+        dark_bone = LColor(0.68, 0.65, 0.58, 1.0)
+        cyan_spark = LColor(0.25, 0.85, 1.0, 1.0)
+        debris_blueprints = [
+            ("deb_skel_skull", 0.36, 0.40, 0.38, ivory, 1, False),
+            ("deb_skel_jaw", 0.26, 0.20, 0.14, dark_bone, 1, False),
+            ("deb_skel_pelvis", 0.44, 0.24, 0.30, ivory, 1, False),
+            ("deb_skel_rib", 0.08, 0.36, 0.08, ivory, 6, False),
+            ("deb_skel_vert", 0.14, 0.14, 0.14, dark_bone, 6, False),
+            ("deb_skel_limb", 0.10, 0.52, 0.10, ivory, 4, False),
+            ("deb_skel_claw", 0.12, 0.20, 0.08, dark_bone, 2, False),
+            ("deb_skel_splinter", 0.06, 0.08, 0.06, ivory, 10, False),
+            ("deb_skel_spark", 0.07, 0.07, 0.07, cyan_spark, 4, True),
+        ]
+    elif monster_type == "orc":
+        mud_skin = LColor(0.26, 0.23, 0.17, 1.0)
+        tusk_ivory = LColor(0.88, 0.85, 0.72, 1.0)
+        iron_armor = LColor(0.20, 0.20, 0.22, 1.0)
+        flesh_gore = LColor(0.35, 0.12, 0.10, 1.0)
+        moss_col = LColor(0.18, 0.26, 0.14, 1.0)
+        blood_red = LColor(0.42, 0.08, 0.08, 1.0)
+        amber_col = LColor(1.0, 0.75, 0.15, 1.0)
+        debris_blueprints = [
+            ("deb_orc_head", 0.48, 0.44, 0.42, mud_skin, 1, False),
+            ("deb_orc_tusk", 0.12, 0.30, 0.12, tusk_ivory, 2, False),
+            ("deb_orc_armor", 0.40, 0.36, 0.24, iron_armor, 2, False),
+            ("deb_orc_meat", 0.32, 0.42, 0.28, flesh_gore, 4, False),
+            ("deb_orc_fist", 0.28, 0.28, 0.28, mud_skin, 2, False),
+            ("deb_orc_torso", 0.42, 0.30, 0.24, moss_col, 2, False),
+            ("deb_orc_gib", 0.12, 0.14, 0.12, blood_red, 18, False),
+            ("deb_orc_ember", 0.08, 0.08, 0.08, amber_col, 4, True),
+        ]
+    elif monster_type == "serpent":
+        black_scale = LColor(0.015, 0.015, 0.02, 1.0)
+        mid_scale = LColor(0.025, 0.025, 0.035, 1.0)
+        fang_ivory = LColor(0.92, 0.90, 0.82, 1.0)
+        tongue_red = LColor(0.85, 0.03, 0.03, 1.0)
+        venom_dark = LColor(0.35, 0.04, 0.04, 1.0)
+        eye_red = LColor(1.0, 0.25, 0.05, 1.0)
+        debris_blueprints = [
+            ("deb_serp_head", 0.85, 1.10, 0.50, black_scale, 1, False),
+            ("deb_serp_fang", 0.12, 0.38, 0.12, fang_ivory, 2, False),
+            ("deb_serp_tongue", 0.18, 0.55, 0.05, tongue_red, 1, True),
+            ("deb_serp_seg_big", 0.75, 0.70, 0.48, mid_scale, 6, False),
+            ("deb_serp_seg_mid", 0.55, 0.55, 0.36, black_scale, 8, False),
+            ("deb_serp_scale", 0.12, 0.14, 0.10, venom_dark, 14, False),
+            ("deb_serp_spark", 0.07, 0.07, 0.07, eye_red, 4, True),
+        ]
+    else:  # witch
+        mask_col = LColor(0.10, 0.09, 0.12, 1.0)
+        flame_col = LColor(0.95, 0.35, 0.15, 1.0)
+        veil_purple = LColor(0.50, 0.14, 0.55, 1.0)
+        ash_grey = LColor(0.20, 0.18, 0.22, 1.0)
+        ember_col = LColor(1.0, 0.35, 0.12, 1.0)
+        spark_purple = LColor(0.85, 0.25, 1.0, 1.0)
+        debris_blueprints = [
+            ("deb_witch_mask", 0.32, 0.35, 0.35, mask_col, 1, False),
+            ("deb_witch_hand", 0.18, 0.18, 0.18, flame_col, 2, True),
+            ("deb_witch_veil", 0.24, 0.48, 0.06, veil_purple, 4, False),
+            ("deb_witch_core", 0.26, 0.28, 0.22, ash_grey, 4, False),
+            ("deb_witch_ember", 0.09, 0.09, 0.09, ember_col, 18, True),
+            ("deb_witch_spark", 0.06, 0.06, 0.06, spark_purple, 6, True),
+        ]
+
+    debris_list = []
+    piece_idx = 0
+    for name, sx, sy, sz, col, count, is_spark in debris_blueprints:
+        for _ in range(count):
+            piece_idx += 1
+            node_np = parent.attachNewNode(f"debris_{piece_idx}")
+            cube = make_cube(name, sx, sy, sz, col)
+            cube.reparentTo(node_np)
+            if is_spark:
+                cube.setLightOff()
+
+            ox = random.uniform(-0.35, 0.35)
+            oy = random.uniform(-0.35, 0.35)
+            oz = random.uniform(0.3, 1.8)
+            init_pos = Vec3(pos.x + ox, pos.y + oy, pos.z + oz)
+            node_np.setPos(init_pos)
+
+            theta = random.uniform(0, math.pi * 2.0)
+            if is_spark:
+                speed_xy = random.uniform(4.5, 11.5)
+                speed_z = random.uniform(3.5, 9.0)
+            else:
+                speed_xy = random.uniform(2.8, 8.5)
+                speed_z = random.uniform(2.5, 7.5)
+
+            vx = math.cos(theta) * speed_xy
+            vy = math.sin(theta) * speed_xy
+            vz = speed_z
+
+            spin = Vec3(
+                random.uniform(-450, 450),
+                random.uniform(-450, 450),
+                random.uniform(-450, 450)
+            )
+            rot = Vec3(random.uniform(0, 360), random.uniform(0, 360), random.uniform(0, 360))
+            node_np.setHpr(rot)
+
+            life = random.uniform(9.0, 13.0)
+            debris_list.append({
+                "node": node_np,
+                "pos": init_pos,
+                "vel": Vec3(vx, vy, vz),
+                "rot": rot,
+                "spin": spin,
+                "timer": life,
+                "max_timer": life,
+                "settled": False,
+                "is_spark": is_spark
+            })
+
+    return debris_list, blast_np, puddle
+
+
+def update_monster_debris_list(debris_list, dt):
+    """3D 파편 물리 시뮬레이션: 중력, 탄성 튕김, 회전 및 잔여 수명 페이드아웃"""
+    for d in debris_list[:]:
+        d["timer"] -= dt
+        if d["timer"] <= 0.0:
+            if d.get("node") and not d["node"].isEmpty():
+                d["node"].removeNode()
+            debris_list.remove(d)
+            continue
+
+        if not d["settled"]:
+            # 중력 적용 (초당 -11.8 m/s^2)
+            d["vel"].z -= 11.8 * dt
+            d["pos"] += d["vel"] * dt
+            d["rot"] += d["spin"] * dt
+
+            # 바닥 충돌 및 탄성 튕김 (Z <= 0.035)
+            if d["pos"].z <= 0.035:
+                d["pos"].z = 0.035
+                d["vel"].z = -d["vel"].z * 0.28  # 반발 계수
+                d["vel"].x *= 0.65               # 바닥 마찰
+                d["vel"].y *= 0.65
+                d["spin"] *= 0.70
+
+                h_speed = math.hypot(d["vel"].x, d["vel"].y)
+                if abs(d["vel"].z) < 0.25 and h_speed < 0.20:
+                    d["settled"] = True
+                    d["vel"] = Vec3(0, 0, 0)
+                    d["spin"] = Vec3(0, 0, 0)
+
+            if d.get("node") and not d["node"].isEmpty():
+                d["node"].setPos(d["pos"])
+                d["node"].setHpr(d["rot"])
+
+        # 수명 종료 1.5초 전부터 바닥으로 서서히 축소되며 자연스럽게 소멸
+        if d["timer"] <= 1.5:
+            scale = max(0.01, d["timer"] / 1.5)
+            if d.get("node") and not d["node"].isEmpty():
+                d["node"].setScale(scale)
+
 
 class LongBlackSerpent:
     """
@@ -23,11 +231,15 @@ class LongBlackSerpent:
         self.stun_timer = 0.0
         self.is_corpse = False
         self.name = "검은 뱀 괴물"
-        self.max_hp = 75
+        self.max_hp = 220
         self.hp = self.max_hp
-        self.exp_value = 35
+        self.exp_value = 55
         self.attack_damage = 30
         self.speed = 9.0
+        self.debris_list = []
+        self.blast_light_np = None
+        self.puddle_np = None
+        self.blast_timer = 0.0
 
         black = LColor(0.015, 0.015, 0.02, 1.0)
         scale_black = LColor(0.025, 0.025, 0.035, 1.0)
@@ -139,8 +351,8 @@ class LongBlackSerpent:
         self.stun(0.4)
         return self.hp <= 0
 
-    def turn_into_corpse(self):
-        """사망 시 시체로 전환: 조명 소멸, 바닥에 축 늘어져 쓰러짐 및 피 웅덩이 생성"""
+    def turn_into_corpse(self, audio_mgr=None):
+        """사망 시 14개 마디와 거대 송곳니/머리통이 사방으로 폭발 파편화"""
         self.is_corpse = True
         self.hp = 0
         if hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
@@ -148,16 +360,42 @@ class LongBlackSerpent:
         self.climb_z = 0.12
         self.pos.z = 0.12
         self.node.setPos(self.pos)
-        self.tilt_root.setHpr(0, 0, 0)
-        self.head.setP(0)
-        self.head.setZ(-0.2)
-        blood = make_cube('serpent_blood', 2.2, 2.2, 0.015, LColor(0.20, 0.02, 0.02, 0.95))
-        blood.reparentTo(self.node)
-        blood.setPos(0, 0, -0.10)
-        blood.setLightOff()
+        self.node.setP(-88)
+        self.tilt_root.hide()
+
+        parent = self.node.getParent() if (hasattr(self, 'node') and not self.node.isEmpty() and not self.node.getParent().isEmpty()) else self.node
+        self.debris_list, self.blast_light_np, self.puddle_np = create_monster_explosion(parent, self.pos, "serpent", audio_mgr)
+        self.blast_timer = 0.14
+
+    def update_debris(self, dt):
+        """사망 후 공중 비산 중인 3D 파편 물리 시뮬레이션 및 폭발 섬광 페이드 갱신"""
+        if hasattr(self, 'blast_light_np') and self.blast_light_np and not self.blast_light_np.isEmpty():
+            self.blast_timer -= dt
+            if self.blast_timer <= 0.0:
+                parent = self.blast_light_np.getParent()
+                if not parent.isEmpty():
+                    parent.clearLight(self.blast_light_np)
+                self.blast_light_np.removeNode()
+                self.blast_light_np = None
+        if hasattr(self, 'debris_list') and self.debris_list:
+            update_monster_debris_list(self.debris_list, dt)
 
     def destroy(self):
-        """씬그래프 및 조명 리소스 해제"""
+        """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        if hasattr(self, 'blast_light_np') and self.blast_light_np and not self.blast_light_np.isEmpty():
+            parent = self.blast_light_np.getParent()
+            if not parent.isEmpty():
+                parent.clearLight(self.blast_light_np)
+            self.blast_light_np.removeNode()
+            self.blast_light_np = None
+        if hasattr(self, 'puddle_np') and self.puddle_np and not self.puddle_np.isEmpty():
+            self.puddle_np.removeNode()
+            self.puddle_np = None
+        if hasattr(self, 'debris_list') and self.debris_list:
+            for d in self.debris_list:
+                if d.get('node') and not d['node'].isEmpty():
+                    d['node'].removeNode()
+            self.debris_list = []
         if hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             self.aura_np.removeNode()
         if hasattr(self, 'node') and not self.node.isEmpty():
@@ -306,11 +544,15 @@ class TallSkeletonMonster:
         self.stun_timer = 0.0
         self.is_corpse = False
         self.name = "장신 해골 괴물"
-        self.max_hp = 65
+        self.max_hp = 160
         self.hp = self.max_hp
-        self.exp_value = 30
+        self.exp_value = 45
         self.attack_damage = 35
         self.speed = 9.5
+        self.debris_list = []
+        self.blast_light_np = None
+        self.puddle_np = None
+        self.blast_timer = 0.0
 
         bone_col = LColor(0.85, 0.83, 0.76, 1.0)
         bone_dark = LColor(0.55, 0.52, 0.45, 1.0)
@@ -478,23 +720,51 @@ class TallSkeletonMonster:
         self.stun(0.4)
         return self.hp <= 0
 
-    def turn_into_corpse(self):
-        """사망 시 쓰러져 바닥에 시체와 핏자국을 남김"""
+    def turn_into_corpse(self, audio_mgr=None):
+        """사망 시 산산조각 폭발 파편화: 거대 두개골, 갈비뼈, 척추, 사지 장골 및 시안빛 안광 파편이 사방으로 비산"""
         self.is_corpse = True
+        self.hp = 0
         if hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             self.aura_np.removeNode()
-        # 쓰러지는 자세 및 위치 조정 (바닥에 눕힘)
         self.node.setPos(self.pos.x, self.pos.y, 0.25)
         self.node.setP(-88)
         self.node.setR(12)
-        # 피 웅덩이 생성
-        blood = make_cube('skel_blood', 2.2, 2.2, 0.015, LColor(0.22, 0.02, 0.02, 0.95))
-        blood.reparentTo(self.node)
-        blood.setPos(0, 0, -0.15)
-        blood.setLightOff()
+        if hasattr(self, 'body_root') and not self.body_root.isEmpty():
+            self.body_root.hide()
+
+        parent = self.node.getParent() if (hasattr(self, 'node') and not self.node.isEmpty() and not self.node.getParent().isEmpty()) else self.node
+        self.debris_list, self.blast_light_np, self.puddle_np = create_monster_explosion(parent, self.pos, "skeleton", audio_mgr)
+        self.blast_timer = 0.14
+
+    def update_debris(self, dt):
+        """사망 후 공중 비산 중인 3D 파편 물리 시뮬레이션 및 폭발 섬광 페이드 갱신"""
+        if hasattr(self, 'blast_light_np') and self.blast_light_np and not self.blast_light_np.isEmpty():
+            self.blast_timer -= dt
+            if self.blast_timer <= 0.0:
+                parent = self.blast_light_np.getParent()
+                if not parent.isEmpty():
+                    parent.clearLight(self.blast_light_np)
+                self.blast_light_np.removeNode()
+                self.blast_light_np = None
+        if hasattr(self, 'debris_list') and self.debris_list:
+            update_monster_debris_list(self.debris_list, dt)
 
     def destroy(self):
-        """씬그래프 및 조명 리소스 해제"""
+        """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        if hasattr(self, 'blast_light_np') and self.blast_light_np and not self.blast_light_np.isEmpty():
+            parent = self.blast_light_np.getParent()
+            if not parent.isEmpty():
+                parent.clearLight(self.blast_light_np)
+            self.blast_light_np.removeNode()
+            self.blast_light_np = None
+        if hasattr(self, 'puddle_np') and self.puddle_np and not self.puddle_np.isEmpty():
+            self.puddle_np.removeNode()
+            self.puddle_np = None
+        if hasattr(self, 'debris_list') and self.debris_list:
+            for d in self.debris_list:
+                if d.get('node') and not d['node'].isEmpty():
+                    d['node'].removeNode()
+            self.debris_list = []
         if hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             self.aura_np.removeNode()
         if hasattr(self, 'node') and not self.node.isEmpty():
@@ -629,11 +899,15 @@ class AbominableMudOrc:
         self.is_corpse = False
 
         self.name = "혐오스런 진흙 오크"
-        self.max_hp = 110
+        self.max_hp = 280
         self.hp = self.max_hp
-        self.exp_value = 45
+        self.exp_value = 65
         self.attack_damage = 35
         self.speed = 7.6
+        self.debris_list = []
+        self.blast_light_np = None
+        self.puddle_np = None
+        self.blast_timer = 0.0
 
         # 색상 팔레트
         mud_skin = LColor(0.25, 0.22, 0.16, 1.0)
@@ -771,21 +1045,51 @@ class AbominableMudOrc:
         self.stun(0.4)
         return self.hp <= 0
 
-    def turn_into_corpse(self):
-        """사망 시 쓰러져 진흙/피 웅덩이와 시체를 남김"""
+    def turn_into_corpse(self, audio_mgr=None):
+        """사망 시 유혈 진흙 폭발 파편화: 오크 머리통, 엄니, 철갑주 파편, 거대한 근육질 팔/다리 살점 덩어리가 사방으로 폭발 분출"""
         self.is_corpse = True
+        self.hp = 0
         if hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             self.aura_np.removeNode()
         self.node.setPos(self.pos.x, self.pos.y, 0.28)
         self.node.setP(-86)
         self.node.setR(-15)
-        # 웅덩이 생성
-        blood = make_cube('mud_blood', 2.4, 2.4, 0.015, LColor(0.15, 0.08, 0.03, 0.95))
-        blood.reparentTo(self.node)
-        blood.setPos(0, 0, -0.2)
-        blood.setLightOff()
+        if hasattr(self, 'body_root') and not self.body_root.isEmpty():
+            self.body_root.hide()
+
+        parent = self.node.getParent() if (hasattr(self, 'node') and not self.node.isEmpty() and not self.node.getParent().isEmpty()) else self.node
+        self.debris_list, self.blast_light_np, self.puddle_np = create_monster_explosion(parent, self.pos, "orc", audio_mgr)
+        self.blast_timer = 0.14
+
+    def update_debris(self, dt):
+        """사망 후 공중 비산 중인 3D 파편 물리 시뮬레이션 및 폭발 섬광 페이드 갱신"""
+        if hasattr(self, 'blast_light_np') and self.blast_light_np and not self.blast_light_np.isEmpty():
+            self.blast_timer -= dt
+            if self.blast_timer <= 0.0:
+                parent = self.blast_light_np.getParent()
+                if not parent.isEmpty():
+                    parent.clearLight(self.blast_light_np)
+                self.blast_light_np.removeNode()
+                self.blast_light_np = None
+        if hasattr(self, 'debris_list') and self.debris_list:
+            update_monster_debris_list(self.debris_list, dt)
 
     def destroy(self):
+        """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        if hasattr(self, 'blast_light_np') and self.blast_light_np and not self.blast_light_np.isEmpty():
+            parent = self.blast_light_np.getParent()
+            if not parent.isEmpty():
+                parent.clearLight(self.blast_light_np)
+            self.blast_light_np.removeNode()
+            self.blast_light_np = None
+        if hasattr(self, 'puddle_np') and self.puddle_np and not self.puddle_np.isEmpty():
+            self.puddle_np.removeNode()
+            self.puddle_np = None
+        if hasattr(self, 'debris_list') and self.debris_list:
+            for d in self.debris_list:
+                if d.get('node') and not d['node'].isEmpty():
+                    d['node'].removeNode()
+            self.debris_list = []
         if hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             self.aura_np.removeNode()
         if hasattr(self, 'node') and not self.node.isEmpty():
@@ -929,11 +1233,15 @@ class AlluringAshWitch:
         self.is_corpse = False
 
         self.name = "매혹의 잿더미 마녀"
-        self.max_hp = 55
+        self.max_hp = 140
         self.hp = self.max_hp
-        self.exp_value = 60
+        self.exp_value = 55
         self.attack_damage = 25
         self.speed = 10.5
+        self.debris_list = []
+        self.blast_light_np = None
+        self.puddle_np = None
+        self.blast_timer = 0.0
 
         ash_robe = LColor(0.16, 0.15, 0.18, 1.0)
         ember_crimson = LColor(0.95, 0.28, 0.12, 1.0)
@@ -1060,20 +1368,51 @@ class AlluringAshWitch:
         self.stun(0.4)
         return self.hp <= 0
 
-    def turn_into_corpse(self):
-        """사망 시 잿더미와 핏자국 속에 시체로 쓰러짐"""
+    def turn_into_corpse(self, audio_mgr=None):
+        """사망 시 잿더미와 마력 화염 폭발 파편화: 마녀 가면, 찢겨진 베일 리본, 불타는 잿더미 마력 불씨가 사방으로 비산"""
         self.is_corpse = True
+        self.hp = 0
         if hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             self.aura_np.removeNode()
         self.node.setPos(self.pos.x, self.pos.y, 0.22)
         self.node.setP(-85)
         self.node.setR(8)
-        blood = make_cube('witch_ash_blood', 1.9, 1.9, 0.015, LColor(0.18, 0.05, 0.08, 0.95))
-        blood.reparentTo(self.node)
-        blood.setPos(0, 0, -0.15)
-        blood.setLightOff()
+        if hasattr(self, 'body_root') and not self.body_root.isEmpty():
+            self.body_root.hide()
+
+        parent = self.node.getParent() if (hasattr(self, 'node') and not self.node.isEmpty() and not self.node.getParent().isEmpty()) else self.node
+        self.debris_list, self.blast_light_np, self.puddle_np = create_monster_explosion(parent, self.pos, "witch", audio_mgr)
+        self.blast_timer = 0.14
+
+    def update_debris(self, dt):
+        """사망 후 공중 비산 중인 3D 파편 물리 시뮬레이션 및 폭발 섬광 페이드 갱신"""
+        if hasattr(self, 'blast_light_np') and self.blast_light_np and not self.blast_light_np.isEmpty():
+            self.blast_timer -= dt
+            if self.blast_timer <= 0.0:
+                parent = self.blast_light_np.getParent()
+                if not parent.isEmpty():
+                    parent.clearLight(self.blast_light_np)
+                self.blast_light_np.removeNode()
+                self.blast_light_np = None
+        if hasattr(self, 'debris_list') and self.debris_list:
+            update_monster_debris_list(self.debris_list, dt)
 
     def destroy(self):
+        """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        if hasattr(self, 'blast_light_np') and self.blast_light_np and not self.blast_light_np.isEmpty():
+            parent = self.blast_light_np.getParent()
+            if not parent.isEmpty():
+                parent.clearLight(self.blast_light_np)
+            self.blast_light_np.removeNode()
+            self.blast_light_np = None
+        if hasattr(self, 'puddle_np') and self.puddle_np and not self.puddle_np.isEmpty():
+            self.puddle_np.removeNode()
+            self.puddle_np = None
+        if hasattr(self, 'debris_list') and self.debris_list:
+            for d in self.debris_list:
+                if d.get('node') and not d['node'].isEmpty():
+                    d['node'].removeNode()
+            self.debris_list = []
         if hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             self.aura_np.removeNode()
         if hasattr(self, 'node') and not self.node.isEmpty():
