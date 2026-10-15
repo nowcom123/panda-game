@@ -10,8 +10,22 @@ from constants import (
 )
 
 
+_CUSTOM_COLLIDERS = []
+
+
+def register_custom_collider(box):
+    """(min_x, min_y, max_x, max_y) 형태의 정적 충돌 박스 등록"""
+    if box not in _CUSTOM_COLLIDERS:
+        _CUSTOM_COLLIDERS.append(box)
+
+
+def clear_custom_colliders():
+    """등록된 모든 커스텀 충돌체 초기화"""
+    _CUSTOM_COLLIDERS.clear()
+
+
 def get_nearby_colliders(chunks, px, py, search_dist=2.5):
-    """그리드 셀 해시 기반 주변 충돌체 추출 (600개 전수검사 -> 8~12개 즉시 반환)"""
+    """그리드 셀 해시 기반 주변 충돌체 추출 (600개 전수검사 -> 8~12개 즉시 반환) 및 커스텀 충돌체 결합"""
     min_gx = int(math.floor((px - search_dist) / CELL_SIZE))
     max_gx = int(math.floor((px + search_dist) / CELL_SIZE))
     min_gy = int(math.floor((py - search_dist) / CELL_SIZE))
@@ -27,6 +41,13 @@ def get_nearby_colliders(chunks, px, py, search_dist=2.5):
                 cols = chunk.cell_colliders.get((gx, gy))
                 if cols:
                     nearby.extend(cols)
+
+    # 탈출 관문 등 특수 오브젝트의 커스텀 AABB 충돌체 검사
+    if _CUSTOM_COLLIDERS:
+        for c in _CUSTOM_COLLIDERS:
+            if not (c[2] < px - search_dist or c[0] > px + search_dist or c[3] < py - search_dist or c[1] > py + search_dist):
+                nearby.append(c)
+
     return nearby
 
 

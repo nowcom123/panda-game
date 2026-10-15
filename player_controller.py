@@ -141,8 +141,8 @@ class PlayerController:
             "shift": 0
         }
 
-    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_inventory=None, on_quick_use=None, on_grenade=None, on_escape=None):
-        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 인벤토리, 퀵슬롯, 슬라이드, 수류탄)"""
+    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_inventory=None, on_quick_use=None, on_grenade=None, on_escape=None, on_interact=None):
+        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 인벤토리, 퀵슬롯, 슬라이드, 수류탄, 상호작용)"""
         self.base.disableMouse()
         self.lock_mouse(True)
 
@@ -212,6 +212,11 @@ class PlayerController:
         if on_grenade:
             for g_evt in ["g", "G", "shift-g", "shift-G"]:
                 self.base.accept(g_evt, on_grenade)
+
+        # E 현장 오브젝트 / 전술 보급 상자 상호작용
+        if on_interact:
+            for e_evt in ["e", "E", "shift-e", "shift-E"]:
+                self.base.accept(e_evt, on_interact)
 
     def _on_escape_pressed(self):
         if hasattr(self, 'on_escape') and self.on_escape:
@@ -401,6 +406,13 @@ class PlayerController:
     def heal(self, amount):
         self.hp = min(self.max_hp, self.hp + amount)
         self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
+
+    def recover_stamina(self, amount):
+        """적 타격/적중 시 전술 아드레날린 활성화로 스테미나 회복"""
+        self.stamina = min(self.max_stamina, self.stamina + amount)
+        if self.stamina >= 15.0:
+            self.stamina_exhausted = False
+        self.ui_mgr.update_stamina(self.stamina, self.max_stamina, self.is_sprinting, self.stamina_exhausted)
 
     def acquire_relic(self, relic_id):
         """저주받은 유물 획득 및 지속 스탯/특수 효과 적용"""

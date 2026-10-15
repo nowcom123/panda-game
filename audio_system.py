@@ -111,6 +111,10 @@ class AudioManager:
         self.grenade_blast_sfx = self.loader.loadSfx(grenade_blast_p) if grenade_blast_p else None
         barrel_ignite_p = self._get_path("barrel_ignite.wav")
         self.barrel_ignite_sfx = self.loader.loadSfx(barrel_ignite_p) if barrel_ignite_p else None
+        combo_p = self._get_path("combo_kill.wav")
+        self.combo_kill_sfx = self.loader.loadSfx(combo_p) if combo_p else None
+        crate_p = self._get_path("crate_open.wav")
+        self.crate_open_sfx = self.loader.loadSfx(crate_p) if crate_p else None
 
     def _get_path(self, fname):
         full_p = os.path.join(self.audio_dir, fname)
@@ -329,6 +333,18 @@ class AudioManager:
         if self.barrel_ignite_sfx:
             self.barrel_ignite_sfx.setVolume(0.95)
             self.barrel_ignite_sfx.play()
+
+    def play_combo_kill(self):
+        """연속 킬 콤보 달성 시 타격 사운드"""
+        if self.combo_kill_sfx:
+            self.combo_kill_sfx.setVolume(0.95)
+            self.combo_kill_sfx.play()
+
+    def play_crate_open(self):
+        """[E] 전술 보급 상자 개봉음"""
+        if self.crate_open_sfx:
+            self.crate_open_sfx.setVolume(0.90)
+            self.crate_open_sfx.play()
 
     def update(self, dt, dist_serpent, dist_skeleton, s_los, k_los):
         """프레임별 3D 오디오 리스너 및 몬스터 거리 감쇠/포효 갱신"""

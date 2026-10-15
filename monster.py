@@ -31,23 +31,8 @@ def create_monster_explosion(parent, pos, monster_type, audio_mgr=None):
     blast_np.setPos(pos.x, pos.y, pos.z + 1.2)
     parent.setLight(blast_np)
 
-    # 2. 바닥 핏자국 / 유혈 크레이터 생성
-    if monster_type == "skeleton":
-        blood_col = LColor(0.24, 0.03, 0.03, 0.95)
-        pw, pd = 2.8, 2.8
-    elif monster_type == "orc":
-        blood_col = LColor(0.18, 0.08, 0.03, 0.95)
-        pw, pd = 3.4, 3.4
-    elif monster_type == "serpent":
-        blood_col = LColor(0.16, 0.02, 0.02, 0.95)
-        pw, pd = 3.0, 3.0
-    else:
-        blood_col = LColor(0.18, 0.04, 0.08, 0.95)
-        pw, pd = 2.6, 2.6
-    puddle = make_cube(f"{monster_type}_splatter", pw, pd, 0.015, blood_col)
-    puddle.reparentTo(parent)
-    puddle.setPos(pos.x, pos.y, 0.02)
-    puddle.setLightOff()
+    # 2. 바닥 핏자국 사각형 제거 (바닥 메쉬 침범 방지)
+    puddle = None
 
     # 3. 몬스터 타입별 파편 청사진 (Blueprint)
     debris_blueprints = []
@@ -339,16 +324,28 @@ class LongBlackSerpent:
         self.head.setP(0)
         self.aura_np.node().setColor((0.95, 0.05, 0.05, 1.0))
 
-    def stun(self, duration=0.5):
-        """총격 적중 시 0.5초간 경직/스턴 발동"""
+    def stun(self, duration=0.20):
+        """총격 적중 시 0.20초간 경직/스턴 발동 (과도한 무한 경직 완화)"""
         self.stun_timer = duration
         if hasattr(self, 'aura_np') and self.aura_np:
             self.aura_np.node().setColor((2.2, 1.8, 0.4, 1.0))
 
-    def take_damage(self, dmg):
-        """피해 적용 및 사망 여부 반환"""
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
+        """피해 적용 및 사망 여부 반환 (기본 넉백 확률 적용)"""
         self.hp = max(0, self.hp - dmg)
-        self.stun(0.4)
+        if apply_knockback is None:
+            apply_knockback = (random.random() < 0.28)
+
+        if apply_knockback:
+            self.stun(0.20)
+            if hit_dir is not None:
+                self.pos.x += hit_dir.x * 0.28
+                self.pos.y += hit_dir.y * 0.28
+                self.node.setPos(self.pos)
+        else:
+            if hasattr(self, 'aura_np') and self.aura_np:
+                self.aura_np.node().setColor((1.6, 1.0, 0.3, 1.0))
+
         return self.hp <= 0
 
     def turn_into_corpse(self, audio_mgr=None):
@@ -709,15 +706,28 @@ class TallSkeletonMonster:
             leg['knee'].setP(0)
         self.aura_np.node().setColor((0.35, 0.55, 0.95, 1.0))
 
-    def stun(self, duration=0.5):
-        """총격 적중 시 0.5초간 경직/스턴 발동"""
+    def stun(self, duration=0.20):
+        """총격 적중 시 0.20초간 경직/스턴 발동 (과도한 무한 경직 완화)"""
         self.stun_timer = duration
         if hasattr(self, 'aura_np') and self.aura_np:
-            self.aura_np.node().setColor((2.2, 2.0, 0.6, 1.0)) # 피격 시 번쩍임
-    def take_damage(self, dmg):
-        """피해 적용 및 사망 여부 반환"""
+            self.aura_np.node().setColor((2.2, 2.0, 0.6, 1.0))
+
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
+        """피해 적용 및 사망 여부 반환 (기본 넉백 확률 적용)"""
         self.hp = max(0, self.hp - dmg)
-        self.stun(0.4)
+        if apply_knockback is None:
+            apply_knockback = (random.random() < 0.28)
+
+        if apply_knockback:
+            self.stun(0.20)
+            if hit_dir is not None:
+                self.pos.x += hit_dir.x * 0.28
+                self.pos.y += hit_dir.y * 0.28
+                self.node.setPos(self.pos)
+        else:
+            if hasattr(self, 'aura_np') and self.aura_np:
+                self.aura_np.node().setColor((1.8, 1.4, 0.5, 1.0))
+
         return self.hp <= 0
 
     def turn_into_corpse(self, audio_mgr=None):
@@ -1035,14 +1045,28 @@ class AbominableMudOrc:
         self.aura_np.setPos(0, 0, 1.6)
         parent.setLight(self.aura_np)
 
-    def stun(self, duration=0.5):
+    def stun(self, duration=0.18):
+        """총격 적중 시 0.18초간 경직/스턴 발동 (오크 강인한 체형 반영)"""
         self.stun_timer = duration
         if hasattr(self, 'aura_np') and self.aura_np:
             self.aura_np.node().setColor((2.2, 1.8, 0.4, 1.0))
 
-    def take_damage(self, dmg):
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
+        """피해 적용 및 사망 여부 반환 (기본 넉백 확률 적용, 오크는 체형상 20% 확률)"""
         self.hp = max(0, self.hp - dmg)
-        self.stun(0.4)
+        if apply_knockback is None:
+            apply_knockback = (random.random() < 0.20)
+
+        if apply_knockback:
+            self.stun(0.18)
+            if hit_dir is not None:
+                self.pos.x += hit_dir.x * 0.20
+                self.pos.y += hit_dir.y * 0.20
+                self.node.setPos(self.pos)
+        else:
+            if hasattr(self, 'aura_np') and self.aura_np:
+                self.aura_np.node().setColor((1.8, 1.2, 0.3, 1.0))
+
         return self.hp <= 0
 
     def turn_into_corpse(self, audio_mgr=None):
@@ -1358,14 +1382,28 @@ class AlluringAshWitch:
         self.aura_np.setPos(0, 0, 0.90)
         parent.setLight(self.aura_np)
 
-    def stun(self, duration=0.5):
+    def stun(self, duration=0.20):
+        """총격 적중 시 0.20초간 경직/스턴 발동"""
         self.stun_timer = duration
         if hasattr(self, 'aura_np') and self.aura_np:
             self.aura_np.node().setColor((2.4, 2.0, 0.6, 1.0))
 
-    def take_damage(self, dmg):
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
+        """피해 적용 및 사망 여부 반환 (기본 넉백 확률 적용)"""
         self.hp = max(0, self.hp - dmg)
-        self.stun(0.4)
+        if apply_knockback is None:
+            apply_knockback = (random.random() < 0.28)
+
+        if apply_knockback:
+            self.stun(0.20)
+            if hit_dir is not None:
+                self.pos.x += hit_dir.x * 0.28
+                self.pos.y += hit_dir.y * 0.28
+                self.node.setPos(self.pos)
+        else:
+            if hasattr(self, 'aura_np') and self.aura_np:
+                self.aura_np.node().setColor((1.8, 1.2, 0.5, 1.0))
+
         return self.hp <= 0
 
     def turn_into_corpse(self, audio_mgr=None):

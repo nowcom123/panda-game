@@ -255,6 +255,48 @@ def make_gunshot():
     gunshot = (pop * 0.7 + bang)
     save_wav("gunshot.wav", gunshot)
 
+def make_tactical_sfx():
+    """전술 음파 소나 핑, 콤보 킬 효과음, 보급 상자 오픈 효과음 합성"""
+    # 1. sonar_ping.wav (초음파 레이더 펄스: 950Hz 고주파 하모닉 핑 + 부드러운 리버브 에코)
+    dur = 0.85
+    t = np.linspace(0, dur, int(SAMPLE_RATE * dur), endpoint=False)
+    ping = (
+        0.55 * np.sin(2 * np.pi * 980.0 * t) * np.exp(-t * 6.5) +
+        0.35 * np.sin(2 * np.pi * 1470.0 * t) * np.exp(-t * 8.5) +
+        0.20 * np.sin(2 * np.pi * 1960.0 * t) * np.exp(-t * 11.0)
+    )
+    # 0.25초 후 잔향 에코
+    echo_idx = t >= 0.24
+    dt_echo = t[echo_idx] - 0.24
+    ping[echo_idx] += 0.25 * np.sin(2 * np.pi * 980.0 * dt_echo) * np.exp(-dt_echo * 7.0)
+    save_wav("sonar_ping.wav", ping)
+
+    # 2. combo_kill.wav (타격감 넘치는 상승 2음계 콤보 신호음: F# -> A#)
+    dur_c = 0.42
+    tc = np.linspace(0, dur_c, int(SAMPLE_RATE * dur_c), endpoint=False)
+    combo = np.zeros_like(tc)
+    # 음 1 (F#5 ~ 740Hz)
+    idx1 = tc < 0.16
+    t1 = tc[idx1]
+    combo[idx1] += (np.sin(2 * np.pi * 740.0 * t1) + 0.3 * np.sin(2 * np.pi * 1480.0 * t1)) * np.exp(-t1 * 12.0)
+    # 음 2 (A#5 ~ 932Hz, 더 높고 짜릿한 음)
+    idx2 = tc >= 0.14
+    t2 = tc[idx2] - 0.14
+    combo[idx2] += (np.sin(2 * np.pi * 932.0 * t2) + 0.4 * np.sin(2 * np.pi * 1864.0 * t2)) * np.exp(-t2 * 10.0)
+    save_wav("combo_kill.wav", combo * 0.85)
+
+    # 3. crate_open.wav (기계식 래치 해제 찰칵 + 묵직한 상자 개봉음)
+    dur_o = 0.65
+    to = np.linspace(0, dur_o, int(SAMPLE_RATE * dur_o), endpoint=False)
+    # 금속 래치 래칫 찰칵 (Mechanical click)
+    np.random.seed(606)
+    click = np.random.uniform(-0.8, 0.8, len(to)) * np.exp(-to * 45.0)
+    # 묵직한 뚜껑 열림 및 공명 험
+    heavy = np.sin(2 * np.pi * (160.0 - 60.0 * to) * to) * np.exp(-to * 8.0) * 0.7
+    pneumatic = np.random.uniform(-0.5, 0.5, len(to)) * np.exp(-(to - 0.08)**2 / 0.012) * 0.5
+    crate = click + heavy + pneumatic
+    save_wav("crate_open.wav", crate * 0.85)
+
 if __name__ == "__main__":
     print("=== 백룸 호러 사운드 절차적 합성 시작 ===")
     make_bgm()
@@ -262,4 +304,5 @@ if __name__ == "__main__":
     make_serpent_sounds()
     make_skeleton_sounds()
     make_gunshot()
+    make_tactical_sfx()
     print("=== 모든 사운드 생성 완료! ===")

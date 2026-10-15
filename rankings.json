@@ -564,5 +564,60 @@
     "ammo_left": 12,
     "reserve_ammo": 12,
     "ammo_used": 0
+  },
+  {
+    "timestamp": "2026-10-15 09:19:11",
+    "stage": 1,
+    "result": "사망 (매혹의 잿더미 마녀)",
+    "success": false,
+    "time_elapsed": 17.2,
+    "time_left": 282.8,
+    "ammo_left": 0,
+    "reserve_ammo": 0,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-10-15 11:34:12",
+    "stage": 1,
+    "result": "사망 (검은 뱀 괴물)",
+    "success": false,
+    "time_elapsed": 34.6,
+    "time_left": 265.4,
+    "ammo_left": 3,
+    "reserve_ammo": 30,
+    "ammo_used": 9
+  },
+  {
+    "timestamp": "2026-10-15 13:54:06",
+    "stage": 1,
+    "result": "사망 (검은 뱀 괴물)",
+    "success": false,
+    "time_elapsed": 9.6,
+    "time_left": 290.4,
+    "ammo_left": 0,
+    "reserve_ammo": 54,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-10-15 16:21:32",
+    "stage": 1,
+    "result": "사망 (장신 해골 괴물)",
+    "success": false,
+    "time_elapsed": 22.7,
+    "time_left": 277.3,
+    "ammo_left": 2,
+    "reserve_ammo": 31,
+    "ammo_used": 10
+  },
+  {
+    "timestamp": "2026-10-15 16:50:48",
+    "stage": 1,
+    "result": "사망 (검은 뱀 괴물)",
+    "success": false,
+    "time_elapsed": 13.1,
+    "time_left": 286.9,
+    "ammo_left": 10,
+    "reserve_ammo": 55,
+    "ammo_used": 2
   }
 ]

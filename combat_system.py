@@ -7,7 +7,7 @@ Combat System Module
 import math
 import random
 from panda3d.core import (
-    PointLight, Spotlight, PerspectiveLens, LineSegs, LColor, Vec3
+    PointLight, Spotlight, PerspectiveLens, LineSegs, LColor, Vec3, TransparencyAttrib
 )
 from constants import (
     CELL_SIZE, CHUNK_CELLS, MAP_MIN_CHUNK, MAP_MAX_CHUNK
@@ -29,7 +29,7 @@ class CombatSystem:
         # 탄약 및 사격 상태
         self.max_ammo = 12
         self.ammo = self.max_ammo
-        self.reserve_ammo = 0
+        self.reserve_ammo = 36  # 초기 예비 탄약 36발 (몬스터 체력 증가 대응)
         self.is_reloading = False
         self.reload_timer = 0.0
         self.shoot_cooldown = 0.0
@@ -55,13 +55,18 @@ class CombatSystem:
         # 정전 상태
         self.is_blackout = False
 
+        # 킬 콤보 & 아드레날린 램페이지 상태
+        self.combo_count = 0
+        self.combo_timer = 0.0
+        self.combo_window = 3.8
+
         # 정밀 조준(ADS: Aim Down Sights) 상태
         self.is_aiming = False
         self.ads_alpha = 0.0
-        # 총기가 화면 하단에 파묻히지 않고 또렷하게 보이도록 위치/높이 최적화
-        self.ads_hip_pos = Vec3(0.22, 0.58, -0.17)
+        # 총기가 화면 하단에 파묻히지 않고 또렷하게 보이도록 위치/높이 최적화 (양손 파지 및 웨폰라이트 일체형)
+        self.ads_hip_pos = Vec3(0.18, 0.56, -0.165)
         self.ads_aim_pos = Vec3(0.00, 0.46, -0.118)
-        self.ads_hip_hpr = Vec3(2.5, 1.0, -1.0)
+        self.ads_hip_hpr = Vec3(2.0, 1.0, -1.0)
         self.ads_aim_hpr = Vec3(0.0, 0.0, 0.0)
 
         # 지향사격(Hip-fire) 탄퍼짐 및 크로스헤어 흔들림 상태
@@ -87,50 +92,16 @@ class CombatSystem:
                 self.audio_mgr.play_ads(False)
 
     def _setup_viewmodel(self):
-        """1인칭 듀얼 뷰모델: 왼손 손전등 & 오른손 12발 권총"""
+        """1인칭 택티컬 뷰모델: 권총 하부 언더레일에 직결 장착된 택티컬 웨폰라이트(WML) 및 정밀 12발 권총"""
         if hasattr(self, 'vm_root') and self.vm_root:
             self.vm_root.removeNode()
 
         self.vm_root = self.camera.attachNewNode("viewmodel_root")
 
-        # --- (A) 왼손: 택티컬 손전등 ---
-        self.vm_flashlight = self.vm_root.attachNewNode("vm_flashlight")
-        self.vm_flashlight.setPos(-0.25, 0.65, -0.20)
-        self.vm_flashlight.setHpr(-3.0, 1.5, 0)
-
-        fl_body_col = LColor(0.12, 0.12, 0.14, 1.0)
-        fl_ring_col = LColor(0.24, 0.25, 0.28, 1.0)
-        fl_lens_rim = LColor(0.18, 0.19, 0.22, 1.0)
-
-        make_cube_to(self.vm_flashlight, 0.08, 0.28, 0.08, fl_body_col, 0, 0, 0)
-        make_cube_to(self.vm_flashlight, 0.11, 0.09, 0.11, fl_ring_col, 0, 0.17, 0)
-        make_cube_to(self.vm_flashlight, 0.095, 0.02, 0.095, fl_lens_rim, 0, 0.22, 0)
-
-        # 손전등 Spotlight (원형 감쇠 빔, 부드러운 가장자리)
-        spotlight = Spotlight('player_flashlight')
-        spotlight.setColor((2.85, 2.70, 2.35, 1.0))
-        spot_lens = PerspectiveLens()
-        spot_lens.setFov(44.0)
-        spot_lens.setNearFar(0.15, 65.0)
-        spotlight.setLens(spot_lens)
-        spotlight.setAttenuation((1.0, 0.015, 0.0006))
-        spotlight.setExponent(55.0)
-        self.pl_np = self.vm_flashlight.attachNewNode(spotlight)
-        self.pl_np.setPos(0, 0.24, 0)
-        self.render.setLight(self.pl_np)
-
-        # 근거리 필라이트 (발밑 은은한 보조광)
-        fill_light = PointLight('player_fill')
-        fill_light.setColor((0.14, 0.12, 0.10, 1.0))
-        fill_light.setAttenuation((1.0, 0.35, 0.12))
-        self.fill_np = self.vm_flashlight.attachNewNode(fill_light)
-        self.fill_np.setPos(0, 0.10, 0)
-        self.render.setLight(self.fill_np)
-
-        # --- (B) 오른손: 현실적 기계 구조 12발 권총 ---
+        # --- (A) 현실적 기계 구조 12발 권총 ---
         self.vm_pistol = self.vm_root.attachNewNode("vm_pistol")
-        self.vm_pistol.setPos(0.22, 0.58, -0.17)
-        self.vm_pistol.setHpr(2.5, 1.0, -1.0)
+        self.vm_pistol.setPos(self.ads_hip_pos)
+        self.vm_pistol.setHpr(self.ads_hip_hpr)
 
         self.recoil_node = self.vm_pistol.attachNewNode("recoil_node")
 
@@ -153,6 +124,53 @@ class CombatSystem:
         make_cube_to(self.frame_node, 0.010, 0.035, 0.012, steel_dark, -0.032, 0.02, 0.045)
         # 좌측 탄창 분리 버튼 (Magazine Release)
         make_cube_to(self.frame_node, 0.012, 0.015, 0.015, steel_dark, -0.032, -0.03, -0.02)
+
+        # --- (B) 권총 하부 언더레일 장착 택티컬 웨폰라이트 (Weapon-Mounted Light) ---
+        # 권총 하부 피카티니 레일 체결 위치 (총열 아래, 방아쇠울 바로 앞)
+        self.vm_flashlight = self.frame_node.attachNewNode("vm_flashlight")
+        self.vm_flashlight.setPos(0, 0.13, -0.034)
+
+        wml_clamp_col = LColor(0.20, 0.21, 0.24, 1.0)
+        wml_body_col = LColor(0.12, 0.12, 0.14, 1.0)
+        wml_bezel_col = LColor(0.26, 0.27, 0.30, 1.0)
+
+        # 피카티니 레일 결합 클램프 및 잠금 스크루
+        make_cube_to(self.vm_flashlight, 0.060, 0.14, 0.020, wml_clamp_col, 0, -0.012, 0.022)
+        make_cube_to(self.vm_flashlight, 0.012, 0.026, 0.022, steel_slide, -0.033, -0.012, 0.022)
+
+        # 웨폰라이트 메인 바디 하우징 (아노다이징 건메탈 알루미늄 본체)
+        make_cube_to(self.vm_flashlight, 0.052, 0.16, 0.044, wml_body_col, 0, 0.0, 0.0)
+
+        # 전방 프로젝터 베젤 헤드
+        make_cube_to(self.vm_flashlight, 0.056, 0.028, 0.048, wml_bezel_col, 0, 0.092, 0.0)
+
+        # 전방 고출력 발광 렌즈 (High-Output LED Projector Lens)
+        lens = make_cube_to(self.vm_flashlight, 0.046, 0.008, 0.042, LColor(1.0, 0.96, 0.82, 0.95), 0, 0.108, 0.0)
+        lens.setLightOff()
+
+        # 후방 양손잡이 토글 스위치 (방아쇠울 전면 엄지 조작부)
+        make_cube_to(self.vm_flashlight, 0.040, 0.020, 0.028, steel_dark, 0, -0.092, -0.006)
+
+        # 손전등 전방 Spotlight (권총 총구/가늠쇠 지향선과 100% 일치)
+        spotlight = Spotlight('player_flashlight')
+        spotlight.setColor((2.85, 2.70, 2.35, 1.0))
+        spot_lens = PerspectiveLens()
+        spot_lens.setFov(50.0)
+        spot_lens.setNearFar(0.15, 70.0)
+        spotlight.setLens(spot_lens)
+        spotlight.setAttenuation((1.0, 0.015, 0.0006))
+        spotlight.setExponent(50.0)
+        self.pl_np = self.vm_flashlight.attachNewNode(spotlight)
+        self.pl_np.setPos(0, 0.12, 0.0)
+        self.render.setLight(self.pl_np)
+
+        # 근거리 보조 조명 (권총 및 시야각 은은한 반사광)
+        fill_light = PointLight('player_fill')
+        fill_light.setColor((0.18, 0.16, 0.14, 1.0))
+        fill_light.setAttenuation((1.0, 0.30, 0.08))
+        self.fill_np = self.vm_flashlight.attachNewNode(fill_light)
+        self.fill_np.setPos(0, 0.05, 0.0)
+        self.render.setLight(self.fill_np)
 
         # 2. 총열 및 약실 (Barrel & Chamber Hood) - 슬라이드 후퇴 시 내부 노출
         self.barrel_node = self.recoil_node.attachNewNode("barrel_node")
@@ -303,8 +321,13 @@ class CombatSystem:
             self.shoot_cooldown = 0.35
             return
 
-        self.ammo -= 1
-        self.shoot_cooldown = 0.20
+        # 콤보 상태에 따른 탄약 절약 확률 (콤보 4 이상 시 30% 확률로 탄약 미소모)
+        free_ammo = (self.combo_count >= 4 and random.random() < 0.30)
+        if not free_ammo:
+            self.ammo -= 1
+
+        # 콤보 상태에 따른 연사 속도 가속 (기본 0.20s -> 콤보 2 이상 시 0.14s)
+        self.shoot_cooldown = 0.14 if self.combo_count >= 2 else 0.20
         self.recoil_timer = 0.10
         self.muzzle_timer = 0.04
 
@@ -423,29 +446,61 @@ class CombatSystem:
             else:
                 dmg = getattr(player, 'attack_power', 35.0) if player else 35.0
 
-            # 헤드샷 치명타(Critical Hit) 판정: 2.0배 증폭 데미지!
-            is_crit = getattr(closest_monster, 'last_hit_was_head', False)
-            if is_crit:
-                dmg *= 2.0
+            # 1. 슬라이드 샷(Slide Shot) 또는 헤드샷 치명타(Critical Hit) 판정
+            is_sliding = bool(player and getattr(player, 'is_sliding', False))
+            is_headshot = bool(getattr(closest_monster, 'last_hit_was_head', False))
+            is_crit = is_headshot or is_sliding
 
-            is_dead = closest_monster.take_damage(dmg)
+            if is_crit:
+                dmg *= 2.0 if is_headshot else 1.85
+
+            # 넉백/경직 확률 판정: 일반 타격 28%, 크리티컬/슬라이드 샷 85%
+            knockback_chance = 0.85 if is_crit else 0.28
+            has_knockback = (random.random() < knockback_chance)
+
+            # 피격 전 체력 기록 (처형 판정용)
+            prev_m_hp = getattr(closest_monster, 'hp', 1)
+            prev_max_hp = getattr(closest_monster, 'max_hp', 100)
+
+            is_dead = closest_monster.take_damage(dmg, apply_knockback=has_knockback, hit_dir=ray_dir)
             m_name = getattr(closest_monster, 'name', '괴물')
 
             # 몬스터 피격 효과: 크로스헤어 피격 마커 & 3D 핏빛 파티클 분출
             self.ui_mgr.trigger_crosshair_hit(is_kill=is_dead, is_crit=is_crit)
             self.spawn_hit_particles(impact_world, is_blood=True)
 
+            # 적 히트 시 스테미나 충전 (일반 적중 +12, 헤드샷/슬라이드샷 치명타 +24, 처치 추가 +16)
+            if player and hasattr(player, 'recover_stamina'):
+                stamina_gain = 24.0 if is_crit else 12.0
+                if is_dead:
+                    stamina_gain += 16.0
+                player.recover_stamina(stamina_gain)
+
             if is_crit and self.audio_mgr:
                 self.audio_mgr.play_crit_hit()
 
             if is_dead:
+                # 콤보 스트릭 등록
+                self.register_kill(player=player)
+
+                # 처형(Execution) 판정: 낮은 체력 마무리, 치명타, 또는 5.5m 근접 마무리
+                is_execution = (prev_m_hp <= prev_max_hp * 0.35) or is_crit or (min_hit_dist <= 5.5)
+                if is_execution:
+                    self.ammo = min(self.max_ammo, self.ammo + 2)
+                    self.ui_mgr.update_ammo(self.ammo, self.max_ammo, self.reserve_ammo)
+                    if player and hasattr(player, 'recover_stamina'):
+                        player.recover_stamina(60.0)
+                    self.ui_mgr.show_hit_marker("! [처형!] 권총 탄약 +2발 환급 & 기력 충전 !", (0.35, 1.0, 0.65, 0.95))
+
                 exp_gain = getattr(closest_monster, 'exp_value', 35)
 
-                # 슬라이딩 킬 스타일 보너스
-                if player and getattr(player, 'is_sliding', False):
+                # 슬라이딩 킬 스타일 보너스 (추가 경험치)
+                if is_sliding:
                     exp_gain += 75
-                    if hasattr(self.ui_mgr, 'show_style_kill'):
-                        self.ui_mgr.show_style_kill("⚡ [ SLIDE KILL! ] ⚡", "+75 EXP", (0.35, 0.95, 1.0, 1.0))
+
+                # 콤보 배수 보너스 경험치
+                if self.combo_count >= 2:
+                    exp_gain = int(exp_gain * (1.0 + 0.25 * min(self.combo_count, 6)))
 
                 # 정전 중 처치 시 경험치 2배 & 비상 탄약 보급 (+6발)
                 if blackout_active:
@@ -466,16 +521,12 @@ class CombatSystem:
                         drop_id = random.choice(["medkit", "adrenaline", "ammo_pack", "frag_grenade", "combat_stim"])
                         ok, item_name = player.add_item(drop_id, 1)
                         if ok:
-                            self.ui_mgr.show_hit_marker(f"★ 전리품 획득: [{item_name}] (배낭: [Tab])", (0.35, 1.0, 0.65, 1.0))
+                            self.ui_mgr.show_hit_marker(f"+ {item_name} 획득", (0.35, 1.0, 0.65, 0.9))
                             if hasattr(self.base, '_update_quickslot_hud'):
                                 self.base._update_quickslot_hud()
             else:
-                if is_crit:
-                    self.ui_mgr.show_hit_marker(f"★ 헤드샷 치명타! (-{int(dmg)} HP) ★", (1.0, 0.88, 0.20, 1.0))
-                    self.hit_marker_timer = 1.0
-                else:
-                    self.ui_mgr.show_hit_marker("")
-                    self.hit_marker_timer = 0.0
+                # 타격 텍스트 알림 제거 — 크로스헤어 히트마커(시각적)만 사용
+                pass
 
             if self.audio_mgr:
                 if "뱀" in m_name:
@@ -497,27 +548,108 @@ class CombatSystem:
             tracer_dist = 55.0
             impact_world = ray_origin + ray_dir * tracer_dist
 
-        # 발광 총알 궤적 (Bullet Tracer)
+        # 실감나는 고시인성 비행 총알 궤적 (High-Visibility Kinetic Bullet Tracer)
         if hasattr(self, 'muzzle_flash_geom') and self.muzzle_flash_geom and not self.muzzle_flash_geom.isEmpty():
             muzzle_world = self.muzzle_flash_geom.getPos(self.render)
         else:
             cam_pos = self.camera.getPos()
-            cam_quat = self.camera.getQuat()
-            cam_fwd = cam_quat.getForward()
-            cam_right = cam_quat.getRight()
-            cam_up = cam_quat.getUp()
-            muzzle_world = cam_pos + cam_fwd * 0.75 + cam_right * (0.22 * (1.0 - self.ads_alpha)) - cam_up * 0.16
+            cam_quat_t = self.camera.getQuat()
+            cam_fwd_t = cam_quat_t.getForward()
+            cam_right_t = cam_quat_t.getRight()
+            cam_up_t = cam_quat_t.getUp()
+            muzzle_world = cam_pos + cam_fwd_t * 0.75 + cam_right_t * (0.22 * (1.0 - self.ads_alpha)) - cam_up_t * 0.16
 
-        ls = LineSegs("bullet_tracer")
-        ls.setThickness(4.5)
-        ls.setColor(1.0, 0.95, 0.40, 1.0)
-        ls.moveTo(muzzle_world)
-        ls.drawTo(impact_world)
-        tracer_node = ls.create()
-        tracer_np = self.world_root.attachNewNode(tracer_node)
-        tracer_np.setLightOff()
+        travel_vec = impact_world - muzzle_world
+        total_dist = travel_vec.length()
+        if total_dist > 0.1:
+            travel_dir = travel_vec / total_dist
+        else:
+            travel_dir = ray_dir
+            total_dist = 1.0
 
-        self.active_tracers.append({"np": tracer_np, "life": 0.12})
+        # 3D 입체 발광 탄두 (Bullet Head - 사방 어디서나 입체적으로 또렷하게 보임)
+        head_np = self.world_root.attachNewNode("tracer_head")
+        head_np.setPos(muzzle_world)
+        head_np.lookAt(muzzle_world + travel_dir)
+
+        # 중심 발광 탄두
+        head_geom = make_cube_to(head_np, 0.08, 0.38, 0.08, LColor(1.0, 1.0, 0.90, 1.0), 0, 0, 0)
+        head_geom.setLightOff()
+        head_geom.setTransparency(TransparencyAttrib.MAlpha)
+        head_geom.setDepthWrite(False)
+        head_geom.setBin("transparent", 105)
+
+        # 전방/시점 정면에서도 뚜렷하게 보이도록 하는 3D 십자 섬광 날개 (Cross Flare)
+        head_w1 = make_cube_to(head_np, 0.20, 0.25, 0.02, LColor(1.0, 0.85, 0.25, 0.85), 0, 0, 0)
+        head_w1.setLightOff()
+        head_w1.setTransparency(TransparencyAttrib.MAlpha)
+        head_w1.setDepthWrite(False)
+        head_w1.setBin("transparent", 104)
+
+        head_w2 = make_cube_to(head_np, 0.02, 0.25, 0.20, LColor(1.0, 0.85, 0.25, 0.85), 0, 0, 0)
+        head_w2.setLightOff()
+        head_w2.setTransparency(TransparencyAttrib.MAlpha)
+        head_w2.setDepthWrite(False)
+        head_w2.setBin("transparent", 104)
+
+        # 3단계 다층 발광 궤적 (코어 4.5px, 글로우 9.5px, 헤일로 18.0px)
+        init_len = min(3.0, total_dist * 0.35)
+
+        ls_core = LineSegs("tracer_core")
+        ls_core.setThickness(4.5)
+        ls_core.setColor(1.0, 1.0, 0.90, 0.98)
+        ls_core.moveTo(muzzle_world)
+        ls_core.drawTo(muzzle_world + travel_dir * init_len)
+        core_np = self.world_root.attachNewNode(ls_core.create())
+        core_np.setLightOff()
+        core_np.setTransparency(TransparencyAttrib.MAlpha)
+        core_np.setDepthWrite(False)
+        core_np.setBin("transparent", 102)
+
+        ls_glow = LineSegs("tracer_glow")
+        ls_glow.setThickness(9.5)
+        ls_glow.setColor(1.0, 0.75, 0.15, 0.75)
+        ls_glow.moveTo(muzzle_world)
+        ls_glow.drawTo(muzzle_world + travel_dir * (init_len * 0.85))
+        glow_np = self.world_root.attachNewNode(ls_glow.create())
+        glow_np.setLightOff()
+        glow_np.setTransparency(TransparencyAttrib.MAlpha)
+        glow_np.setDepthWrite(False)
+        glow_np.setBin("transparent", 101)
+
+        ls_halo = LineSegs("tracer_halo")
+        ls_halo.setThickness(18.0)
+        ls_halo.setColor(1.0, 0.35, 0.05, 0.35)
+        ls_halo.moveTo(muzzle_world)
+        ls_halo.drawTo(muzzle_world + travel_dir * (init_len * 0.65))
+        halo_np = self.world_root.attachNewNode(ls_halo.create())
+        halo_np.setLightOff()
+        halo_np.setTransparency(TransparencyAttrib.MAlpha)
+        halo_np.setDepthWrite(False)
+        halo_np.setBin("transparent", 100)
+
+        # 고속 비행 (145~195 m/s) 및 빠른 잔상 소멸 (0.08초)로 화면 깔끔하게 유지
+        flight_speed = max(145.0, min(195.0, total_dist * 7.5))
+
+        self.active_tracers.append({
+            "head_node": head_np,
+            "core": core_np,
+            "glow": glow_np,
+            "halo": halo_np,
+            "flash": None,
+            "np": core_np,  # 하위 호환성 유지
+            "start": Vec3(muzzle_world),
+            "end": Vec3(impact_world),
+            "dir": travel_dir,
+            "total_dist": total_dist,
+            "tracer_len": init_len,
+            "traveled": 0.0,
+            "speed": flight_speed,
+            "life": 0.30,
+            "phase": "fly",
+            "fade_timer": 0.08,
+            "fade_duration": 0.08
+        })
 
     def spawn_hit_particles(self, hit_pos, is_blood=True):
         """총탄이 몬스터에 적중했을 때 사방으로 분출되는 3D 핏빛/스파크 파티클 버스트"""
@@ -626,11 +758,37 @@ class CombatSystem:
                 "pos": (x, y)
             })
 
+    def register_kill(self, player=None):
+        """적 처치 시 킬 콤보 스트릭 등록 및 버프 활성화"""
+        self.combo_count += 1
+        self.combo_timer = self.combo_window
+
+        titles = {
+            2: ("DOUBLE KILL!", (1.0, 0.90, 0.30, 1.0)),
+            3: ("TRIPLE KILL!", (1.0, 0.70, 0.20, 1.0)),
+            4: ("RAMPAGE!!", (1.0, 0.45, 0.15, 1.0)),
+            5: ("CARNAGE!!!", (1.0, 0.20, 0.20, 1.0)),
+        }
+        if self.combo_count in titles:
+            title, col = titles[self.combo_count]
+        elif self.combo_count > 5:
+            title = f"UNSTOPPABLE x{self.combo_count}!"
+            col = (1.0, 0.15, 0.85, 1.0)
+        else:
+            title = None
+            col = (1.0, 0.85, 0.2, 1.0)
+
+        if title and hasattr(self.ui_mgr, 'show_style_kill'):
+            self.ui_mgr.show_style_kill(f"[ 🔥 {title} 🔥 ]", f"연사/장전 가속 & 탄약 절약 버프!", color=col)
+
+        if self.combo_count >= 2 and self.audio_mgr and hasattr(self.audio_mgr, 'play_combo_kill'):
+            self.audio_mgr.play_combo_kill()
+
     def reset_state(self, current_stage=1, keep_ammo=False):
         """게임 재시작 및 스테이지 리셋"""
         if not keep_ammo:
             self.ammo = self.max_ammo
-            self.reserve_ammo = 0
+            self.reserve_ammo = 36  # 초기 예비 탄약 36발 (몬스터 체력 증가 대응)
         self.is_reloading = False
         self.reload_timer = 0.0
         self.shoot_cooldown = 0.0
@@ -638,10 +796,14 @@ class CombatSystem:
         self.muzzle_timer = 0.0
         self.hit_marker_timer = 0.0
         self.hipfire_bloom = 0.0
+        self.combo_count = 0
+        self.combo_timer = 0.0
 
         for tr in self.active_tracers:
-            if tr.get("np") and not tr["np"].isEmpty():
-                tr["np"].removeNode()
+            for key in ("np", "core", "glow", "halo", "head_node", "flash"):
+                node = tr.get(key)
+                if node and not node.isEmpty():
+                    node.removeNode()
         self.active_tracers = []
 
         for p in self.hit_particles:
@@ -667,11 +829,164 @@ class CombatSystem:
         if hasattr(self, 'hipfire_bloom') and self.hipfire_bloom > 0.0:
             self.hipfire_bloom = max(0.0, self.hipfire_bloom - 0.12 * dt)
 
-        # 총알 궤적 수명 관리
+        # 실감나는 고시인성 비행 총알 궤적 물리 & 페이드 갱신
         for tr in self.active_tracers[:]:
             tr["life"] -= dt
+
+            # 착탄 섬광 타이머 처리
+            if tr.get("flash") and not tr["flash"].isEmpty():
+                tr["flash_timer"] = max(0.0, tr.get("flash_timer", 0.0) - dt)
+                if tr["flash_timer"] <= 0.0:
+                    tr["flash"].removeNode()
+                    tr["flash"] = None
+                else:
+                    scale = max(0.1, tr["flash_timer"] / 0.09)
+                    tr["flash"].setScale(scale)
+
+            if tr.get("phase") == "fly":
+                move = tr["speed"] * dt
+                tr["traveled"] += move
+                head_pos = tr["traveled"]
+                total_d = tr["total_dist"]
+
+                if head_pos >= total_d:
+                    # 착탄 도달 -> 착탄 섬광 및 빠른 페이드 아웃(Dissolve, 0.08s) 전환
+                    tr["phase"] = "fade"
+                    tr["fade_timer"] = 0.08
+                    tr["fade_duration"] = 0.08
+                    tr["life"] = max(tr["life"], 0.09)
+
+                    # 탄두 제거
+                    if tr.get("head_node") and not tr["head_node"].isEmpty():
+                        tr["head_node"].removeNode()
+                        tr["head_node"] = None
+
+                    # 착탄점 발광 섬광 생성
+                    flash_np = self.world_root.attachNewNode("impact_flash")
+                    flash_np.setPos(tr["end"])
+                    f_geom = make_cube_to(flash_np, 0.28, 0.28, 0.28, LColor(1.0, 0.95, 0.40, 0.95), 0, 0, 0, rot_h=45)
+                    f_geom.setLightOff()
+                    f_geom.setTransparency(TransparencyAttrib.MAlpha)
+                    f_geom.setDepthWrite(False)
+                    f_geom.setBin("transparent", 110)
+                    tr["flash"] = flash_np
+                    tr["flash_timer"] = 0.09
+
+                    trail_head = tr["end"]
+                    t_len = min(14.0, max(4.0, total_d * 0.85))
+                    trail_tail = tr["start"] + tr["dir"] * max(0.0, total_d - t_len)
+                else:
+                    trail_head = tr["start"] + tr["dir"] * head_pos
+                    t_len = min(14.0, max(3.5, head_pos * 0.85))
+                    tr["tracer_len"] = t_len
+                    trail_tail = tr["start"] + tr["dir"] * max(0.0, head_pos - t_len)
+
+                    # 3D 탄두 위치 및 방향 갱신
+                    if tr.get("head_node") and not tr["head_node"].isEmpty():
+                        tr["head_node"].setPos(trail_head)
+                        tr["head_node"].lookAt(trail_head + tr["dir"])
+
+                # 라인 갱신 (Core, Glow, Halo)
+                for key in ("core", "glow", "halo"):
+                    node = tr.get(key)
+                    if node and not node.isEmpty():
+                        node.removeNode()
+
+                ls_c = LineSegs("tracer_core")
+                ls_c.setThickness(4.5)
+                ls_c.setColor(1.0, 1.0, 0.90, 0.98)
+                ls_c.moveTo(trail_tail)
+                ls_c.drawTo(trail_head)
+                tr["core"] = self.world_root.attachNewNode(ls_c.create())
+                tr["core"].setLightOff()
+                tr["core"].setTransparency(TransparencyAttrib.MAlpha)
+                tr["core"].setDepthWrite(False)
+                tr["core"].setBin("transparent", 102)
+                tr["np"] = tr["core"]
+
+                ls_g = LineSegs("tracer_glow")
+                ls_g.setThickness(9.5)
+                ls_g.setColor(1.0, 0.75, 0.15, 0.75)
+                mid_tail = trail_tail + (trail_head - trail_tail) * 0.15
+                ls_g.moveTo(mid_tail)
+                ls_g.drawTo(trail_head)
+                tr["glow"] = self.world_root.attachNewNode(ls_g.create())
+                tr["glow"].setLightOff()
+                tr["glow"].setTransparency(TransparencyAttrib.MAlpha)
+                tr["glow"].setDepthWrite(False)
+                tr["glow"].setBin("transparent", 101)
+
+                ls_h = LineSegs("tracer_halo")
+                ls_h.setThickness(18.0)
+                ls_h.setColor(1.0, 0.35, 0.05, 0.35)
+                mid_tail2 = trail_tail + (trail_head - trail_tail) * 0.35
+                ls_h.moveTo(mid_tail2)
+                ls_h.drawTo(trail_head)
+                tr["halo"] = self.world_root.attachNewNode(ls_h.create())
+                tr["halo"].setLightOff()
+                tr["halo"].setTransparency(TransparencyAttrib.MAlpha)
+                tr["halo"].setDepthWrite(False)
+                tr["halo"].setBin("transparent", 100)
+
+            elif tr.get("phase") == "fade":
+                tr["fade_timer"] = max(0.0, tr.get("fade_timer", 0.0) - dt)
+                if tr["fade_timer"] <= 0.0:
+                    tr["life"] = 0.0
+                else:
+                    fade_alpha = max(0.0, min(1.0, tr["fade_timer"] / tr["fade_duration"]))
+
+                    # 라인 갱신 (부드럽게 투명해짐)
+                    for key in ("core", "glow", "halo"):
+                        node = tr.get(key)
+                        if node and not node.isEmpty():
+                            node.removeNode()
+
+                    total_d = tr["total_dist"]
+                    t_len = min(14.0, max(4.0, total_d * 0.85))
+                    trail_tail = tr["start"] + tr["dir"] * max(0.0, total_d - t_len)
+                    trail_head = tr["end"]
+
+                    ls_c = LineSegs("tracer_core")
+                    ls_c.setThickness(4.5 * fade_alpha)
+                    ls_c.setColor(1.0, 1.0, 0.90, 0.98 * fade_alpha)
+                    ls_c.moveTo(trail_tail)
+                    ls_c.drawTo(trail_head)
+                    tr["core"] = self.world_root.attachNewNode(ls_c.create())
+                    tr["core"].setLightOff()
+                    tr["core"].setTransparency(TransparencyAttrib.MAlpha)
+                    tr["core"].setDepthWrite(False)
+                    tr["core"].setBin("transparent", 102)
+                    tr["np"] = tr["core"]
+
+                    ls_g = LineSegs("tracer_glow")
+                    ls_g.setThickness(9.5 * fade_alpha)
+                    ls_g.setColor(1.0, 0.75, 0.15, 0.75 * fade_alpha)
+                    mid_tail = trail_tail + (trail_head - trail_tail) * 0.15
+                    ls_g.moveTo(mid_tail)
+                    ls_g.drawTo(trail_head)
+                    tr["glow"] = self.world_root.attachNewNode(ls_g.create())
+                    tr["glow"].setLightOff()
+                    tr["glow"].setTransparency(TransparencyAttrib.MAlpha)
+                    tr["glow"].setDepthWrite(False)
+                    tr["glow"].setBin("transparent", 101)
+
+                    ls_h = LineSegs("tracer_halo")
+                    ls_h.setThickness(18.0 * fade_alpha)
+                    ls_h.setColor(1.0, 0.35, 0.05, 0.35 * fade_alpha)
+                    mid_tail2 = trail_tail + (trail_head - trail_tail) * 0.35
+                    ls_h.moveTo(mid_tail2)
+                    ls_h.drawTo(trail_head)
+                    tr["halo"] = self.world_root.attachNewNode(ls_h.create())
+                    tr["halo"].setLightOff()
+                    tr["halo"].setTransparency(TransparencyAttrib.MAlpha)
+                    tr["halo"].setDepthWrite(False)
+                    tr["halo"].setBin("transparent", 100)
+
             if tr["life"] <= 0.0:
-                tr["np"].removeNode()
+                for key in ("core", "glow", "halo", "head_node", "flash", "np"):
+                    node = tr.get(key)
+                    if node and not node.isEmpty():
+                        node.removeNode()
                 self.active_tracers.remove(tr)
 
         # 피격 파티클 갱신
@@ -760,9 +1075,17 @@ class CombatSystem:
                 self.slide_node.setPos(0, 0, 0)
                 self.hammer_node.setP(-42)
 
+        # 콤보 스트릭 타이머 감쇄
+        if self.combo_timer > 0.0:
+            self.combo_timer -= dt
+            if self.combo_timer <= 0.0:
+                self.combo_count = 0
+
         # 현실적 다단계 재장전 애니메이션 및 반동
         if self.is_reloading:
-            self.reload_timer = max(0.0, self.reload_timer - dt)
+            # 콤보 상태일 때 재장전 속도 1.35배 가속!
+            reload_step = dt * 1.35 if self.combo_count >= 2 else dt
+            self.reload_timer = max(0.0, self.reload_timer - reload_step)
             total_dur = 1.30
             p = 1.0 - (self.reload_timer / total_dur)  # 0.0 -> 1.0
 

@@ -1,8 +1,10 @@
 from panda3d.core import loadPrcFileData, LColor
 
-# 1920x1080 FHD 기본 해상도 및 창 크기 조절 설정
-loadPrcFileData('', 'win-size 1920 1080')
+# 1600x900 창 모드로 시작 (1920x1080과 일치 시 Panda3D가 자동 전체화면 진입하는 버그 방지)
+loadPrcFileData('', 'win-size 1600 900')
 loadPrcFileData('', 'win-resizable true')
+loadPrcFileData('', 'fullscreen false')
+loadPrcFileData('', 'undecorated false')
 loadPrcFileData('', 'window-title Liminal Backrooms FPS')
 
 # 60 FPS 프레임 페이싱 고정 (GPU 큐 과부하, 지터링 및 드라이버 스터터링 완벽 차단)
@@ -29,7 +31,7 @@ CHUNK_SIZE = CELL_SIZE * CHUNK_CELLS  # 청크 한 변 크기 (36.0m)
 # 2단 벽체 구조 (1단: 0~6.5m, 2단: 6.5~13.0m)
 TIER_HEIGHT = 6.5       # 1단 높이 (6.5m)
 WALL_HEIGHT = TIER_HEIGHT * 2.0  # 총 2단 벽 및 천장 높이 (13.0m 초대형 심연 높이)
-DOOR_HEIGHT = 3.0       # 출입문 통로 높이 (3.0m 웅장한 도어)
+DOOR_HEIGHT = 5.2       # 출입문 통로 높이 (키 큰 4.2m 해골 괴물 등도 자연스럽게 통과 가능한 5.2m 광폭 초대형 문)
 WALL_THICKNESS = 0.8    # 두꺼운 3D 벽체 두께 (0.8m 콘크리트/석고 보드 마감)
 
 PLAYER_RADIUS = 0.4     # 플레이어 충돌 반경

@@ -69,9 +69,9 @@ class Chunk:
         cm_soffit = CardMaker('soffit')
         cm_soffit.setFrame(-half_thick, CELL_SIZE + half_thick, -half_thick, half_thick)
 
-        # 문틀 기둥 옆면 마감 (너비: WALL_THICKNESS, 높이: DOOR_HEIGHT)
+        # 벽체 및 문틀 기둥 옆면 단면 마감 (너비: WALL_THICKNESS, 높이: WALL_HEIGHT 전체 밀폐)
         cm_jamb = CardMaker('jamb')
-        cm_jamb.setFrame(-half_thick, half_thick, 0, DOOR_HEIGHT)
+        cm_jamb.setFrame(-half_thick, half_thick, 0, WALL_HEIGHT)
 
         # 대형 백룸 홀 전용 건축 지지 기둥 카드 (1.2m x 1.2m x 13.0m 사각 기둥)
         cm_pillar_face = CardMaker('pillar_face')
@@ -188,6 +188,19 @@ class Chunk:
                     cap_h.setTexture(wall_tex)
                     cap_h.setTwoSided(True)
 
+                    # 벽 좌우 끝 단면 밀폐 마감 (0.8m 두께 내부 노출 방지)
+                    j_left = self.node.attachNewNode(cm_jamb.generate())
+                    j_left.setH(90)
+                    j_left.setPos(cell_x, wy, 0)
+                    j_left.setTexture(wall_tex)
+                    j_left.setTwoSided(True)
+
+                    j_right = self.node.attachNewNode(cm_jamb.generate())
+                    j_right.setH(-90)
+                    j_right.setPos(cell_x + CELL_SIZE, wy, 0)
+                    j_right.setTexture(wall_tex)
+                    j_right.setTwoSided(True)
+
                     # 플레이어 충돌체 등록 (0.8m 두께 반영 및 셀 공간 인덱싱)
                     col_box = (
                         cell_x - half_thick,
@@ -200,8 +213,8 @@ class Chunk:
                     self.cell_colliders[(gx, gy + 1)].append(col_box)
 
                 elif ht == 2:
-                    # [출입문 2단 벽체: 1단은 2.4m까지 개방 통로 + 인방벽, 2단은 꽉 찬 벽]
-                    # 1단 출입문 인방 (2.4m ~ 4.5m)
+                    # [출입문 2단 벽체: 1단은 5.2m까지 개방 통로 + 인방벽, 2단은 꽉 찬 벽]
+                    # 1단 출입문 인방 (5.2m ~ 6.5m)
                     dl_s = self.node.attachNewNode(cm_door_lintel.generate())
                     dl_s.setPos(cell_x, wy - half_thick, 0)
                     dl_s.setTexture(wall_tex)
@@ -215,7 +228,7 @@ class Chunk:
                     dl_n.setTexScale(TextureStage.getDefault(), wall_u_scale, lintel_v_scale)
                     dl_n.setTwoSided(True)
 
-                    # 2단 벽체 (4.5m ~ 9.0m)
+                    # 2단 벽체 (6.5m ~ 13.0m)
                     u_s = self.node.attachNewNode(cm_tier2.generate())
                     u_s.setPos(cell_x, wy - half_thick, 0)
                     u_s.setTexture(wall_tex)
@@ -229,6 +242,13 @@ class Chunk:
                     u_n.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
                     u_n.setTwoSided(True)
 
+                    # 벽 상단 마감 (천장 레벨 밀폐)
+                    cap_hd = self.node.attachNewNode(cm_soffit.generate())
+                    cap_hd.setP(90)
+                    cap_hd.setPos(cell_x, wy, WALL_HEIGHT)
+                    cap_hd.setTexture(wall_tex)
+                    cap_hd.setTwoSided(True)
+
                     # 문틀 하부 소핏 (문틀 윗면 천장 마감)
                     soffit = self.node.attachNewNode(cm_soffit.generate())
                     soffit.setP(90)
@@ -236,7 +256,7 @@ class Chunk:
                     soffit.setTexture(wall_tex)
                     soffit.setTwoSided(True)
 
-                    # 문틀 좌우 기둥 옆면 마감
+                    # 문틀 좌우 기둥 및 인방 단면 마감 (바닥부터 천장까지 전체 밀폐)
                     j_left = self.node.attachNewNode(cm_jamb.generate())
                     j_left.setH(90)
                     j_left.setPos(cell_x, wy, 0)
@@ -291,6 +311,19 @@ class Chunk:
                     cap_v.setTexture(wall_tex)
                     cap_v.setTwoSided(True)
 
+                    # 벽 남북 끝 단면 밀폐 마감 (0.8m 두께 내부 노출 방지)
+                    j_s = self.node.attachNewNode(cm_jamb.generate())
+                    j_s.setH(0)
+                    j_s.setPos(wx, cell_y, 0)
+                    j_s.setTexture(wall_tex)
+                    j_s.setTwoSided(True)
+
+                    j_n = self.node.attachNewNode(cm_jamb.generate())
+                    j_n.setH(180)
+                    j_n.setPos(wx, cell_y + CELL_SIZE, 0)
+                    j_n.setTexture(wall_tex)
+                    j_n.setTwoSided(True)
+
                     # 플레이어 충돌체 등록 (셀 공간 인덱싱)
                     col_box = (
                         wx - half_thick,
@@ -333,6 +366,14 @@ class Chunk:
                     u_e.setTexture(wall_tex)
                     u_e.setTexScale(TextureStage.getDefault(), wall_u_scale, wall_v_scale)
                     u_e.setTwoSided(True)
+
+                    # 벽 상단 마감 (천장 레벨 밀폐)
+                    cap_vd = self.node.attachNewNode(cm_soffit.generate())
+                    cap_vd.setP(90)
+                    cap_vd.setH(90)
+                    cap_vd.setPos(wx, cell_y, WALL_HEIGHT)
+                    cap_vd.setTexture(wall_tex)
+                    cap_vd.setTwoSided(True)
 
                     # 문틀 하부 소핏
                     soffit = self.node.attachNewNode(cm_soffit.generate())
