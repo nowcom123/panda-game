@@ -427,14 +427,14 @@ class Chunk:
                     p_n.setTwoSided(True)
 
                     p_w = self.node.attachNewNode(cm_pillar_face.generate())
-                    p_w.setH(90)
+                    p_w.setH(-90)
                     p_w.setPos(px - half_p, py, 0)
                     p_w.setTexture(wall_tex)
                     p_w.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)
                     p_w.setTwoSided(True)
 
                     p_e = self.node.attachNewNode(cm_pillar_face.generate())
-                    p_e.setH(-90)
+                    p_e.setH(90)
                     p_e.setPos(px + half_p, py, 0)
                     p_e.setTexture(wall_tex)
                     p_e.setTexScale(TextureStage.getDefault(), 1.2 / 3.5, WALL_HEIGHT / 2.7)

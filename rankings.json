@@ -630,5 +630,16 @@
     "ammo_left": 12,
     "reserve_ammo": 36,
     "ammo_used": 0
+  },
+  {
+    "timestamp": "2026-10-15 17:25:29",
+    "stage": 1,
+    "result": "사망 (검은 뱀 괴물)",
+    "success": false,
+    "time_elapsed": 17.4,
+    "time_left": 282.6,
+    "ammo_left": 6,
+    "reserve_ammo": 36,
+    "ammo_used": 6
   }
 ]
