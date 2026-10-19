@@ -2044,7 +2044,7 @@ class UIManager:
                 card["btn"]["text"] = "[ 미선택 ]"
                 card["btn"]["text_fg"] = (0.5, 0.5, 0.5, 0.8)
 
-        self.shop_msg_text.setText(f"★ [{perk['name']}] 퍽 장착 완료! ({perk['desc'][:36]}...)")
+        self.shop_msg_text.setText(f"★ [{perk['name']}] 퍽 장착 완료! 하단 버튼 또는 [Enter]/[Space]를 눌러 계속하세요.")
         self.shop_msg_text.setFg((0.35, 1.0, 0.55, 1.0))
         self._refresh_owned_perks_label()
 
@@ -2062,6 +2062,10 @@ class UIManager:
         return False
 
     def _confirm_shop_and_start(self):
+        if self.selected_perk_idx == -1 and len(self.offered_perks) > 0:
+            self.shop_msg_text.setText("★ 먼저 장착할 퍽 카드 1장을 선택해 주세요! (키보드 1, 2, 3 또는 클릭) ★")
+            self.shop_msg_text.setFg((1.0, 0.35, 0.35, 1.0))
+            return
         self.hide_stage_clear_shop()
         if self.on_shop_confirm:
             self.on_shop_confirm()
@@ -2080,6 +2084,7 @@ class UIManager:
         self.selected_perk_idx = -1
 
         self.shop_title.setText(f"[ ★ STAGE {stage} CLEAR : 전술 퍽 프로토콜 ★ ]")
+        self.shop_desc.setText("심연의 미궁을 돌파하기 위한 전술 강화 퍽을 1장 선택하세요 (키보드 [1], [2], [3] 번호키 또는 마우스 클릭)")
         self.shop_msg_text.setText("원하는 퍽 카드를 1장 선택하세요 (키보드 [1], [2], [3] 또는 클릭)")
         self.shop_msg_text.setFg((1.0, 0.85, 0.25, 1.0))
         self._refresh_owned_perks_label()
@@ -2094,6 +2099,55 @@ class UIManager:
             self.btn_start_next.setPos(0, 0, -0.62)
             self.btn_start_next["text"] = "다음 스테이지 시작 (START NEXT STAGE)"
             self.btn_escape_victory.hide()
+
+        # 퍽 풀에서 3장 무작위 추첨
+        p_perks = getattr(player, 'perks', set())
+        self.offered_perks = draw_random_perks(p_perks, count=3)
+
+        for i, card in enumerate(self.perk_cards):
+            card["frame"]["image"] = 'assets/ui/card_relic_bg.png'
+            if i < len(self.offered_perks):
+                perk = self.offered_perks[i]
+                card["frame"].show()
+                rarity = perk.get("rarity", "COMMON")
+                rarity_name = RARITY_NAMES.get(rarity, "일반 퍽")
+                rarity_col = RARITY_COLORS.get(rarity, (0.35, 0.85, 1.0, 1.0))
+
+                card["rarity"].setText(f"[ {rarity_name} ]")
+                card["rarity"].setFg(rarity_col)
+
+                card["title"].setText(f"{perk['icon']} {perk['name']}")
+                tags_str = " ".join([f"#{t}" for t in perk.get("tags", [])])
+                card["category"].setText(f"[{perk.get('category', '전술')}]  {tags_str}")
+                card["desc"].setText(perk["desc"])
+
+                card["btn"]["state"] = DGG.NORMAL
+                card["btn"]["text"] = f"[ {i+1}번 퍽 선택 (KEY {i+1}) ]"
+                card["btn"]["text_fg"] = (0.35, 1.0, 0.65, 1.0)
+            else:
+                card["frame"].hide()
+
+        self.hide_all_ingame()
+        self.shop_modal.show()
+
+    def show_levelup_perk_modal(self, level, player, combat, on_confirm_callback, pending_count=1):
+        """레벨업 달성 시 3장의 무작위 전술 퍽 카드 제시 및 선택 모달 오픈"""
+        self.shop_player = player
+        self.shop_combat = combat
+        self.on_shop_confirm = on_confirm_callback
+        self.on_escape_victory = None
+        self.selected_perk_idx = -1
+
+        pending_str = f"  (남은 선택 기회: {pending_count}회)" if pending_count > 1 else ""
+        self.shop_title.setText(f"[ ★ LEVEL UP : LV.{level} 전술 퍽 획득{pending_str} ★ ]")
+        self.shop_desc.setText("레벨업 달성! 전장에 적용할 전술 강화 퍽을 1장 선택하세요 (키보드 [1], [2], [3] 번호키 또는 마우스 클릭)")
+        self.shop_msg_text.setText("원하는 퍽 카드를 1장 선택하세요 (선택 후 [전투 재개] 클릭 또는 [Enter]/[Space])")
+        self.shop_msg_text.setFg((1.0, 0.85, 0.25, 1.0))
+        self._refresh_owned_perks_label()
+
+        self.btn_start_next.setPos(0, 0, -0.62)
+        self.btn_start_next["text"] = "전투 재개 (RESUME COMBAT)"
+        self.btn_escape_victory.hide()
 
         # 퍽 풀에서 3장 무작위 추첨
         p_perks = getattr(player, 'perks', set())

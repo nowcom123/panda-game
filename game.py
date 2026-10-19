@@ -12,6 +12,7 @@ else:
     basedir = os.path.dirname(os.path.abspath(__file__))
 
 from direct.showbase.ShowBase import ShowBase
+from direct.showbase.ShowBaseGlobal import globalClock
 from panda3d.core import (
     SamplerState, Fog, AmbientLight, PointLight, LColor, WindowProperties,
     CardMaker, TextureStage, getModelPath, Filename
@@ -142,6 +143,7 @@ class LiminalInfiniteLoop(ShowBase):
             self.audio_mgr, self.ui_mgr
         )
         self.player.world_root = self.world_root
+        self.player.on_level_up = self._on_player_level_up
         self.player.setup_input(
             on_shoot=self.shoot_pistol,
             on_reload=self.reload_pistol,
@@ -159,6 +161,7 @@ class LiminalInfiniteLoop(ShowBase):
 
         # 7. 게임 상태 및 5분(300초) 타이머 설정
         self.game_state = "INTRO"  # "INTRO", "PLAYING", "SHOP", "GAME_OVER", "VICTORY"
+        self._is_level_up_modal = False
         self.game_over = False
         self.game_won = False
         self.current_stage = 1
@@ -187,13 +190,15 @@ class LiminalInfiniteLoop(ShowBase):
         self.show_intro_scene()
         self.taskMgr.add(self.update, "update_task")
 
-        # 8. F11 전체화면 토글 설정, F1 테스트 모드, F5 몬스터 재소환, F6 보스 즉시 소환
+        # 8. F11 전체화면 토글 설정, F1 테스트 모드, F5 몬스터 재소환, F6 보스 즉시 소환, F7 경험치 지급, Enter 확인
         self._is_fullscreen = False
         self._enforce_windowed_mode()
         self.accept("f11", self.toggle_fullscreen)
         self.accept("f1", self.start_test_mode)
         self.accept("f5", self._on_f5_pressed)
         self.accept("f6", self._on_f6_spawn_boss)
+        self.accept("f7", self._on_f7_grant_exp)
+        self.accept("enter", self._on_enter_pressed)
 
     # --- 전체화면 토글 ---
     def _enforce_windowed_mode(self):
@@ -342,6 +347,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.player.lock_mouse(True)
         self.audio_mgr.play_inventory_toggle(False)
         self._update_quickslot_hud()
+        if getattr(self.player, 'pending_perk_picks', 0) > 0:
+            self._on_player_level_up()
 
     def handle_escape(self):
         """[ESC] 키 입력 처리: 인벤토리 열려있으면 닫기, 테스트 모드면 인트로 복귀, 아니면 마우스 락 토글"""
@@ -514,6 +521,10 @@ class LiminalInfiniteLoop(ShowBase):
         self.player.reset_position(0.0, -10.0, heading=0.0, pitch=0.0)
         self.player.level = 1
         self.player.exp = 0
+        self.player.exp_to_next = 100
+        self.player.pending_perk_picks = 0
+        self.player.on_level_up = self._on_player_level_up
+        self._is_level_up_modal = False
         self.player.max_hp = 100.0
         self.player.hp = 100.0
         self.player.attack_power = 35.0
@@ -844,6 +855,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.player.perks = set()
         self.player.perk_levels = {}
         self.player.pending_perk_picks = 0
+        self.player.on_level_up = self._on_player_level_up
+        self._is_level_up_modal = False
         if hasattr(self.ui_mgr, 'update_perk_badges'):
             self.ui_mgr.update_perk_badges(self.player.perks)
         self.ui_mgr.update_relic_badges(self.player.relics)
@@ -973,6 +986,73 @@ class LiminalInfiniteLoop(ShowBase):
         self.game_state = "PLAYING"
         self.ui_mgr.start_game_ui()
         self.player.lock_mouse(True)
+        if getattr(self.player, 'pending_perk_picks', 0) > 0:
+            self._on_player_level_up()
+
+    def _on_player_level_up(self):
+        """플레이어 레벨업 시 전술 퍽(Perk) 3-Card 선택 모달 호출"""
+        if self.game_over or self.game_won:
+            return
+        if self.game_state == "INVENTORY":
+            # 인벤토리 열려있을 때는 닫힌 후 처리
+            return
+        if self.game_state == "SHOP" or getattr(self, '_is_level_up_modal', False):
+            return
+        if self.game_state != "PLAYING":
+            return
+
+        self._trigger_level_up_modal()
+
+    def _trigger_level_up_modal(self):
+        """레벨업 퍽 선택 창 활성화 및 게임 일시정지"""
+        if getattr(self.player, 'pending_perk_picks', 0) <= 0:
+            return
+
+        self.game_state = "SHOP"
+        self._is_level_up_modal = True
+        self.player.lock_mouse(False)
+        self.combat.stop_aim()
+
+        self.ui_mgr.show_levelup_perk_modal(
+            level=self.player.level,
+            player=self.player,
+            combat=self.combat,
+            on_confirm_callback=self._on_level_up_confirmed,
+            pending_count=self.player.pending_perk_picks
+        )
+
+    def _on_level_up_confirmed(self):
+        """레벨업 퍽 선택 완료 후 콜백: 잔여 퍽 선택이 있으면 재오픈, 없으면 전투 복귀"""
+        if getattr(self.player, 'pending_perk_picks', 0) > 0:
+            self.player.pending_perk_picks -= 1
+
+        self.ui_mgr.update_hp_exp(
+            self.player.hp, self.player.max_hp, self.player.exp, self.player.exp_to_next,
+            level=self.player.level, pending_perks=self.player.pending_perk_picks
+        )
+
+        if getattr(self.player, 'pending_perk_picks', 0) > 0:
+            # 연속 레벨업 등으로 퍽 포인트가 남아있는 경우 다음 퍽 카드 제시
+            self._trigger_level_up_modal()
+        else:
+            # 모든 퍽 선택 완료: 게임 플레이 복귀
+            self._is_level_up_modal = False
+            self.game_state = "PLAYING"
+            self.ui_mgr.start_game_ui()
+            self.player.lock_mouse(True)
+            self.ui_mgr.show_hit_marker("[ ★ 전술 퍽 장착 완료! 전투 재개 ★ ]", (0.35, 1.0, 0.65, 1.0))
+
+    def _on_enter_pressed(self):
+        """[Enter] 키로 퍽 선택 모달 확인 또는 다음 진행"""
+        if self.game_state == "SHOP" and hasattr(self.ui_mgr, 'shop_modal') and not self.ui_mgr.shop_modal.isHidden():
+            self.ui_mgr._confirm_shop_and_start()
+
+    def _on_f7_grant_exp(self):
+        """[F7] 단축키: 즉시 100 EXP 획득 (레벨업 및 전술 퍽 선택 테스트용)"""
+        if getattr(self, 'is_test_mode', False) or self.game_state == "PLAYING":
+            self.player.gain_exp(100)
+            if hasattr(self.ui_mgr, 'show_hit_marker'):
+                self.ui_mgr.show_hit_marker("[ F7: +100 EXP 획득! ]", (0.35, 1.0, 0.65, 1.0))
 
     def trigger_victory(self):
         """탈출구 방어 성공 시 승리"""

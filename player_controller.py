@@ -350,6 +350,12 @@ class PlayerController:
 
     def trigger_slide(self):
         """[Space] 전술 컴뱃 슬라이드 & 긴급 회피 대시 (낮은 자세로 미끄러지며 사격 가능)"""
+        # 퍽 선택 모달 활성화 중에는 Space 키로 확인/전투 재개
+        if hasattr(self.base, 'game_state') and self.base.game_state == "SHOP":
+            if hasattr(self.ui_mgr, 'shop_modal') and not self.ui_mgr.shop_modal.isHidden():
+                self.ui_mgr._confirm_shop_and_start()
+                return
+
         if self.slide_cooldown > 0.0 or self.is_sliding:
             return
         if self.stamina < 5.0:
@@ -407,7 +413,10 @@ class PlayerController:
             leveled = True
         if leveled and self.audio_mgr:
             self.audio_mgr.play_levelup()
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
+        self.ui_mgr.update_hp_exp(
+            self.hp, self.max_hp, self.exp, self.exp_to_next, self.level,
+            pending_perks=self.pending_perk_picks
+        )
         if leveled and hasattr(self, 'on_level_up') and self.on_level_up:
             self.on_level_up()
         return leveled
@@ -440,7 +449,7 @@ class PlayerController:
 
         self.hp = max(0.0, self.hp - amount)
         self.invincible_timer = 0.55  # 0.55초 무적 쿨다운
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
+        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, pending_perks=self.pending_perk_picks)
 
         # 플레이어 피격 시각 효과: 화면 붉은 플래시 및 카메라 충격 흔들림
         self.ui_mgr.trigger_player_damage_flash(intensity=0.65)
@@ -457,7 +466,7 @@ class PlayerController:
 
     def heal(self, amount):
         self.hp = min(self.max_hp, self.hp + amount)
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
+        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, pending_perks=self.pending_perk_picks)
 
     def recover_stamina(self, amount):
         """적 타격/적중 시 전술 아드레날린 활성화로 스테미나 회복"""
@@ -481,7 +490,7 @@ class PlayerController:
         elif relic_id == "frenzy_drive":
             self.speed_mult *= 1.30
 
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
+        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, pending_perks=self.pending_perk_picks)
         if hasattr(self.ui_mgr, 'update_relic_badges'):
             self.ui_mgr.update_relic_badges(self.relics)
 
@@ -505,7 +514,7 @@ class PlayerController:
         elif perk_id == "vampiric_leech":
             self.hp = min(self.max_hp, self.hp + 20.0)
 
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
+        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, pending_perks=self.pending_perk_picks)
         if hasattr(self.ui_mgr, 'update_perk_badges'):
             self.ui_mgr.update_perk_badges(self.perks)
 
