@@ -10,11 +10,13 @@ import json
 import math
 import random
 import datetime
+import time
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.OnscreenImage import OnscreenImage
 from direct.gui.DirectGui import DirectButton, DirectFrame, DGG
 from panda3d.core import TextNode, TransparencyAttrib, LineSegs
 from constants import CURSED_RELICS
+from perks import PERK_CATALOG, draw_random_perks, RARITY_COLORS, RARITY_NAMES
 
 
 class TacticalCrosshair:
@@ -303,12 +305,13 @@ ImageCrosshair = TacticalCrosshair
 
 
 class UIManager:
-    def __init__(self, base, loader, on_start, on_return_menu, on_exit):
+    def __init__(self, base, loader, on_start, on_return_menu, on_exit, on_test_mode=None):
         self.base = base
         self.loader = loader
         self.on_start = on_start
         self.on_return_menu = on_return_menu
         self.on_exit = on_exit
+        self.on_test_mode = on_test_mode
 
         if getattr(sys, 'frozen', False):
             exe_dir = os.path.dirname(sys.executable)
@@ -332,6 +335,7 @@ class UIManager:
         self._cached_stamina_col = None
         self._cached_hud_str = ""
         self._cached_ammo_str = ""
+        self._cached_weapon_name = ""
         self._cached_door_str = ""
         self._cached_hp_str = ""
         self._cached_exp_str = ""
@@ -385,6 +389,18 @@ class UIManager:
         self.vignette_blood.setBin("fixed", 2)
         self.vignette_blood.setColorScale(1, 1, 1, 0.0)
 
+        # 2-B. 불릿타임 시간 감속 일렉트릭 사이안 비네트 (전체 화면 시공간 왜곡 효과)
+        self.vignette_bullet_time = OnscreenImage(
+            image="assets/ui/vignette_dark.png",
+            pos=(0, 0, 0),
+            scale=(1.80, 1, 1.0),
+            parent=self.base.aspect2d
+        )
+        self.vignette_bullet_time.setTransparency(TransparencyAttrib.MAlpha)
+        self.vignette_bullet_time.setBin("fixed", 2)
+        self.vignette_bullet_time.setColorScale(0.18, 0.85, 1.0, 0.0)
+        self.vignette_bullet_time.hide()
+
         # 하위 호환용 damage_flash 프레임
         self.damage_flash = DirectFrame(
             frameColor=(0.85, 0.05, 0.05, 0.0),
@@ -411,7 +427,7 @@ class UIManager:
         self.panel_hud_top = OnscreenImage(
             image="assets/ui/panel_hud_top.png",
             pos=(0, 0, 0.91),
-            scale=(0.58, 1, 0.065),
+            scale=(0.66, 1, 0.075),
             parent=self.base.aspect2d
         )
         self.panel_hud_top.setTransparency(TransparencyAttrib.MAlpha)
@@ -419,8 +435,8 @@ class UIManager:
 
         self.icon_radar = OnscreenImage(
             image="assets/ui/icon_radar.png",
-            pos=(-0.50, 0, 0.91),
-            scale=0.036,
+            pos=(-0.56, 0, 0.91),
+            scale=0.038,
             parent=self.base.aspect2d
         )
         self.icon_radar.setTransparency(TransparencyAttrib.MAlpha)
@@ -428,10 +444,10 @@ class UIManager:
 
         self.hud_text = OnscreenText(
             text="[ 비상 탈출구 신호 탐색 중... ]",
-            pos=(-0.44, 0.90),
-            scale=0.030,
-            fg=(0.45, 0.85, 1.0, 0.95),
-            shadow=(0, 0, 0, 0.95),
+            pos=(-0.50, 0.898),
+            scale=0.034,
+            fg=(0.40, 0.92, 1.0, 1.0),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
@@ -439,21 +455,21 @@ class UIManager:
 
         self.timer_text = OnscreenText(
             text="[ 05:00 ]",
-            pos=(0.50, 0.90),
-            scale=0.034,
+            pos=(0.56, 0.895),
+            scale=0.042,
             fg=(0.25, 0.95, 0.45, 1.0),
-            shadow=(0, 0, 0, 0.95),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ARight,
             mayChange=True,
             **self.font_kw
         )
 
-        # 5. 좌상단 상태바 (HP, 스테미나, EXP, 유물) - 1920x1080 좌측 여백 최적화 배치
+        # 5. 좌상단 상태바 (HP, 스테미나, EXP, 유물) - 고가독성 스케일 & 패딩
         # 5-1. 체력바
         self.icon_hp = OnscreenImage(
             image="assets/ui/icon_health.png",
             pos=(-1.68, 0, 0.88),
-            scale=0.036,
+            scale=0.038,
             parent=self.base.aspect2d
         )
         self.icon_hp.setTransparency(TransparencyAttrib.MAlpha)
@@ -462,7 +478,7 @@ class UIManager:
         self.bar_frame_hp = OnscreenImage(
             image="assets/ui/bar_frame.png",
             pos=(-1.34, 0, 0.88),
-            scale=(0.30, 1, 0.026),
+            scale=(0.30, 1, 0.028),
             parent=self.base.aspect2d
         )
         self.bar_frame_hp.setTransparency(TransparencyAttrib.MAlpha)
@@ -471,18 +487,18 @@ class UIManager:
         self.bar_fill_hp = OnscreenImage(
             image="assets/ui/bar_hp_fill.png",
             pos=(-1.34, 0, 0.88),
-            scale=(0.29, 1, 0.020),
+            scale=(0.29, 1, 0.022),
             parent=self.base.aspect2d
         )
         self.bar_fill_hp.setTransparency(TransparencyAttrib.MAlpha)
         self.bar_fill_hp.setBin("fixed", 6)
 
         self.hp_text = OnscreenText(
-            text="100 / 100",
-            pos=(-1.00, 0.87),
-            scale=0.026,
-            fg=(0.20, 0.95, 0.40, 1.0),
-            shadow=(0, 0, 0, 0.95),
+            text="HP  100 / 100",
+            pos=(-0.98, 0.866),
+            scale=0.032,
+            fg=(0.25, 1.0, 0.45, 1.0),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
@@ -491,8 +507,8 @@ class UIManager:
         # 5-2. 스테미나바
         self.icon_stamina = OnscreenImage(
             image="assets/ui/icon_stamina.png",
-            pos=(-1.68, 0, 0.81),
-            scale=0.036,
+            pos=(-1.68, 0, 0.80),
+            scale=0.038,
             parent=self.base.aspect2d
         )
         self.icon_stamina.setTransparency(TransparencyAttrib.MAlpha)
@@ -500,8 +516,8 @@ class UIManager:
 
         self.bar_frame_stamina = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(-1.34, 0, 0.81),
-            scale=(0.30, 1, 0.026),
+            pos=(-1.34, 0, 0.80),
+            scale=(0.30, 1, 0.028),
             parent=self.base.aspect2d
         )
         self.bar_frame_stamina.setTransparency(TransparencyAttrib.MAlpha)
@@ -509,19 +525,19 @@ class UIManager:
 
         self.bar_fill_stamina = OnscreenImage(
             image="assets/ui/bar_stamina_fill.png",
-            pos=(-1.34, 0, 0.81),
-            scale=(0.29, 1, 0.020),
+            pos=(-1.34, 0, 0.80),
+            scale=(0.29, 1, 0.022),
             parent=self.base.aspect2d
         )
         self.bar_fill_stamina.setTransparency(TransparencyAttrib.MAlpha)
         self.bar_fill_stamina.setBin("fixed", 6)
 
         self.stamina_text = OnscreenText(
-            text="100%",
-            pos=(-1.00, 0.80),
-            scale=0.026,
+            text="STM  100%",
+            pos=(-0.98, 0.786),
+            scale=0.032,
             fg=(0.35, 0.95, 0.5, 0.95),
-            shadow=(0, 0, 0, 0.95),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
@@ -530,8 +546,8 @@ class UIManager:
         # 5-3. 경험치바
         self.icon_exp = OnscreenImage(
             image="assets/ui/icon_exp.png",
-            pos=(-1.68, 0, 0.74),
-            scale=0.036,
+            pos=(-1.68, 0, 0.72),
+            scale=0.038,
             parent=self.base.aspect2d
         )
         self.icon_exp.setTransparency(TransparencyAttrib.MAlpha)
@@ -539,8 +555,8 @@ class UIManager:
 
         self.bar_frame_exp = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(-1.34, 0, 0.74),
-            scale=(0.30, 1, 0.026),
+            pos=(-1.34, 0, 0.72),
+            scale=(0.30, 1, 0.028),
             parent=self.base.aspect2d
         )
         self.bar_frame_exp.setTransparency(TransparencyAttrib.MAlpha)
@@ -548,19 +564,19 @@ class UIManager:
 
         self.bar_fill_exp = OnscreenImage(
             image="assets/ui/bar_exp_fill.png",
-            pos=(-1.34, 0, 0.74),
-            scale=(0.29, 1, 0.020),
+            pos=(-1.34, 0, 0.72),
+            scale=(0.29, 1, 0.022),
             parent=self.base.aspect2d
         )
         self.bar_fill_exp.setTransparency(TransparencyAttrib.MAlpha)
         self.bar_fill_exp.setBin("fixed", 6)
 
         self.exp_text = OnscreenText(
-            text="[LV. 1] 0/100",
-            pos=(-1.00, 0.73),
-            scale=0.026,
+            text="[LV. 1] EXP  0 / 100",
+            pos=(-0.98, 0.706),
+            scale=0.032,
             fg=(0.85, 0.70, 1.0, 1.0),
-            shadow=(0, 0, 0, 0.95),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
@@ -569,7 +585,7 @@ class UIManager:
         # 5-4. 유물 배지
         self.icon_relic = OnscreenImage(
             image="assets/ui/icon_relic.png",
-            pos=(-1.68, 0, 0.67),
+            pos=(-1.68, 0, 0.64),
             scale=0.034,
             parent=self.base.aspect2d
         )
@@ -578,19 +594,32 @@ class UIManager:
 
         self.relic_badge_text = OnscreenText(
             text="[보유 유물] 없음",
-            pos=(-1.63, 0.66),
-            scale=0.026,
-            fg=(0.85, 0.70, 1.0, 0.95),
+            pos=(-1.63, 0.628),
+            scale=0.030,
+            fg=(0.95, 0.75, 1.0, 1.0),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
 
-        # 6. 우하단 탄약 HUD 패널 (1920x1080 우측 앵커링)
+        # 5-5. 로그라이크 전술 퍽 배지 목록
+        self.perk_badge_text = OnscreenText(
+            text="[장착 퍽] 없음",
+            pos=(-1.63, 0.570),
+            scale=0.027,
+            fg=(0.35, 0.90, 1.0, 1.0),
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ALeft,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 6. 우하단 탄약 HUD 패널 (고대비 및 크기 확장)
         self.panel_hud_ammo = OnscreenImage(
             image="assets/ui/panel_hud_ammo.png",
-            pos=(1.50, 0, -0.84),
-            scale=(0.24, 1, 0.080),
+            pos=(1.45, 0, -0.84),
+            scale=(0.30, 1, 0.115),
             parent=self.base.aspect2d
         )
         self.panel_hud_ammo.setTransparency(TransparencyAttrib.MAlpha)
@@ -598,21 +627,43 @@ class UIManager:
 
         self.icon_ammo = OnscreenImage(
             image="assets/ui/icon_ammo.png",
-            pos=(1.34, 0, -0.84),
-            scale=0.036,
+            pos=(1.22, 0, -0.84),
+            scale=0.040,
             parent=self.base.aspect2d
         )
         self.icon_ammo.setTransparency(TransparencyAttrib.MAlpha)
         self.icon_ammo.setBin("fixed", 5)
 
-        self.ammo_text = OnscreenText(
-            text="12 / 12",
-            pos=(1.66, -0.85),
-            scale=0.038,
-            fg=(1.0, 0.90, 0.35, 1.0),
-            shadow=(0, 0, 0, 0.95),
+        self.weapon_name_text = OnscreenText(
+            text="[ 9mm 택티컬 권총 ]",
+            pos=(1.64, -0.795),
+            scale=0.036,
+            fg=(0.40, 0.92, 1.0, 1.0),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ARight,
             mayChange=True,
+            **self.font_kw
+        )
+
+        self.ammo_text = OnscreenText(
+            text="탄약  12 / 12  [+36]",
+            pos=(1.64, -0.845),
+            scale=0.042,
+            fg=(1.0, 0.90, 0.35, 1.0),
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ARight,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.weapon_guide_text = OnscreenText(
+            text="[Q / 휠] 무기교체  [Z,X,C] 선택",
+            pos=(1.64, -0.890),
+            scale=0.026,
+            fg=(0.70, 0.78, 0.88, 0.85),
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ARight,
+            mayChange=False,
             **self.font_kw
         )
 
@@ -640,22 +691,85 @@ class UIManager:
         self.door_status_text = OnscreenText(
             text="",
             pos=(0, 0.66),
-            scale=0.034,
+            scale=0.038,
             fg=(1.0, 0.85, 0.2, 1.0),
-            shadow=(0, 0, 0, 0.95),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
         )
         self.door_status_text.hide()
 
-        # 알림/피격 텍스트 (화면 중앙 시야 방해 방지 -> 하단 퀵슬롯 위 배치)
+        # --- [ 거대 보스 전용 HP바 HUD (화면 최상단) ] ---
+        self.boss_hud_frame = DirectFrame(
+            parent=self.base.aspect2d,
+            frameColor=(0.04, 0.05, 0.08, 0.92),
+            frameSize=(-0.78, 0.78, -0.075, 0.075),
+            relief=DGG.RIDGE,
+            borderWidth=(0.004, 0.004),
+            pos=(0, 0, 0.86)
+        )
+        self.boss_hud_frame.setBin("fixed", 20)
+        self.boss_hud_frame.hide()
+
+        self.boss_name_text = OnscreenText(
+            text="[ ★ BOSS: 케이블 엔티티 - 심연의 지배자 ★ ]",
+            parent=self.boss_hud_frame,
+            pos=(0, 0.030),
+            scale=0.035,
+            fg=(1.0, 0.30, 0.30, 1.0),
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.boss_bar_bg = DirectFrame(
+            parent=self.boss_hud_frame,
+            frameColor=(0.10, 0.12, 0.15, 0.95),
+            frameSize=(-0.70, 0.70, -0.016, 0.016),
+            relief=DGG.FLAT,
+            pos=(0, 0, -0.015)
+        )
+
+        self.boss_bar_fill = DirectFrame(
+            parent=self.boss_hud_frame,
+            frameColor=(0.25, 0.85, 1.0, 1.0),
+            frameSize=(-0.70, 0.70, -0.014, 0.014),
+            relief=DGG.FLAT,
+            pos=(0, 0, -0.015)
+        )
+
+        self.boss_hp_text = OnscreenText(
+            text="3500 / 3500 (100.0%)",
+            parent=self.boss_hud_frame,
+            pos=(0, -0.054),
+            scale=0.024,
+            fg=(1.0, 0.90, 0.90, 1.0),
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 알림/피격/획득 텍스트 백플레이트 및 고가독성 텍스트
+        self.panel_hit_marker = DirectFrame(
+            parent=self.base.aspect2d,
+            frameColor=(0.03, 0.05, 0.08, 0.85),
+            frameSize=(-0.58, 0.58, -0.045, 0.045),
+            relief=DGG.RIDGE,
+            borderWidth=(0.003, 0.003),
+            pos=(0, 0, -0.66)
+        )
+        self.panel_hit_marker.setBin("fixed", 7)
+        self.panel_hit_marker.hide()
+
         self.hit_marker_text = OnscreenText(
             text="",
-            pos=(0, -0.74),
-            scale=0.026,
+            pos=(0, -0.672),
+            scale=0.036,
             fg=(1.0, 0.85, 0.2, 1.0),
-            shadow=(0, 0, 0, 0.95),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
@@ -664,9 +778,9 @@ class UIManager:
         self.blackout_banner = OnscreenText(
             text="[ ! 비상 경보: 정전 프로토콜 발동 ! ]\n기지 전력 차단! 붉은 비상등 가동 (몬스터 폭주 / 처치 보상 2배)",
             pos=(0, 0.74),
-            scale=0.036,
+            scale=0.040,
             fg=(1.0, 0.15, 0.15, 1.0),
-            shadow=(0, 0, 0, 0.95),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
@@ -674,13 +788,23 @@ class UIManager:
         self.blackout_banner.hide()
         self.blackout_pulse_timer = 0.0
 
-        # 인게임 전술 퀵슬롯 HUD (소모품 수량 실시간 표시, 1920x1080 하단 중앙)
+        # 인게임 전술 퀵슬롯 HUD 백플레이트 패널 (1920x1080 하단 중앙)
+        self.panel_quickslot = DirectFrame(
+            parent=self.base.aspect2d,
+            frameColor=(0.04, 0.06, 0.09, 0.82),
+            frameSize=(-0.84, 0.84, -0.044, 0.044),
+            relief=DGG.RIDGE,
+            borderWidth=(0.003, 0.003),
+            pos=(0, 0, -0.86)
+        )
+        self.panel_quickslot.setBin("fixed", 6)
+
         self.quickslot_text = OnscreenText(
-            text="[1] 응급키트: 2개  |  [2] 아드레날린: 1개  |  [3] 탄약팩: 2개  |  [4] 수류탄: 1개  |  [Tab/I] 배낭",
-            pos=(0, -0.86),
-            scale=0.028,
-            fg=(0.35, 0.95, 1.0, 0.95),
-            shadow=(0, 0, 0, 0.95),
+            text="[1] 응급키트: 2개  |  [2] 아드레날린: 1개  |  [3] 탄약팩: 2개  |  [4] 수류탄: 1개  |  [Tab] 배낭",
+            pos=(0, -0.872),
+            scale=0.034,
+            fg=(0.35, 0.95, 1.0, 1.0),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
@@ -697,13 +821,24 @@ class UIManager:
         )
         self.guide_text.hide()
 
-        # 상호작용 프롬프트 ([E] 전술 보급 상자 개봉 등)
+        # 상호작용 프롬프트 백플레이트 패널 ([E] 전술 보급 상자 개봉 등)
+        self.panel_interact = DirectFrame(
+            parent=self.base.aspect2d,
+            frameColor=(0.03, 0.05, 0.08, 0.88),
+            frameSize=(-0.52, 0.52, -0.048, 0.048),
+            relief=DGG.RIDGE,
+            borderWidth=(0.003, 0.003),
+            pos=(0, 0, -0.42)
+        )
+        self.panel_interact.setBin("fixed", 8)
+        self.panel_interact.hide()
+
         self.interact_prompt_text = OnscreenText(
             text="",
-            pos=(0, -0.38),
-            scale=0.034,
+            pos=(0, -0.435),
+            scale=0.040,
             fg=(0.35, 1.0, 0.65, 1.0),
-            shadow=(0, 0, 0, 0.95),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
@@ -714,9 +849,9 @@ class UIManager:
         self.style_kill_banner = OnscreenText(
             text="",
             pos=(0, 0.48),
-            scale=0.046,
+            scale=0.048,
             fg=(1.0, 0.85, 0.2, 1.0),
-            shadow=(0, 0, 0, 0.95),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
@@ -724,14 +859,24 @@ class UIManager:
         self.style_kill_banner.hide()
         self.style_kill_timer = 0.0
 
-        # 전술 스킬 (Space 슬라이드 / G 수류탄) 쿨다운 HUD 인디케이터 (우하단 앵커링)
+        # 전술 스킬 쿨다운 HUD 백플레이트 패널 및 인디케이터
+        self.panel_skills = DirectFrame(
+            parent=self.base.aspect2d,
+            frameColor=(0.04, 0.06, 0.09, 0.80),
+            frameSize=(-0.38, 0.38, -0.038, 0.038),
+            relief=DGG.RIDGE,
+            borderWidth=(0.003, 0.003),
+            pos=(1.30, 0, -0.72)
+        )
+        self.panel_skills.setBin("fixed", 6)
+
         self.skills_status_text = OnscreenText(
             text="[SPACE] 슬라이드: READY   |   [G] 수류탄: READY",
-            pos=(1.68, -0.72),
-            scale=0.026,
+            pos=(1.30, -0.732),
+            scale=0.032,
             fg=(0.35, 1.0, 0.65, 0.95),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ARight,
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
         )
@@ -747,6 +892,30 @@ class UIManager:
             **self.font_kw
         )
         self.stage_clear_banner.hide()
+
+        # 불릿 타임 (시간 감속) HUD 배너 (화면 중앙 상단 네온 사이안)
+        self.panel_bullet_time = DirectFrame(
+            parent=self.base.aspect2d,
+            frameColor=(0.02, 0.08, 0.14, 0.88),
+            frameSize=(-0.45, 0.45, -0.040, 0.040),
+            relief=DGG.RIDGE,
+            borderWidth=(0.003, 0.003),
+            pos=(0, 0, 0.78)
+        )
+        self.panel_bullet_time.setBin("fixed", 8)
+        self.panel_bullet_time.hide()
+
+        self.bullet_time_text = OnscreenText(
+            text="[ BULLET TIME  0.35x ]",
+            pos=(0, 0.768),
+            scale=0.038,
+            fg=(0.25, 0.95, 1.0, 1.0),
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+        self.bullet_time_text.hide()
 
     def _setup_end_game_ui(self):
         """사망 및 승리 화면 UI"""
@@ -877,7 +1046,7 @@ class UIManager:
             image=('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="START GAME",
-            pos=(0, 0, 0.02),
+            pos=(0, 0, 0.08),
             scale=(0.54, 1, 0.075),
             text_scale=((0.075 / 0.54) * 0.46, 0.46),
             text_pos=(0, -0.14),
@@ -887,12 +1056,27 @@ class UIManager:
         )
         self.btn_start.setTransparency(TransparencyAttrib.MAlpha)
 
+        self.btn_test = DirectButton(
+            parent=self.intro_frame,
+            image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
+            text="TEST MODE (사격 시험장)",
+            pos=(0, 0, -0.06),
+            scale=(0.54, 1, 0.075),
+            text_scale=((0.075 / 0.54) * 0.44, 0.44),
+            text_pos=(0, -0.14),
+            text_fg=(0.35, 0.88, 1.0, 1.0),
+            command=self.on_test_mode if self.on_test_mode else self.on_start,
+            **self.btn_font_kw
+        )
+        self.btn_test.setTransparency(TransparencyAttrib.MAlpha)
+
         self.btn_rank = DirectButton(
             parent=self.intro_frame,
             image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="RANKING",
-            pos=(0, 0, -0.16),
+            pos=(0, 0, -0.20),
             scale=(0.54, 1, 0.075),
             text_scale=((0.075 / 0.54) * 0.46, 0.46),
             text_pos=(0, -0.14),
@@ -973,6 +1157,7 @@ class UIManager:
         nodes = [
             getattr(self, 'vignette_dark', None),
             getattr(self, 'vignette_blood', None),
+            getattr(self, 'vignette_bullet_time', None),
             getattr(self, 'crosshair', None),
             getattr(self, 'panel_hud_top', None),
             getattr(self, 'icon_radar', None),
@@ -994,8 +1179,12 @@ class UIManager:
             getattr(self, 'relic_badge_text', None),
             getattr(self, 'panel_hud_ammo', None),
             getattr(self, 'icon_ammo', None),
+            getattr(self, 'weapon_name_text', None),
             getattr(self, 'ammo_text', None),
+            getattr(self, 'weapon_guide_text', None),
+            getattr(self, 'panel_skills', None),
             getattr(self, 'skills_status_text', None),
+            getattr(self, 'panel_quickslot', None),
             getattr(self, 'quickslot_text', None),
         ]
         for n in nodes:
@@ -1011,10 +1200,20 @@ class UIManager:
                 self.bar_fill_defense.hide()
             if hasattr(self, 'door_status_text') and self.door_status_text:
                 self.door_status_text.hide()
+            if hasattr(self, 'panel_interact') and self.panel_interact:
+                self.panel_interact.hide()
             if hasattr(self, 'interact_prompt_text') and self.interact_prompt_text:
                 self.interact_prompt_text.hide()
+            if hasattr(self, 'panel_hit_marker') and self.panel_hit_marker:
+                self.panel_hit_marker.hide()
+            if hasattr(self, 'hit_marker_text') and self.hit_marker_text:
+                self.hit_marker_text.setText("")
             if hasattr(self, 'style_kill_banner') and self.style_kill_banner:
                 self.style_kill_banner.hide()
+            if hasattr(self, 'bullet_time_text') and self.bullet_time_text:
+                self.bullet_time_text.hide()
+            if hasattr(self, 'panel_bullet_time') and self.panel_bullet_time:
+                self.panel_bullet_time.hide()
             if hasattr(self, 'inv_modal') and self.inv_modal:
                 self.inv_modal.hide()
 
@@ -1057,7 +1256,14 @@ class UIManager:
         c = fg if fg is not None else (color if color is not None else (1.0, 0.85, 0.2, 1.0))
         self.hit_marker_text.setText(text)
         self.hit_marker_text.setFg(c)
-        self.hit_marker_timer = 1.4
+        if text:
+            if hasattr(self, 'panel_hit_marker') and self.panel_hit_marker:
+                self.panel_hit_marker.show()
+            self.hit_marker_timer = 1.6
+        else:
+            if hasattr(self, 'panel_hit_marker') and self.panel_hit_marker:
+                self.panel_hit_marker.hide()
+            self.hit_marker_timer = 0.0
 
     def show_damage_direction(self, source_pos, player_pos, camera_heading):
         """플레이어 피격 시 공격자가 위치한 3D 월드 방향을 실시간 추적하는 붉은색 전술 인디케이터 표시"""
@@ -1176,6 +1382,8 @@ class UIManager:
             self.hit_marker_timer -= dt
             if self.hit_marker_timer <= 0.0:
                 self.hit_marker_text.setText("")
+                if hasattr(self, 'panel_hit_marker') and self.panel_hit_marker:
+                    self.panel_hit_marker.hide()
 
         if hasattr(self, 'style_kill_timer') and self.style_kill_timer > 0.0:
             self.style_kill_timer = max(0.0, self.style_kill_timer - dt)
@@ -1195,25 +1403,55 @@ class UIManager:
         self.style_kill_banner.show()
         self.style_kill_timer = 1.8
 
-    def update_skills_hud(self, slide_ready, grenade_timer, grenade_max=9.0):
-        """슬라이드 및 수류탄 쿨다운 실시간 텍스트 갱신"""
+    def update_skills_hud(self, slide_ready, grenade_param=0.0, grenade_max=9.0, grenade_count=None):
+        """슬라이드 및 수류탄 잔여 수량/상태 실시간 텍스트 갱신"""
         slide_str = "READY" if slide_ready else "COOL"
-        gr_str = "READY" if grenade_timer <= 0.0 else f"{grenade_timer:.1f}s"
-        txt = f"[SPACE] 슬라이드: {slide_str}   |   [G] 수류탄: {gr_str}"
-        self.skills_status_text.setText(txt)
-        if slide_ready and grenade_timer <= 0.0:
-            self.skills_status_text.setFg((0.35, 1.0, 0.65, 0.95))
+
+        if grenade_count is not None:
+            g_cnt = grenade_count
+        elif isinstance(grenade_param, int):
+            g_cnt = grenade_param
         else:
-            self.skills_status_text.setFg((1.0, 0.85, 0.40, 0.95))
+            g_cnt = None
+
+        if g_cnt is not None:
+            if g_cnt > 0:
+                gr_str = f"x{g_cnt} (투척 가능)"
+                is_ready = True
+            else:
+                gr_str = "0개 (소진)"
+                is_ready = False
+        else:
+            if grenade_param <= 0.0:
+                gr_str = "READY"
+                is_ready = True
+            else:
+                gr_str = f"{grenade_param:.1f}s"
+                is_ready = False
+
+        txt = f"[SPACE] 슬라이드: {slide_str}   |   [G] 수류탄: {gr_str}"
+        if txt != getattr(self, '_cached_skills_txt', ''):
+            self.skills_status_text.setText(txt)
+            self._cached_skills_txt = txt
+            if slide_ready and is_ready:
+                self.skills_status_text.setFg((0.35, 1.0, 0.65, 1.0))
+            elif not is_ready:
+                self.skills_status_text.setFg((1.0, 0.45, 0.35, 1.0))
+            else:
+                self.skills_status_text.setFg((1.0, 0.85, 0.35, 1.0))
 
     def show_interact_prompt(self, text="[ E ] 전술 보급 상자 개봉"):
         """현장 상호작용 가능한 물체 접근 시 프롬프트 표시"""
         self.interact_prompt_text.setText(text)
         self.interact_prompt_text.show()
+        if hasattr(self, 'panel_interact') and self.panel_interact:
+            self.panel_interact.show()
 
     def hide_interact_prompt(self):
         """상호작용 범위 벗어남 시 프롬프트 숨김"""
         self.interact_prompt_text.hide()
+        if hasattr(self, 'panel_interact') and self.panel_interact:
+            self.panel_interact.hide()
 
     def show_blackout_warning(self):
         """정전 프로토콜 발동 경고 배너 표시"""
@@ -1233,6 +1471,53 @@ class UIManager:
             names = [f"{CURSED_RELICS[rid]['icon']} {CURSED_RELICS[rid]['name']}" for rid in relic_ids if rid in CURSED_RELICS]
             self.relic_badge_text.setText(f"[유물]  {'  '.join(names)}")
             self.relic_badge_text.setFg((0.95, 0.75, 1.0, 1.0))
+
+    def update_perk_badges(self, perk_ids):
+        """플레이어가 획득한 로그라이크 전술 퍽 HUD 텍스트 갱신"""
+        if not hasattr(self, 'perk_badge_text') or not self.perk_badge_text:
+            return
+        if not perk_ids:
+            self.perk_badge_text.setText("[장착 퍽] 없음")
+            self.perk_badge_text.setFg((0.6, 0.6, 0.6, 0.8))
+        else:
+            names = [f"{PERK_CATALOG[pid]['icon']} {PERK_CATALOG[pid]['name']}" for pid in perk_ids if pid in PERK_CATALOG]
+            self.perk_badge_text.setText(f"[퍽]  {'  '.join(names)}")
+            self.perk_badge_text.setFg((0.35, 0.90, 1.0, 1.0))
+
+    def show_boss_hp_bar(self, boss_name="[ ☠ BOSS: 케이블 엔티티 - 심연의 지배자 ☠ ]", hp=None, max_hp=None):
+        """보스 출현 시 상단 전용 체력바 표시"""
+        if hasattr(self, 'boss_hud_frame') and self.boss_hud_frame:
+            self.boss_name_text.setText(boss_name)
+            self.boss_hud_frame.show()
+            if hp is not None and max_hp is not None:
+                self.update_boss_hp(hp, max_hp)
+
+    def update_boss_hp(self, hp, max_hp, phase=1):
+        """보스 체력 및 페이즈 실시간 갱신"""
+        if not hasattr(self, 'boss_hud_frame') or not self.boss_hud_frame:
+            return
+        if self.boss_hud_frame.isHidden():
+            self.boss_hud_frame.show()
+
+        pct = max(0.0, min(1.0, hp / max(1.0, max_hp)))
+        fill_width = 1.40 * pct
+        self.boss_bar_fill["frameSize"] = (-0.70, -0.70 + fill_width, -0.014, 0.014)
+
+        if phase == 2:
+            self.boss_bar_fill["frameColor"] = (1.0, 0.15, 0.15, 1.0)
+            self.boss_name_text.setText("[ ★ BOSS: 케이블 엔티티 - BERSERK 폭주 ★ ]")
+            self.boss_name_text.setFg((1.0, 0.20, 0.20, 1.0))
+        else:
+            self.boss_bar_fill["frameColor"] = (0.25, 0.85, 1.0, 1.0)
+            self.boss_name_text.setText("[ ★ BOSS: 케이블 엔티티 - 심연의 지배자 ★ ]")
+            self.boss_name_text.setFg((0.40, 0.90, 1.0, 1.0))
+
+        self.boss_hp_text.setText(f"{int(hp)} / {int(max_hp)} ({pct*100:.1f}%)")
+
+    def hide_boss_hp_bar(self):
+        """보스 사망 시 상단 체력바 숨김"""
+        if hasattr(self, 'boss_hud_frame') and self.boss_hud_frame:
+            self.boss_hud_frame.hide()
 
     def show_stage_banner(self, text, color=(0.3, 1.0, 0.5, 1.0)):
         """스테이지 클리어/시작 배너 표시"""
@@ -1267,7 +1552,10 @@ class UIManager:
         secs = int(time_left) % 60
         t_str = f"{mins:02d}:{secs:02d}"
 
-        if time_left <= 10.0:
+        if time_left >= 9000.0:
+            col = (0.35, 0.90, 1.0, 1.0)
+            msg = "TEST MODE"
+        elif time_left <= 10.0:
             flash = (int(time_left * 4) % 2 == 0)
             col = (1.0, 0.2, 0.2, 1.0) if flash else (1.0, 0.8, 0.8, 1.0)
             msg = f"! {t_str} !"
@@ -1285,32 +1573,63 @@ class UIManager:
             self.timer_text.setFg(col)
             self._cached_timer_col = col
 
-    def update_ammo(self, ammo, max_ammo, reserve_ammo=0):
-        if reserve_ammo > 0:
-            msg = f"{ammo} / {max_ammo}  (+{reserve_ammo})"
+    def set_bullet_time_hud(self, is_active, time_left=0.0):
+        """불릿 타임 (시간 감속) HUD 배너 및 일렉트릭 사이안 시공간 비네트 실시간 갱신"""
+        if is_active and time_left > 0.0:
+            pulse = 0.52 + 0.18 * math.sin(time.time() * 9.0)
+            if hasattr(self, 'vignette_bullet_time') and self.vignette_bullet_time:
+                self.vignette_bullet_time.setColorScale(0.18, 0.85, 1.0, pulse)
+                self.vignette_bullet_time.show()
+            self.bullet_time_text.setText(f">> [ BULLET TIME : {time_left:.1f}s (0.35x) ] <<")
+            self.bullet_time_text.show()
+            self.panel_bullet_time.show()
         else:
-            msg = f"{ammo} / {max_ammo}"
+            if hasattr(self, 'vignette_bullet_time') and self.vignette_bullet_time:
+                self.vignette_bullet_time.setColorScale(0.18, 0.85, 1.0, 0.0)
+                self.vignette_bullet_time.hide()
+            self.bullet_time_text.hide()
+            self.panel_bullet_time.hide()
+
+    def update_ammo(self, ammo, max_ammo, reserve_ammo=0, overcharge_rounds=0, weapon_name=None):
+        if weapon_name and hasattr(self, 'weapon_name_text') and self.weapon_name_text:
+            if weapon_name != getattr(self, '_cached_weapon_name', ''):
+                self.weapon_name_text.setText(f"[ {weapon_name} ]")
+                self._cached_weapon_name = weapon_name
+
+        if overcharge_rounds > 0:
+            msg = f"★오버차지: {overcharge_rounds}발★  {ammo}/{max_ammo} [+{reserve_ammo}]"
+            col = (0.25, 0.95, 1.0, 1.0)
+        elif ammo == 0:
+            msg = f"탄약  0 / {max_ammo}  [ R 장전 필요! ]"
+            col = (1.0, 0.20, 0.20, 1.0)
+        elif ammo <= 3:
+            msg = f"탄약  {ammo} / {max_ammo}  [+{reserve_ammo}] (R)"
+            col = (1.0, 0.45, 0.25, 1.0)
+        elif reserve_ammo > 0:
+            msg = f"탄약  {ammo} / {max_ammo}  [+{reserve_ammo}]"
+            col = (1.0, 0.90, 0.35, 1.0)
+        else:
+            msg = f"탄약  {ammo} / {max_ammo}"
+            col = (1.0, 0.90, 0.35, 1.0)
+
         if msg != self._cached_ammo_str:
             self.ammo_text.setText(msg)
-            if ammo <= 3:
-                self.ammo_text.setFg((1.0, 0.25, 0.25, 1.0))
-            else:
-                self.ammo_text.setFg((1.0, 0.90, 0.35, 1.0))
             self._cached_ammo_str = msg
+        self.ammo_text.setFg(col)
 
     def update_stamina(self, stamina, max_stamina, is_sprinting=False, is_exhausted=False):
         pct = max(0.0, min(1.0, stamina / max(1.0, max_stamina)))
-        self._set_bar_percentage(self.bar_fill_stamina, pct, -1.34, 0.81, 0.30, 0.026)
+        self._set_bar_percentage(self.bar_fill_stamina, pct, -1.34, 0.80, 0.30, 0.028)
 
         stamina_pct = int(pct * 100)
         if is_exhausted:
-            msg = f"{stamina_pct}% (탈진!)"
+            msg = f"STM  {stamina_pct}% (탈진!)"
             col = (1.0, 0.25, 0.25, 1.0)
         elif is_sprinting:
-            msg = f"{stamina_pct}% (달리기)"
+            msg = f"STM  {stamina_pct}% (질주)"
             col = (1.0, 0.85, 0.2, 1.0)
         else:
-            msg = f"{stamina_pct}%"
+            msg = f"STM  {stamina_pct}%"
             col = (0.35, 0.95, 0.5, 0.95)
 
         if msg != self._cached_stamina_str:
@@ -1320,10 +1639,10 @@ class UIManager:
             self.stamina_text.setFg(col)
             self._cached_stamina_col = col
 
-    def update_hp_exp(self, hp, max_hp, exp, exp_to_next, level=1, stat_points=0):
+    def update_hp_exp(self, hp, max_hp, exp, exp_to_next, level=1, stat_points=0, pending_perks=0):
         pct_hp = max(0.0, min(1.0, hp / max(1.0, max_hp)))
-        self._set_bar_percentage(self.bar_fill_hp, pct_hp, -1.34, 0.88, 0.30, 0.026)
-        msg_hp = f"{int(hp)} / {int(max_hp)}"
+        self._set_bar_percentage(self.bar_fill_hp, pct_hp, -1.34, 0.88, 0.30, 0.028)
+        msg_hp = f"HP  {int(hp)} / {int(max_hp)}"
         if msg_hp != self._cached_hp_str:
             self.hp_text.setText(msg_hp)
             if pct_hp <= 0.25:
@@ -1331,19 +1650,26 @@ class UIManager:
             elif pct_hp <= 0.55:
                 self.hp_text.setFg((1.0, 0.85, 0.2, 1.0))
             else:
-                self.hp_text.setFg((0.20, 0.95, 0.40, 1.0))
+                self.hp_text.setFg((0.25, 1.0, 0.45, 1.0))
             self._cached_hp_str = msg_hp
 
         pct_exp = max(0.0, min(1.0, exp / max(1.0, exp_to_next)))
-        self._set_bar_percentage(self.bar_fill_exp, pct_exp, -1.34, 0.74, 0.30, 0.026)
-        sp_tag = f" [스탯 +{stat_points}]" if stat_points > 0 else ""
-        msg_exp = f"[LV.{level}] {int(exp)}/{int(exp_to_next)}{sp_tag}"
+        self._set_bar_percentage(self.bar_fill_exp, pct_exp, -1.34, 0.72, 0.30, 0.028)
+        perk_tag = f"  ★ [퍽 선택 가능({pending_perks})] ★" if pending_perks > 0 else ""
+        msg_exp = f"[LV.{level}] EXP  {int(exp)} / {int(exp_to_next)}{perk_tag}"
         if msg_exp != self._cached_exp_str:
             self.exp_text.setText(msg_exp)
+            if pending_perks > 0:
+                self.exp_text.setFg((1.0, 0.90, 0.30, 1.0))
+            else:
+                self.exp_text.setFg((0.85, 0.70, 1.0, 1.0))
             self._cached_exp_str = msg_exp
 
     def update_hud(self, px, py, escape_pos=None, heading=0.0):
-        if escape_pos:
+        if escape_pos == "TEST":
+            msg = "[ TEST RANGE : 몬스터 사격/관찰 시험장 ]"
+            col = (0.35, 0.90, 1.0, 1.0)
+        elif escape_pos:
             dx = escape_pos[0] - px
             dy = escape_pos[1] - py
             dist = math.hypot(dx, dy)
@@ -1483,249 +1809,169 @@ class UIManager:
         else:
             self.intro_frame.show()
 
-    # --- [스테이지 클리어: 스탯 분배 상점 모달 (이미지 기반 배경/카드/버튼)] ---
+    # --- [로그라이크 전술 퍽(Perk) 3-Card 선택 모달 시스템 (1920x1080 FHD 최적화)] ---
     def _setup_shop_ui(self):
         self.shop_player = None
         self.shop_combat = None
         self.on_shop_confirm = None
         self.on_escape_victory = None
+        self.offered_perks = []
+        self.selected_perk_idx = -1
 
         self.shop_modal = DirectFrame(
             image='assets/ui/panel_modal_bg.png',
             relief=None,
-            frameSize=(-1.54, 1.54, -0.88, 0.88),
-            image_scale=(1.54, 1.0, 0.88),
+            frameSize=(-1.62, 1.62, -0.92, 0.92),
+            image_scale=(1.62, 1.0, 0.92),
             scale=(1.0, 1, 1.0),
             pos=(0, 0, 0)
         )
         self.shop_modal.setTransparency(TransparencyAttrib.MAlpha)
 
         self.shop_title = OnscreenText(
-            text="[ STAGE CLEAR! 스탯 분배 및 보급소 ]",
+            text="[ ★ ROGUELIKE PERK PROTOCOL : 전술 퍽 선택 ★ ]",
             parent=self.shop_modal,
-            pos=(0, 0.72),
+            pos=(0, 0.74),
             scale=0.042,
             fg=(1.0, 0.85, 0.25, 1.0),
             shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
+            mayChange=True,
             **self.font_kw
         )
 
         self.shop_desc = OnscreenText(
-            text="비상탈출구를 사수했습니다! 스탯 포인트를 분배하고 고대 미궁의 저주받은 유물을 선택하세요.",
+            text="심연의 미궁을 돌파하기 위한 전술 강화 퍽을 1장 선택하세요 (키보드 [1], [2], [3] 번호키 또는 마우스 클릭)",
             parent=self.shop_modal,
-            pos=(0, 0.64),
+            pos=(0, 0.65),
             scale=0.026,
             fg=(0.85, 0.88, 0.92, 0.95),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ACenter,
-            **self.font_kw
-        )
-
-        # 보유 스탯 포인트 표시
-        self.shop_stat_points_text = OnscreenText(
-            text="[ 보유 스탯 포인트: 0 P ]",
-            parent=self.shop_modal,
-            pos=(0, 0.55),
-            scale=0.034,
-            fg=(1.0, 0.88, 0.25, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
         )
 
-        btn_alloc_style = {
+        # 3장의 대형 퍽 카드 (1920x1080 화면에 최적화된 3열 와이드 배치)
+        self.perk_cards = []
+        card_xs = [-1.02, 0.0, 1.02]
+
+        btn_perk_style = {
             "image": ('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
             "relief": None,
-            "scale": (0.24, 1, 0.048),
-            "text_scale": ((0.048 / 0.24) * 0.48, 0.48),
-            "text_pos": (0, -0.14)
+            "scale": (0.36, 1, 0.052),
+            "text_scale": ((0.052 / 0.36) * 0.46, 0.46),
+            "text_pos": (0, -0.15)
         }
-
-        # --- 1단: 스탯 강화 4종 (1920x1080 2열 와이드 그리드 배치) ---
-        # 1-1. 공격력 (좌측)
-        self.stat_label_atk = OnscreenText(
-            text="[공격력] 현재: 35 (+5)",
-            parent=self.shop_modal,
-            pos=(-1.36, 0.44),
-            scale=0.028,
-            fg=(1.0, 0.80, 0.40, 1.0),
-            align=TextNode.ALeft,
-            mayChange=True,
-            **self.font_kw
-        )
-        self.btn_alloc_atk = DirectButton(
-            parent=self.shop_modal,
-            text="[ +1 강화 ]",
-            pos=(-0.42, 0, 0.45),
-            text_fg=(1.0, 0.85, 0.4, 1.0),
-            command=self._allocate,
-            extraArgs=["ATK"],
-            **btn_alloc_style,
-            **self.btn_font_kw
-        )
-        self.btn_alloc_atk.setTransparency(TransparencyAttrib.MAlpha)
-
-        # 1-2. 이동 속도 (좌측 하단)
-        self.stat_label_spd = OnscreenText(
-            text="[이동 속도] 현재: 100% (+8%)",
-            parent=self.shop_modal,
-            pos=(-1.36, 0.33),
-            scale=0.028,
-            fg=(0.45, 0.85, 1.0, 1.0),
-            align=TextNode.ALeft,
-            mayChange=True,
-            **self.font_kw
-        )
-        self.btn_alloc_spd = DirectButton(
-            parent=self.shop_modal,
-            text="[ +1 강화 ]",
-            pos=(-0.42, 0, 0.34),
-            text_fg=(0.45, 0.85, 1.0, 1.0),
-            command=self._allocate,
-            extraArgs=["SPD"],
-            **btn_alloc_style,
-            **self.btn_font_kw
-        )
-        self.btn_alloc_spd.setTransparency(TransparencyAttrib.MAlpha)
-
-        # 1-3. 최대 체력 (우측)
-        self.stat_label_hp = OnscreenText(
-            text="[최대 체력] 현재: 100 (+25)",
-            parent=self.shop_modal,
-            pos=(0.04, 0.44),
-            scale=0.028,
-            fg=(0.40, 1.0, 0.60, 1.0),
-            align=TextNode.ALeft,
-            mayChange=True,
-            **self.font_kw
-        )
-        self.btn_alloc_hp = DirectButton(
-            parent=self.shop_modal,
-            text="[ +1 강화 ]",
-            pos=(0.98, 0, 0.45),
-            text_fg=(0.4, 1.0, 0.6, 1.0),
-            command=self._allocate,
-            extraArgs=["HP"],
-            **btn_alloc_style,
-            **self.btn_font_kw
-        )
-        self.btn_alloc_hp.setTransparency(TransparencyAttrib.MAlpha)
-
-        # 1-4. 최대 탄약 (우측 하단)
-        self.stat_label_ammo = OnscreenText(
-            text="[최대 탄약] 현재: 12발 (+2발)",
-            parent=self.shop_modal,
-            pos=(0.04, 0.33),
-            scale=0.028,
-            fg=(1.0, 0.92, 0.40, 1.0),
-            align=TextNode.ALeft,
-            mayChange=True,
-            **self.font_kw
-        )
-        self.btn_alloc_ammo = DirectButton(
-            parent=self.shop_modal,
-            text="[ +1 강화 ]",
-            pos=(0.98, 0, 0.34),
-            text_fg=(1.0, 0.92, 0.4, 1.0),
-            command=self._allocate,
-            extraArgs=["AMMO"],
-            **btn_alloc_style,
-            **self.btn_font_kw
-        )
-        self.btn_alloc_ammo.setTransparency(TransparencyAttrib.MAlpha)
-
-        # --- 2단: 저주받은 유물 선택 (3개 이미지 카드 와이드 배치) ---
-        self.relic_section_title = OnscreenText(
-            text="[ 고대 미궁의 저주받은 유물 (1개 선택 또는 다음 스테이지로 스킵) ]",
-            parent=self.shop_modal,
-            pos=(0, 0.22),
-            scale=0.030,
-            fg=(0.95, 0.72, 1.0, 1.0),
-            shadow=(0, 0, 0, 0.95),
-            align=TextNode.ACenter,
-            **self.font_kw
-        )
-
-        self.relic_cards = []
-        self.offered_relics = []
-        card_xs = [-0.98, 0.0, 0.98]
 
         for i in range(3):
             card_f = DirectFrame(
                 parent=self.shop_modal,
                 image='assets/ui/card_relic_bg.png',
                 relief=None,
-                frameSize=(-0.44, 0.44, -0.22, 0.22),
-                image_scale=(0.44, 1.0, 0.22),
-                pos=(card_xs[i], 0, -0.04),
+                frameSize=(-0.46, 0.46, -0.44, 0.44),
+                image_scale=(0.46, 1.0, 0.44),
+                pos=(card_xs[i], 0, 0.08),
                 scale=(1.0, 1, 1.0)
             )
             card_f.setTransparency(TransparencyAttrib.MAlpha)
 
+            # 희귀도 라벨 배지 (일반 / 희귀 / 영웅 / 전설)
+            r_rarity = OnscreenText(
+                text="[ 희귀 퍽 ]",
+                parent=card_f,
+                pos=(0, 0.34),
+                scale=0.026,
+                fg=(0.75, 0.40, 1.0, 1.0),
+                shadow=(0, 0, 0, 1.0),
+                align=TextNode.ACenter,
+                mayChange=True,
+                **self.font_kw
+            )
+
+            # 퍽 아이콘 & 이름
             r_title = OnscreenText(
-                text="",
+                text="◆ 도탄 사격",
                 parent=card_f,
-                pos=(0, 0.12),
-                scale=0.028,
-                fg=(1.0, 0.88, 0.35, 1.0),
+                pos=(0, 0.23),
+                scale=0.038,
+                fg=(1.0, 0.95, 0.85, 1.0),
+                shadow=(0, 0, 0, 1.0),
                 align=TextNode.ACenter,
                 mayChange=True,
                 **self.font_kw
             )
-            r_pro = OnscreenText(
-                text="",
+
+            # 카테고리 & 태그
+            r_category = OnscreenText(
+                text="[전술 사격] #도탄 #추적",
                 parent=card_f,
-                pos=(0, 0.03),
-                scale=0.024,
-                fg=(0.35, 1.0, 0.55, 1.0),
+                pos=(0, 0.14),
+                scale=0.023,
+                fg=(0.70, 0.80, 0.90, 0.95),
+                shadow=(0, 0, 0, 1.0),
                 align=TextNode.ACenter,
                 mayChange=True,
                 **self.font_kw
             )
-            r_con = OnscreenText(
-                text="",
+
+            # 퍽 효과 상세 설명
+            r_desc = OnscreenText(
+                text="벽면에 착탄한 탄환이 튕겨 반경 14m 이내의 가장 가까운 적을 자동 추적 타격합니다.",
                 parent=card_f,
-                pos=(0, -0.05),
-                scale=0.024,
-                fg=(1.0, 0.38, 0.38, 1.0),
+                pos=(0, 0.02),
+                scale=0.026,
+                fg=(0.92, 0.94, 0.96, 1.0),
+                shadow=(0, 0, 0, 1.0),
                 align=TextNode.ACenter,
+                wordwrap=14.5,
                 mayChange=True,
                 **self.font_kw
             )
+
+            # 선택 버튼
             r_btn = DirectButton(
                 parent=card_f,
-                image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
-                relief=None,
-                text="[ 선택 획득 ]",
-                pos=(0, 0, -0.14),
-                scale=(0.32, 1, 0.048),
-                text_scale=((0.048 / 0.32) * 0.48, 0.48),
-                text_pos=(0, -0.15),
-                text_fg=(0.95, 0.80, 1.0, 1.0),
-                command=self._select_relic,
+                text=f"[ {i+1}번 퍽 선택 (KEY {i+1}) ]",
+                pos=(0, 0, -0.32),
+                text_fg=(0.35, 1.0, 0.65, 1.0),
+                command=self._select_perk_card,
                 extraArgs=[i],
+                **btn_perk_style,
                 **self.btn_font_kw
             )
             r_btn.setTransparency(TransparencyAttrib.MAlpha)
 
-            self.relic_cards.append({
+            self.perk_cards.append({
                 "frame": card_f,
+                "rarity": r_rarity,
                 "title": r_title,
-                "pro": r_pro,
-                "con": r_con,
+                "category": r_category,
+                "desc": r_desc,
                 "btn": r_btn
             })
 
-        # 분배 안내 피드백 메시지
+        # 하단 1: 현재 보유 퍽 배지 목록
+        self.shop_owned_perks_text = OnscreenText(
+            text="[ 현재 장착 퍽: 없음 ]",
+            parent=self.shop_modal,
+            pos=(0, -0.42),
+            scale=0.028,
+            fg=(0.40, 0.88, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 하단 2: 선택 피드백 안내 메시지
         self.shop_msg_text = OnscreenText(
             text="",
             parent=self.shop_modal,
-            pos=(0, -0.34),
-            scale=0.026,
-            fg=(0.4, 1.0, 0.6, 1.0),
-            shadow=(0, 0, 0, 0.9),
+            pos=(0, -0.49),
+            scale=0.028,
+            fg=(0.35, 1.0, 0.55, 1.0),
+            shadow=(0, 0, 0, 0.95),
             align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
@@ -1737,7 +1983,7 @@ class UIManager:
             image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="다음 스테이지 시작 (START NEXT STAGE)",
-            pos=(0, 0, -0.48),
+            pos=(0, 0, -0.62),
             scale=(0.54, 1, 0.058),
             text_scale=((0.058 / 0.54) * 0.46, 0.46),
             text_pos=(0, -0.15),
@@ -1747,13 +1993,13 @@ class UIManager:
         )
         self.btn_start_next.setTransparency(TransparencyAttrib.MAlpha)
 
-        # 미궁 완전 탈출 승리 버튼 (STAGE 3 이상 클리어 시 선택 가능)
+        # 미궁 완전 탈출 승리 버튼 (STAGE 3 이상 클리어 시)
         self.btn_escape_victory = DirectButton(
             parent=self.shop_modal,
             image=('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="★ 미궁 완전 탈출 (VICTORY ESCAPE) ★",
-            pos=(0.35, 0, -0.48),
+            pos=(0.35, 0, -0.62),
             scale=(0.52, 1, 0.054),
             text_scale=((0.054 / 0.52) * 0.46, 0.46),
             text_pos=(0, -0.15),
@@ -1766,61 +2012,54 @@ class UIManager:
 
         self.shop_modal.hide()
 
-    def _refresh_shop_labels(self):
-        """플레이어의 현재 스탯과 보유 포인트를 UI 텍스트에 실시간 반영"""
+    def _refresh_owned_perks_label(self):
+        """보유 퍽 텍스트 실시간 갱신"""
         if not self.shop_player:
             return
-        sp = getattr(self.shop_player, 'stat_points', 0)
-        self.shop_stat_points_text.setText(f"[ 보유 스탯 포인트: {sp} P ]")
-        if sp > 0:
-            self.shop_stat_points_text.setFg((1.0, 0.88, 0.25, 1.0))
+        perks = getattr(self.shop_player, 'perks', set())
+        if not perks:
+            self.shop_owned_perks_text.setText("[ 현재 장착 퍽: 없음 ]")
+            self.shop_owned_perks_text.setFg((0.6, 0.6, 0.6, 0.9))
         else:
-            self.shop_stat_points_text.setFg((0.65, 0.65, 0.65, 0.9))
+            names = [f"{PERK_CATALOG[pid]['icon']} {PERK_CATALOG[pid]['name']}" for pid in perks if pid in PERK_CATALOG]
+            self.shop_owned_perks_text.setText(f"[ 현재 장착 퍽 ({len(perks)}개) ]  {'  •  '.join(names)}")
+            self.shop_owned_perks_text.setFg((0.35, 0.90, 1.0, 1.0))
 
-        atk = int(getattr(self.shop_player, 'attack_power', 35))
-        hp = int(getattr(self.shop_player, 'max_hp', 100))
-        spd_pct = int(getattr(self.shop_player, 'speed_mult', 1.0) * 100)
-        ammo = self.shop_combat.max_ammo if self.shop_combat else 12
-
-        self.stat_label_atk.setText(f"[공격력] 현재: {atk} (+5)")
-        self.stat_label_hp.setText(f"[최대 체력] 현재: {hp} (+25)")
-        self.stat_label_spd.setText(f"[이동 속도] 현재: {spd_pct}% (+8%)")
-        self.stat_label_ammo.setText(f"[최대 탄약] 현재: {ammo}발 (+2발)")
-
-    def _allocate(self, stat_type):
-        """스탯 1개 분배 클릭 이벤트"""
-        if not self.shop_player:
+    def _select_perk_card(self, card_idx):
+        """퍽 카드 선택 클릭 또는 키보드 [1, 2, 3] 이벤트"""
+        if card_idx >= len(self.offered_perks) or not self.shop_player:
             return
-        if self.shop_player.stat_points <= 0:
-            self.shop_msg_text.setText("남은 스탯 포인트가 없습니다! 몬스터를 처치하여 레벨업하세요.")
-            self.shop_msg_text.setFg((1.0, 0.35, 0.35, 1.0))
-            return
+        perk = self.offered_perks[card_idx]
+        self.shop_player.add_perk(perk["id"], self.shop_combat)
+        self.selected_perk_idx = card_idx
 
-        ok, msg = self.shop_player.allocate_stat(stat_type, self.shop_combat)
-        if ok:
-            self.shop_msg_text.setText(f"★ {msg}")
-            self.shop_msg_text.setFg((0.35, 1.0, 0.55, 1.0))
-        self._refresh_shop_labels()
-
-    def _select_relic(self, card_idx):
-        """저주받은 유물 선택 클릭 이벤트"""
-        if card_idx >= len(self.offered_relics) or not self.shop_player:
-            return
-        relic = self.offered_relics[card_idx]
-        self.shop_player.acquire_relic(relic["id"])
-
-        self.shop_msg_text.setText(f"★ [{relic['name']}] 유물을 장착했습니다! ({relic['desc']})")
-        self.shop_msg_text.setFg((0.95, 0.75, 1.0, 1.0))
-
-        # 모든 유물 카드 비활성화 및 활성화 카드 하이라이트
-        for idx, c in enumerate(self.relic_cards):
-            c["btn"]["state"] = DGG.DISABLED
+        # 카드 하이라이트 및 비활성화
+        for idx, card in enumerate(self.perk_cards):
+            card["btn"]["state"] = DGG.DISABLED
             if idx == card_idx:
-                c["frame"]["image"] = 'assets/ui/card_relic_active.png'
-                c["btn"]["text"] = "[ 장착 완료 ]"
+                card["frame"]["image"] = 'assets/ui/card_relic_active.png'
+                card["btn"]["text"] = "[ 장착 완료 ★ ]"
+                card["btn"]["text_fg"] = (1.0, 0.90, 0.25, 1.0)
             else:
-                c["btn"]["text"] = "[ 미선택 ]"
-        self._refresh_shop_labels()
+                card["btn"]["text"] = "[ 미선택 ]"
+                card["btn"]["text_fg"] = (0.5, 0.5, 0.5, 0.8)
+
+        self.shop_msg_text.setText(f"★ [{perk['name']}] 퍽 장착 완료! ({perk['desc'][:36]}...)")
+        self.shop_msg_text.setFg((0.35, 1.0, 0.55, 1.0))
+        self._refresh_owned_perks_label()
+
+        if hasattr(self, 'update_perk_badges'):
+            self.update_perk_badges(self.shop_player.perks)
+
+    def select_perk_by_key(self, key_num):
+        """키보드 [1], [2], [3] 입력 시 퍽 카드 즉시 선택"""
+        if self.shop_modal.isHidden():
+            return False
+        idx = key_num - 1
+        if 0 <= idx < len(self.offered_perks):
+            self._select_perk_card(idx)
+            return True
+        return False
 
     def _confirm_shop_and_start(self):
         self.hide_stage_clear_shop()
@@ -1833,41 +2072,53 @@ class UIManager:
             self.on_escape_victory()
 
     def show_stage_clear_shop(self, stage, player, combat, on_confirm_callback, on_victory_callback=None):
+        """스테이지 클리어 시 3장의 무작위 퍽 카드 제시"""
         self.shop_player = player
         self.shop_combat = combat
         self.on_shop_confirm = on_confirm_callback
         self.on_escape_victory = on_victory_callback
-        self.shop_title.setText(f"[ STAGE {stage} CLEAR! 스탯 분배 및 보급소 ]")
-        self.shop_msg_text.setText("")
-        self._refresh_shop_labels()
+        self.selected_perk_idx = -1
+
+        self.shop_title.setText(f"[ ★ STAGE {stage} CLEAR : 전술 퍽 프로토콜 ★ ]")
+        self.shop_msg_text.setText("원하는 퍽 카드를 1장 선택하세요 (키보드 [1], [2], [3] 또는 클릭)")
+        self.shop_msg_text.setFg((1.0, 0.85, 0.25, 1.0))
+        self._refresh_owned_perks_label()
 
         # STAGE 3 이상 클리어 시 미궁 완전 탈출 버튼 활성화
         if stage >= 3 and on_victory_callback is not None:
-            self.btn_start_next.setPos(-0.35, 0, -0.48)
+            self.btn_start_next.setPos(-0.35, 0, -0.62)
             self.btn_start_next["text"] = "심연 더 깊이 진입 (NEXT STAGE)"
-            self.btn_escape_victory.setPos(0.35, 0, -0.48)
+            self.btn_escape_victory.setPos(0.35, 0, -0.62)
             self.btn_escape_victory.show()
         else:
-            self.btn_start_next.setPos(0, 0, -0.48)
+            self.btn_start_next.setPos(0, 0, -0.62)
             self.btn_start_next["text"] = "다음 스테이지 시작 (START NEXT STAGE)"
             self.btn_escape_victory.hide()
 
-        # 미보유 유물 풀에서 무작위 3개 선별
-        acquired = set(getattr(player, 'relics', []))
-        available = [r for r in CURSED_RELICS.values() if r["id"] not in acquired]
-        pick_count = min(3, len(available))
-        self.offered_relics = random.sample(available, pick_count) if pick_count > 0 else []
+        # 퍽 풀에서 3장 무작위 추첨
+        p_perks = getattr(player, 'perks', set())
+        self.offered_perks = draw_random_perks(p_perks, count=3)
 
-        for i, card in enumerate(self.relic_cards):
+        for i, card in enumerate(self.perk_cards):
             card["frame"]["image"] = 'assets/ui/card_relic_bg.png'
-            if i < len(self.offered_relics):
-                relic = self.offered_relics[i]
+            if i < len(self.offered_perks):
+                perk = self.offered_perks[i]
                 card["frame"].show()
-                card["title"].setText(f"{relic['icon']} {relic['name']}")
-                card["pro"].setText(f"+ {relic['pro']}")
-                card["con"].setText(f"- {relic['con']}")
+                rarity = perk.get("rarity", "COMMON")
+                rarity_name = RARITY_NAMES.get(rarity, "일반 퍽")
+                rarity_col = RARITY_COLORS.get(rarity, (0.35, 0.85, 1.0, 1.0))
+
+                card["rarity"].setText(f"[ {rarity_name} ]")
+                card["rarity"].setFg(rarity_col)
+
+                card["title"].setText(f"{perk['icon']} {perk['name']}")
+                tags_str = " ".join([f"#{t}" for t in perk.get("tags", [])])
+                card["category"].setText(f"[{perk.get('category', '전술')}]  {tags_str}")
+                card["desc"].setText(perk["desc"])
+
                 card["btn"]["state"] = DGG.NORMAL
-                card["btn"]["text"] = "[ 선택 획득 ]"
+                card["btn"]["text"] = f"[ {i+1}번 퍽 선택 (KEY {i+1}) ]"
+                card["btn"]["text_fg"] = (0.35, 1.0, 0.65, 1.0)
             else:
                 card["frame"].hide()
 
@@ -2001,9 +2252,9 @@ class UIManager:
                 text=f"[{idx+1}]" if idx < 4 else "",
                 parent=slot_btn,
                 pos=(-0.38, 0.36),
-                scale=0.18,
+                scale=0.22,
                 fg=(0.40, 0.95, 1.0, 1.0),
-                shadow=(0, 0, 0, 0.95),
+                shadow=(0, 0, 0, 1.0),
                 align=TextNode.ALeft,
                 mayChange=True,
                 **self.font_kw
@@ -2013,9 +2264,9 @@ class UIManager:
                 text="",
                 parent=slot_btn,
                 pos=(0.38, -0.36),
-                scale=0.18,
+                scale=0.22,
                 fg=(1.0, 0.90, 0.35, 1.0),
-                shadow=(0, 0, 0, 0.95),
+                shadow=(0, 0, 0, 1.0),
                 align=TextNode.ARight,
                 mayChange=True,
                 **self.font_kw
@@ -2025,8 +2276,9 @@ class UIManager:
                 text="[ 빈 슬롯 ]",
                 parent=slot_btn,
                 pos=(0, -0.56),
-                scale=0.15,
+                scale=0.18,
                 fg=(0.70, 0.75, 0.82, 0.90),
+                shadow=(0, 0, 0, 1.0),
                 align=TextNode.ACenter,
                 mayChange=True,
                 **self.font_kw
@@ -2047,6 +2299,7 @@ class UIManager:
             pos=(1.08, 0.63),
             scale=0.038,
             fg=(0.40, 0.95, 0.60, 1.0),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ACenter,
             **self.font_kw
         )
@@ -2063,9 +2316,9 @@ class UIManager:
             text="[ 선택된 아이템 없음 ]",
             parent=self.inv_modal,
             pos=(1.08, 0.18),
-            scale=0.038,
+            scale=0.044,
             fg=(1.0, 1.0, 1.0, 1.0),
-            shadow=(0, 0, 0, 0.95),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
@@ -2075,8 +2328,9 @@ class UIManager:
             text="분류: -  |  보유 수량: -",
             parent=self.inv_modal,
             pos=(1.08, 0.10),
-            scale=0.027,
-            fg=(0.75, 0.82, 0.90, 0.90),
+            scale=0.032,
+            fg=(0.75, 0.85, 0.95, 0.95),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
@@ -2086,9 +2340,9 @@ class UIManager:
             text="아이템을 선택하면 상세 정보 및 사용법이 표시됩니다.",
             parent=self.inv_modal,
             pos=(0.58, 0.02),
-            scale=0.027,
+            scale=0.030,
             fg=(0.88, 0.92, 0.96, 0.95),
-            shadow=(0, 0, 0, 0.9),
+            shadow=(0, 0, 0, 1.0),
             align=TextNode.ALeft,
             wordwrap=24,
             mayChange=True,
@@ -2221,7 +2475,7 @@ class UIManager:
         spd_pct = int(getattr(p, 'speed_mult', 1.0) * (1.30 if getattr(p, 'speed_boost_timer', 0.0) > 0.0 else 1.0) * 100)
         stamina = int(getattr(p, 'stamina', 100))
         max_stamina = int(getattr(p, 'max_stamina', 100))
-        sp = getattr(p, 'stat_points', 0)
+        perks_count = len(getattr(p, 'perks', set()))
 
         ammo = c.ammo if c else 12
         max_ammo = c.max_ammo if c else 12
@@ -2233,12 +2487,14 @@ class UIManager:
             f"• 공격력: {atk} DMG  (기본: {int(getattr(p, 'attack_power', 35))})\n"
             f"• 이동 속도: {spd_pct}%\n"
             f"• 스테미나: {stamina} / {max_stamina}\n"
-            f"• 미분배 스탯: {sp} P\n"
+            f"• 장착 퍽: {perks_count}개 보유\n"
             f"-----------------------------------------\n"
-            f"[주무기] 9mm Tactical Combat Pistol\n"
-            f"• 장전 탄약: {ammo} / {max_ammo}발 (예비: {res_ammo}발)\n"
-            f"• 조준 기구: 3점 삼중수소 야간 조준기\n"
-            f"  (우클릭 시 100% 핀포인트 명중률)\n"
+            f"[장착 무기] {getattr(c, 'get_weapon_display_name', lambda: '9mm 택티컬 권총')() if c else '9mm 택티컬 권총'}\n"
+            f"• 탄약 상태: {ammo} / {max_ammo}발 (예비: {res_ammo}발)\n"
+            f"• 무기 스왑: [Q / 휠] 또는 [Z]권총 [X]쌍권총 [C]샷건\n"
+            f"• 1. 9mm 택티컬 권총 (12발 / 핀포인트 정밀 헤드샷)\n"
+            f"• 2. 아킴보 쌍권총 (24발 / 초고속 0.11s 교차 난사)\n"
+            f"• 3. 12G 전술 샷건 (8발 / 8발 산탄 224 극딜 펌프액션)\n"
             f"-----------------------------------------\n"
             f"[보조장비] M67 전술 파열 수류탄 [G]\n"
             f"[전술기동] 컴뱃 슬라이드 & 회피 [Space]"
@@ -2302,8 +2558,8 @@ class UIManager:
         for i, lbl in enumerate(self.inv_relic_labels):
             if i < len(relics):
                 rid = relics[i]
-                r_info = CURSED_RELICS.get(rid, {"name": rid, "icon": "🔮", "pro": "강화", "con": "저주"})
-                lbl.setText(f"{r_info.get('icon', '🔮')} {r_info.get('name', rid)}\n(+{r_info.get('pro', '')})")
+                r_info = CURSED_RELICS.get(rid, {"name": rid, "icon": "[유물]", "pro": "강화", "con": "저주"})
+                lbl.setText(f"{r_info.get('icon', '[유물]')} {r_info.get('name', rid)}\n(+{r_info.get('pro', '')})")
                 lbl.setFg((0.95, 0.80, 1.0, 1.0))
             else:
                 lbl.setText("[ 빈 유물 슬롯 ]\n(스테이지 클리어 시 획득)")
@@ -2316,6 +2572,6 @@ class UIManager:
             qs = item.get("quick_slot")
             if qs in counts:
                 counts[qs] = item.get("count", 0)
-        txt = f"[1] 응급키트: {counts[1]}개  |  [2] 아드레날린: {counts[2]}개  |  [3] 탄약팩: {counts[3]}개  |  [4] 수류탄: {counts[4]}개  |  [Tab/I] 배낭"
+        txt = f"[1] 응급키트: {counts[1]}개   |   [2] 아드레날린: {counts[2]}개   |   [3] 탄약팩: {counts[3]}개   |   [4] 수류탄: {counts[4]}개   |   [Tab] 배낭"
         if hasattr(self, 'quickslot_text'):
             self.quickslot_text.setText(txt)

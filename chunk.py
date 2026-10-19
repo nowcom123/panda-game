@@ -1,10 +1,10 @@
 import collections
-from panda3d.core import CardMaker, TextureStage, NodePath, LColor
+from panda3d.core import CardMaker, TextureStage, NodePath
 from constants import (
     CELL_SIZE, CHUNK_CELLS, CHUNK_SIZE, TIER_HEIGHT, WALL_HEIGHT, DOOR_HEIGHT, WALL_THICKNESS,
     MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
-from world_gen import zone_hash, get_edge_types, cell_has_pillar
+from world_gen import get_edge_types, cell_has_pillar
 
 
 
@@ -446,7 +446,6 @@ class Chunk:
 
         # 4. 드로우 콜 최적화 (청크 벽체 및 바닥/천장 지오메트리 병합)
         self.node.flattenStrong()
-        self.candle_positions = []
 
     def set_visible(self, visible):
         """1인칭 시야 렌더링 온/오프 상태 전환 (Panda3D 렌더 패스 스킵)"""
@@ -472,5 +471,3 @@ class Chunk:
         self.colliders.clear()
         if hasattr(self, 'cell_colliders'):
             self.cell_colliders.clear()
-        if hasattr(self, 'candle_positions'):
-            self.candle_positions.clear()

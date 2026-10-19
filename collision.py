@@ -118,10 +118,10 @@ def resolve_collision(chunks, curr_x, curr_y, dx, dy, radius=PLAYER_RADIUS):
 
 
 def raycast_walls(chunks, ray_origin, ray_dir, max_dist=55.0):
-    """광선(Ray)과 월드 내 AABB 벽체 충돌체 간 최단 교차 거리 및 타격 지점 정밀 계산"""
+    """광선(Ray)과 월드 내 AABB 벽체 충돌체 간 최단 교차 거리 및 타격 지점 고속 Slab 연산"""
     px, py = ray_origin.x, ray_origin.y
     dx, dy = ray_dir.x, ray_dir.y
-    if math.hypot(dx, dy) < 1e-4:
+    if (dx * dx + dy * dy) < 1e-8:
         return max_dist, None
 
     colliders = set()
@@ -132,34 +132,44 @@ def raycast_walls(chunks, ray_origin, ray_dir, max_dist=55.0):
         for col in get_nearby_colliders(chunks, sx, sy, search_dist=5.5):
             colliders.add(col)
 
+    inv_dx = (1.0 / dx) if abs(dx) >= 1e-6 else None
+    inv_dy = (1.0 / dy) if abs(dy) >= 1e-6 else None
     closest_t = max_dist
+
     for min_x, min_y, max_x, max_y in colliders:
         if (max_x - min_x) < 0.5 and (max_y - min_y) < 0.5:
             continue
-        p = [-dx, dx, -dy, dy]
-        q = [px - min_x, max_x - px, py - min_y, max_y - py]
-        t0, t1 = 0.0, max_dist
-        hit = True
-        for i in range(4):
-            if abs(p[i]) < 1e-6:
-                if q[i] < 0:
-                    hit = False
-                    break
+
+        # X축 Slab 판정
+        if inv_dx is None:
+            if px < min_x or px > max_x:
+                continue
+            tx_min, tx_max = 0.0, max_dist
+        else:
+            t1 = (min_x - px) * inv_dx
+            t2 = (max_x - px) * inv_dx
+            if t1 > t2:
+                tx_min, tx_max = t2, t1
             else:
-                t = q[i] / p[i]
-                if p[i] < 0:
-                    if t > t1:
-                        hit = False
-                        break
-                    if t > t0:
-                        t0 = t
-                else:
-                    if t < t0:
-                        hit = False
-                        break
-                    if t < t1:
-                        t1 = t
-        if hit and 0.2 < t0 <= t1 and t0 < closest_t:
+                tx_min, tx_max = t1, t2
+
+        # Y축 Slab 판정
+        if inv_dy is None:
+            if py < min_y or py > max_y:
+                continue
+            ty_min, ty_max = 0.0, max_dist
+        else:
+            t1 = (min_y - py) * inv_dy
+            t2 = (max_y - py) * inv_dy
+            if t1 > t2:
+                ty_min, ty_max = t2, t1
+            else:
+                ty_min, ty_max = t1, t2
+
+        t0 = max(0.0, tx_min, ty_min)
+        t1 = min(max_dist, tx_max, ty_max)
+
+        if 0.2 < t0 <= t1 and t0 < closest_t:
             hit_z = ray_origin.z + ray_dir.z * t0
             if 0.0 <= hit_z <= 13.0:
                 closest_t = t0

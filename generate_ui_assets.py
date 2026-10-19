@@ -1,6 +1,6 @@
 import os
 import math
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 UI_DIR = os.path.join("assets", "ui")
 os.makedirs(UI_DIR, exist_ok=True)

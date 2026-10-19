@@ -1,10 +1,30 @@
 import math
+import random
 import collections
 import functools
 
+_WORLD_SEED = random.randint(1, 0x7FFFFFFE)
+
+
+def set_world_seed(seed=None):
+    """월드 맵 생성 시드 설정 및 이전 맵 캐시 완전 초기화"""
+    global _WORLD_SEED
+    if seed is None:
+        _WORLD_SEED = random.randint(1, 0x7FFFFFFE)
+    else:
+        _WORLD_SEED = int(seed) & 0x7FFFFFFF
+    get_edge_types.cache_clear()
+    return _WORLD_SEED
+
+
+def get_world_seed():
+    """현재 활성화된 월드 시드 반환"""
+    return _WORLD_SEED
+
+
 def zone_hash(mx, my):
-    """3x3 매크로 구역 단위 고유 해시 생성"""
-    return ((mx * 73856093) ^ (my * 19349663) ^ 0x5bd1e995) & 0x7FFFFFFF
+    """3x3 매크로 구역 단위 고유 해시 생성 (월드 시드 반영)"""
+    return ((mx * 73856093) ^ (my * 19349663) ^ (_WORLD_SEED * 83492791) ^ 0x5bd1e995) & 0x7FFFFFFF
 
 
 def get_zone_type(mx, my):
@@ -231,10 +251,15 @@ def find_cell_path(start, goal, max_depth=20):
                     queue.append(nxt)
 
     if goal not in came_from:
-        return []
+        # 목표 지점이 최대 탐색 깊이 초과 등으로 미도달 시, 탐색된 셀들 중 목표 지점과의 맨해튼 거리가 가장 가까운 최적 노드로 경로 복원
+        best_node = min(came_from.keys(), key=lambda node: abs(node[0] - goal[0]) + abs(node[1] - goal[1]))
+        if best_node == start:
+            return []
+        c = best_node
+    else:
+        c = goal
 
     path = []
-    c = goal
     while c is not None:
         path.append(c)
         c = came_from[c]

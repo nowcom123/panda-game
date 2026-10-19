@@ -5,11 +5,11 @@ Player Controller Module
 """
 
 import math
-from panda3d.core import WindowProperties, Vec3, KeyboardButton, LColor
+from panda3d.core import WindowProperties, Vec3, KeyboardButton
 from constants import (
-    PLAYER_RADIUS, PLAYER_EYE_HEIGHT, WALK_SPEED, SPRINT_SPEED, WALL_HEIGHT
+    PLAYER_RADIUS, PLAYER_EYE_HEIGHT, WALK_SPEED, SPRINT_SPEED
 )
-from collision import resolve_collision, raycast_walls
+from collision import resolve_collision
 
 
 ITEM_CATALOG = {
@@ -32,7 +32,7 @@ ITEM_CATALOG = {
         "rarity_color": (0.25, 0.85, 1.0, 1.0),
         "icon": "assets/ui/item_adrenaline.png",
         "max_count": 3,
-        "desc": "전투 호르몬 자동 주입기.\n사용 시 스테미나 100% 즉시 회복 및\n10초간 이동 속도 +30% 가속 버프 부여.\n[단축키 2번]으로 즉시 사용 가능.",
+        "desc": "전투 호르몬 자동 주입기.\n사용 시 스테미나 100% 즉시 회복,\n4.5초간 불릿 타임(시간 감속) 발동 및\n오버차지 고폭탄 4발 장전.\n[단축키 2번]으로 즉시 사용 가능.",
         "quick_slot": 2
     },
     "ammo_pack": {
@@ -53,8 +53,8 @@ ITEM_CATALOG = {
         "rarity": "UNCOMMON",
         "rarity_color": (0.65, 0.95, 0.25, 1.0),
         "icon": "assets/ui/item_grenade.png",
-        "max_count": 4,
-        "desc": "반경 6.5m 대인 살상 파열 수류탄.\n사용 시 수류탄 쿨다운을 즉시 리셋하고 즉시 투척 준비를 마칩니다.\n[단축키 4번]으로 즉시 사용 가능.",
+        "max_count": 10,
+        "desc": "반경 6.5m 대인 살상 파열 수류탄.\n쿨타임 없이 보유 개수만큼 [G] 키로 연속 투척 가능.\n[단축키 4번]으로도 즉시 투척.",
         "quick_slot": 4
     },
     "combat_stim": {
@@ -100,7 +100,10 @@ class PlayerController:
         self.attack_power = 35.0
         self.speed_mult = 1.0
         self.invincible_timer = 0.0
-        self.stat_points = 0  # 레벨업 시 획득하여 스테이지 클리어 상점에서 분배하는 포인트
+        self.perks = set()  # 보유한 로그라이크 전술 퍽 ID 집합
+        self.perk_levels = {}
+        self.pending_perk_picks = 0  # 레벨업 시 누적되어 카드 선택을 기다리는 퍽 포인트
+        self.on_level_up = None
         self.relics = []      # 보유한 저주받은 유물 ID 목록
         self.hp_drain_accum = 0.0
 
@@ -130,7 +133,7 @@ class PlayerController:
             dict(ITEM_CATALOG["medkit"], count=2),
             dict(ITEM_CATALOG["adrenaline"], count=1),
             dict(ITEM_CATALOG["ammo_pack"], count=2),
-            dict(ITEM_CATALOG["frag_grenade"], count=1),
+            dict(ITEM_CATALOG["frag_grenade"], count=3),
         ]
         self.speed_boost_timer = 0.0
         self.stim_boost_timer = 0.0
@@ -141,8 +144,8 @@ class PlayerController:
             "shift": 0
         }
 
-    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_inventory=None, on_quick_use=None, on_grenade=None, on_escape=None, on_interact=None):
-        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 인벤토리, 퀵슬롯, 슬라이드, 수류탄, 상호작용)"""
+    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_inventory=None, on_quick_use=None, on_grenade=None, on_escape=None, on_interact=None, on_weapon_next=None, on_weapon_prev=None, on_weapon_select=None):
+        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 인벤토리, 퀵슬롯, 슬라이드, 수류탄, 상호작용, 무기교체)"""
         self.base.disableMouse()
         self.lock_mouse(True)
 
@@ -190,6 +193,23 @@ class PlayerController:
         self.base.accept("shift-r", on_reload)
         self.base.accept("R", on_reload)
 
+        # Q 및 마우스 휠 무기 교체 (다음/이전 무기 순환)
+        if on_weapon_next:
+            for q_evt in ["q", "Q", "shift-q", "shift-Q", "wheel_down"]:
+                self.base.accept(q_evt, on_weapon_next)
+        if on_weapon_prev:
+            for wp_evt in ["wheel_up"]:
+                self.base.accept(wp_evt, on_weapon_prev)
+
+        # Z, X, C 직접 무기 선택 단축키 ([Z] 9mm 권총, [X] 아킴보 쌍권총, [C] 12게이지 샷건)
+        if on_weapon_select:
+            for z_evt in ["z", "Z", "shift-z", "shift-Z"]:
+                self.base.accept(z_evt, on_weapon_select, ["PISTOL"])
+            for x_evt in ["x", "X", "shift-x", "shift-X"]:
+                self.base.accept(x_evt, on_weapon_select, ["DUAL_PISTOL"])
+            for c_evt in ["c", "C", "shift-c", "shift-C"]:
+                self.base.accept(c_evt, on_weapon_select, ["SHOTGUN"])
+
         # TAB / I 키 전술 인벤토리 열기/닫기 토글
         if on_inventory:
             for inv_k in ["tab", "i", "I"]:
@@ -230,7 +250,7 @@ class PlayerController:
             dict(ITEM_CATALOG["medkit"], count=2),
             dict(ITEM_CATALOG["adrenaline"], count=1),
             dict(ITEM_CATALOG["ammo_pack"], count=2),
-            dict(ITEM_CATALOG["frag_grenade"], count=1),
+            dict(ITEM_CATALOG["frag_grenade"], count=3),
         ]
         self.speed_boost_timer = 0.0
         self.stim_boost_timer = 0.0
@@ -250,6 +270,24 @@ class PlayerController:
             self.inventory.append(new_item)
             return True, new_item["name"]
         return False, "알 수 없는 아이템입니다."
+
+    def get_item_count(self, item_id):
+        """특정 아이템의 잔여 보유 수량 반환"""
+        for item in self.inventory:
+            if item["id"] == item_id:
+                return item.get("count", 0)
+        return 0
+
+    def consume_item(self, item_id, count=1):
+        """특정 아이템의 수량 차감 (성공 여부 및 잔여 수량 반환)"""
+        for item in self.inventory:
+            if item["id"] == item_id:
+                cur = item.get("count", 0)
+                if cur >= count:
+                    item["count"] = cur - count
+                    return True, item["count"]
+                return False, cur
+        return False, 0
 
     def use_item(self, item_id, combat_system=None, game_instance=None):
         """소지품 아이템 사용 및 효과 발동"""
@@ -274,7 +312,11 @@ class PlayerController:
             self.stamina = self.max_stamina
             self.speed_boost_timer = 10.0
             target_item["count"] -= 1
-            return True, "전술 아드레날린 주사: 스테미나 100% 회복 및 10초간 이동속도 +30% 가속!"
+            if game_instance and hasattr(game_instance, 'trigger_bullet_time'):
+                game_instance.trigger_bullet_time(4.5)
+            if combat_system and hasattr(combat_system, 'activate_overcharge'):
+                combat_system.activate_overcharge(4)
+            return True, "전술 아드레날린 주사: 기력 100% 회복 & 불릿 타임 4.5초 및 오버차지 탄환 4발 장전!"
 
         elif iid == "ammo_pack":
             if combat_system:
@@ -284,13 +326,13 @@ class PlayerController:
             return True, "9mm 탄약 상자 개봉: 권총 예비 탄약 +18발 보급 완료!"
 
         elif iid == "frag_grenade":
-            if game_instance:
-                game_instance.grenade_cooldown = 0.0
-                if hasattr(game_instance, 'ui_mgr') and hasattr(game_instance.ui_mgr, 'update_skills_hud'):
-                    slide_ready = getattr(self, 'slide_cooldown', 0.0) <= 0.0
-                    game_instance.ui_mgr.update_skills_hud(slide_ready, 0.0)
-            target_item["count"] -= 1
-            return True, "파열 수류탄 보급: 즉시 투척 준비 완료 [G]!"
+            if game_instance and hasattr(game_instance, 'throw_grenade'):
+                threw = game_instance.throw_grenade()
+                if threw:
+                    return True, f"파열 수류탄 투척! (잔여: {self.get_item_count('frag_grenade')}개)"
+                else:
+                    return False, "수류탄이 소진되었거나 던질 수 없는 상태입니다."
+            return False, "수류탄을 투척할 수 없습니다."
 
         elif iid == "combat_stim":
             self.stim_boost_timer = 15.0
@@ -310,7 +352,7 @@ class PlayerController:
         """[Space] 전술 컴뱃 슬라이드 & 긴급 회피 대시 (낮은 자세로 미끄러지며 사격 가능)"""
         if self.slide_cooldown > 0.0 or self.is_sliding:
             return
-        if self.stamina < 12.0:
+        if self.stamina < 5.0:
             return
 
         # 슬라이딩 방향 결정 (이동 중이면 이동 방향, 정지 상태면 전방 시선 방향)
@@ -326,7 +368,7 @@ class PlayerController:
         self.slide_cooldown = 0.82
         self.slide_dir = slide_vec
         self.slide_speed = 15.2 * self.speed_mult
-        self.stamina = max(0.0, self.stamina - 14.0)
+        self.stamina = max(0.0, self.stamina - 6.0)
 
         if self.audio_mgr and hasattr(self.audio_mgr, 'play_slide'):
             self.audio_mgr.play_slide()
@@ -354,19 +396,25 @@ class PlayerController:
         self.lock_mouse(not self.mouse_locked)
 
     def gain_exp(self, amount):
-        """경험치 획득 및 레벨업 판정 (레벨업 시 스탯 포인트 획득, 전투 중 즉시 스탯 증가는 하지 않음)"""
+        """경험치 획득 및 레벨업 판정 (레벨업 시 퍽 카드 선택 기회 획득)"""
         self.exp += amount
         leveled = False
         while self.exp >= self.exp_to_next:
             self.exp -= self.exp_to_next
             self.level += 1
             self.exp_to_next = int(self.exp_to_next * 1.5)
-            self.stat_points += 3  # 레벨업마다 3 스탯 포인트 지급
+            self.pending_perk_picks += 1
             leveled = True
         if leveled and self.audio_mgr:
             self.audio_mgr.play_levelup()
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
+        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
+        if leveled and hasattr(self, 'on_level_up') and self.on_level_up:
+            self.on_level_up()
         return leveled
+
+    def add_exp(self, amount, *args, **kwargs):
+        """gain_exp 별칭 메서드"""
+        return self.gain_exp(amount)
 
     def get_attack_power(self, blackout_active=False):
         """저주받은 유물 및 전투 자극제 효과가 반영된 최종 공격력 산출"""
@@ -386,9 +434,13 @@ class PlayerController:
         # 유리의 총열 유물: 받는 피해 +40%
         if "glass_cannon" in self.relics:
             amount *= 1.40
+        # 타이탄 방탄 외골격 퍽: 받는 피해 25% 상시 감소
+        if self.has_perk("titan_armor"):
+            amount *= 0.75
+
         self.hp = max(0.0, self.hp - amount)
         self.invincible_timer = 0.55  # 0.55초 무적 쿨다운
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
+        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
 
         # 플레이어 피격 시각 효과: 화면 붉은 플래시 및 카메라 충격 흔들림
         self.ui_mgr.trigger_player_damage_flash(intensity=0.65)
@@ -405,7 +457,7 @@ class PlayerController:
 
     def heal(self, amount):
         self.hp = min(self.max_hp, self.hp + amount)
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
+        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
 
     def recover_stamina(self, amount):
         """적 타격/적중 시 전술 아드레날린 활성화로 스테미나 회복"""
@@ -429,43 +481,39 @@ class PlayerController:
         elif relic_id == "frenzy_drive":
             self.speed_mult *= 1.30
 
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
+        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
         if hasattr(self.ui_mgr, 'update_relic_badges'):
             self.ui_mgr.update_relic_badges(self.relics)
 
-    def allocate_stat(self, stat_type, combat_system=None):
-        """스테이지 클리어 시 스탯 포인트 1개 소모하여 원하는 능력치 분배"""
-        if self.stat_points <= 0:
-            return False, "스탯 포인트가 부족합니다!"
+    def has_perk(self, perk_id):
+        """특정 퍽 보유 여부 확인"""
+        return perk_id in self.perks
 
-        self.stat_points -= 1
-        msg = ""
-        if stat_type == "ATK":
-            self.attack_power += 5.0
-            msg = f"[공격력 +5] 현재 공격력: {int(self.attack_power)}"
-        elif stat_type == "HP":
+    def add_perk(self, perk_id, combat_system=None):
+        """로그라이크 전술 퍽 획득 및 즉각적인 스탯/패시브 적용"""
+        self.perks.add(perk_id)
+        self.perk_levels[perk_id] = self.perk_levels.get(perk_id, 0) + 1
+
+        if perk_id == "speed_demon":
+            self.speed_mult *= 1.20
+            if combat_system:
+                # 재장전 속도 35% 단축
+                combat_system.reload_duration *= 0.65
+        elif perk_id == "titan_armor":
             self.max_hp += 25.0
             self.hp = min(self.max_hp, self.hp + 25.0)
-            msg = f"[최대 체력 +25] 현재 최대 체력: {int(self.max_hp)}"
-        elif stat_type == "SPD":
-            self.speed_mult += 0.08
-            self.max_stamina += 15.0
-            self.stamina = self.max_stamina
-            msg = f"[이동 속도 +8%] 현재 속도 배율: {int(self.speed_mult * 100)}%"
-        elif stat_type == "AMMO":
-            if combat_system:
-                combat_system.max_ammo += 2
-                combat_system.reserve_ammo += 12
-                combat_system.ammo = min(combat_system.max_ammo, combat_system.ammo + 2)
-                if hasattr(combat_system, 'ui_mgr'):
-                    combat_system.ui_mgr.update_ammo(combat_system.ammo, combat_system.max_ammo, combat_system.reserve_ammo)
-            msg = f"[최대 탄약 +2] 현재 탄창: {combat_system.max_ammo if combat_system else '증가'}"
+        elif perk_id == "vampiric_leech":
+            self.hp = min(self.max_hp, self.hp + 20.0)
 
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
-        return True, msg
+        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
+        if hasattr(self.ui_mgr, 'update_perk_badges'):
+            self.ui_mgr.update_perk_badges(self.perks)
 
     def apply_slow(self, duration=2.8, factor=0.40):
         """진흙 괴물 땅울림으로 인한 지면 균열 이동 방해(슬로우) 부여"""
+        if self.has_perk("titan_armor"):
+            duration *= 0.50
+            factor = min(1.0, factor + 0.30)
         self.slow_timer = duration
         self.slow_factor = factor
 
@@ -473,19 +521,6 @@ class PlayerController:
         """지면 충격 및 지진 카메라 흔들림"""
         self.shake_timer = duration
         self.shake_intensity = intensity
-
-    def apply_upgrade(self, upgrade_type):
-        """스테이지 클리어 상점 특성 적용"""
-        if upgrade_type == "ATTACK":
-            self.attack_power = int(self.attack_power * 1.35)
-        elif upgrade_type == "HEALTH":
-            self.max_hp += 40.0
-            self.hp = self.max_hp
-        elif upgrade_type == "SPEED":
-            self.speed_mult += 0.20
-            self.max_stamina += 30.0
-            self.stamina = self.max_stamina
-        self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
 
     def reset_position(self, x, y, z=PLAYER_EYE_HEIGHT, heading=0.0, pitch=0.0):
         """플레이어 위치 및 시선 초기화"""
@@ -558,7 +593,7 @@ class PlayerController:
             self.hp_drain_accum += dt
             if self.hp_drain_accum >= 0.25:
                 self.hp_drain_accum = 0.0
-                self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, self.stat_points)
+                self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
 
         # 아드레날린 및 전투 자극제 버프 타이머 갱신
         if getattr(self, 'speed_boost_timer', 0.0) > 0.0:
@@ -610,7 +645,8 @@ class PlayerController:
             self.is_sprinting = wants_to_sprint and (self.stamina > 0.0)
 
         if self.is_sprinting:
-            self.stamina -= 22.0 * dt  # 약 4.5초 전력질주 가능
+            drain = 22.0 * (0.60 if self.has_perk("speed_demon") else 1.0)
+            self.stamina -= drain * dt  # 스피드 데몬 퍽 보유 시 소모 40% 절감
             if self.stamina <= 0.0:
                 self.stamina = 0.0
                 self.stamina_exhausted = True

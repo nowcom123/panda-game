@@ -37,12 +37,12 @@ def _get_unit_cube():
     return _UNIT_CUBE
 
 
-def make_cube_to(parent, sx, sy, sz, color, px, py, pz, rot_h=0):
-    """지정된 위치와 각도로 부모 노드에 3D 직육면체 복제 (원형 템플릿 기반 초고속 지오메트리 인스턴싱)"""
+def make_cube_to(parent, sx, sy, sz, color, px, py, pz, rot_h=0, rot_p=0, rot_r=0):
+    """지정된 위치와 각도(H, P, R)로 부모 노드에 3D 직육면체 복제 (원형 템플릿 기반 초고속 지오메트리 인스턴싱)"""
     sub = _get_unit_cube().copyTo(parent)
     sub.setPos(px, py, pz)
-    if rot_h:
-        sub.setH(rot_h)
+    if rot_h or rot_p or rot_r:
+        sub.setHpr(rot_h, rot_p, rot_r)
     sub.setScale(sx, sy, sz)
     sub.setColor(color)
     return sub

@@ -116,21 +116,115 @@ class AudioManager:
         crate_p = self._get_path("crate_open.wav")
         self.crate_open_sfx = self.loader.loadSfx(crate_p) if crate_p else None
 
+        # 8-1. 불릿 타임, 오버차지 고폭탄, 헤드샷 골절 크런치, 정예 토벌 효과음
+        bt_start_p = self._get_path("bullet_time_start.wav")
+        self.bullet_time_start_sfx = self.loader.loadSfx(bt_start_p) if bt_start_p else None
+        bt_end_p = self._get_path("bullet_time_end.wav")
+        self.bullet_time_end_sfx = self.loader.loadSfx(bt_end_p) if bt_end_p else None
+        overcharge_p = self._get_path("overcharge_shot.wav")
+        self.overcharge_shot_sfx = self.loader.loadSfx(overcharge_p) if overcharge_p else None
+        crunch_p = self._get_path("headshot_crunch.wav")
+        self.headshot_crunch_sfx = self.loader.loadSfx(crunch_p) if crunch_p else None
+        elite_p = self._get_path("elite_kill.wav")
+        self.elite_kill_sfx = self.loader.loadSfx(elite_p) if elite_p else None
+
+        # 8-2. 샷건 및 무기 교체 효과음
+        sg_blast_p = self._get_path("shotgun_blast.wav")
+        self.shotgun_blast_sfx = self.loader.loadSfx(sg_blast_p) if sg_blast_p else None
+        sg_pump_p = self._get_path("shotgun_pump.wav")
+        self.shotgun_pump_sfx = self.loader.loadSfx(sg_pump_p) if sg_pump_p else None
+        w_switch_p = self._get_path("weapon_switch.wav")
+        self.weapon_switch_sfx = self.loader.loadSfx(w_switch_p) if w_switch_p else None
+
+        # 8-3. 지옥의 파수견 및 불릿 타임 펄스 효과음
+        h_growl_p = self._get_path("hound_growl.wav")
+        self.hound_growl_sfx = self.loader.loadSfx(h_growl_p) if h_growl_p else None
+        h_dodge_p = self._get_path("hound_dodge.wav")
+        self.hound_dodge_sfx = self.loader.loadSfx(h_dodge_p) if h_dodge_p else None
+        h_death_p = self._get_path("hound_death.wav")
+        self.hound_death_sfx = self.loader.loadSfx(h_death_p) if h_death_p else None
+        h_step_p = self._get_path("hound_step.wav")
+        self.hound_step_sfx = self.loader.loadSfx(h_step_p) if h_step_p else None
+        bt_pulse_p = self._get_path("bullet_time_pulse.wav")
+        self.bullet_time_pulse_sfx = self.loader.loadSfx(bt_pulse_p) if bt_pulse_p else None
+
+        # 9. 몬스터 3D 입체 접근 이동음 & 포효 사운드 풀 (동시 재생 인스턴스)
+        self.monster_sound_pools = {}
+        if self.audio3d:
+            pool_specs = {
+                "orc_step": ("orc_step.wav", 4, 1.5, 32.0, 0.95),
+                "orc_growl": ("orc_growl.wav", 3, 2.0, 35.0, 1.0),
+                "skel_step": ("skeleton_rattle.wav", 4, 1.5, 30.0, 0.90),
+                "skel_groan": ("skeleton_groan.wav", 3, 2.0, 32.0, 0.95),
+                "serp_slither": ("serpent_slither.wav", 3, 1.5, 30.0, 0.90),
+                "serp_hiss": ("serpent_hiss.wav", 3, 2.0, 30.0, 1.0),
+                "witch_whisper": ("witch_whisper.wav", 3, 2.0, 32.0, 0.95),
+                "hound_step": ("hound_step.wav", 4, 1.2, 28.0, 0.90),
+                "hound_growl": ("hound_growl.wav", 3, 2.0, 32.0, 1.0),
+            }
+            for key, (fname, count, min_d, max_d, base_v) in pool_specs.items():
+                p = self._get_path(fname)
+                if p:
+                    instances = []
+                    for _ in range(count):
+                        snd = self.audio3d.loadSfx(p)
+                        if snd:
+                            self.audio3d.setSoundMinDistance(snd, min_d)
+                            self.audio3d.setSoundMaxDistance(snd, max_d)
+                            instances.append(snd)
+                    if instances:
+                        self.monster_sound_pools[key] = {
+                            "instances": instances,
+                            "min_dist": min_d,
+                            "max_dist": max_d,
+                            "base_vol": base_v,
+                            "idx": 0
+                        }
+
     def _get_path(self, fname):
         full_p = os.path.join(self.audio_dir, fname)
         if os.path.exists(full_p):
             return Filename.fromOsSpecific(os.path.abspath(full_p))
         return None
 
+    def play_monster_3d(self, sound_key, node, volume_scale=1.0):
+        """
+        적 노드(NodePath) 위치에서 3D 입체 사운드 재생
+        - 거리 감쇠 (Min 1.5m ~ Max 32m)
+        - 리스너(카메라) 시선에 따른 좌우 360도 입체 패닝 자동 적용
+        """
+        if not self.audio3d or not node or node.isEmpty() or sound_key not in self.monster_sound_pools:
+            return
+
+        pool = self.monster_sound_pools[sound_key]
+        instances = pool["instances"]
+
+        # 미재생 중인 가용 인스턴스 검색
+        chosen = None
+        for snd in instances:
+            if snd.status() != snd.PLAYING:
+                chosen = snd
+                break
+        if not chosen:
+            chosen = instances[pool["idx"]]
+            pool["idx"] = (pool["idx"] + 1) % len(instances)
+
+        self.audio3d.detachSound(chosen)
+        self.audio3d.attachSoundToObject(chosen, node)
+        chosen.setVolume(pool["base_vol"] * volume_scale)
+        self.audio3d.setSoundMinDistance(chosen, pool["min_dist"])
+        self.audio3d.setSoundMaxDistance(chosen, pool["max_dist"])
+        chosen.play()
+
     def attach_monsters(self, serpent, skeleton):
-        """괴물 3D 오디오 부착"""
+        """괴물 3D 오디오 부착 (호환성 유지)"""
         if not self.audio3d:
             return
 
         # 뱀 괴물 사운드
         slither_p = self._get_path("serpent_slither.wav")
         hiss_p = self._get_path("serpent_hiss.wav")
-        if slither_p:
+        if slither_p and serpent and hasattr(serpent, 'node'):
             self.serpent_slither_sfx = self.audio3d.loadSfx(slither_p)
             if self.serpent_slither_sfx:
                 self.serpent_slither_sfx.setLoop(True)
@@ -138,7 +232,7 @@ class AudioManager:
                 self.audio3d.attachSoundToObject(self.serpent_slither_sfx, serpent.node)
                 self.serpent_slither_sfx.play()
 
-        if hiss_p:
+        if hiss_p and serpent and hasattr(serpent, 'node'):
             self.serpent_hiss_sfx = self.audio3d.loadSfx(hiss_p)
             if self.serpent_hiss_sfx:
                 self.serpent_hiss_sfx.setVolume(0.8)
@@ -147,7 +241,7 @@ class AudioManager:
         # 해골 괴물 사운드
         rattle_p = self._get_path("skeleton_rattle.wav")
         groan_p = self._get_path("skeleton_groan.wav")
-        if rattle_p:
+        if rattle_p and skeleton and hasattr(skeleton, 'node'):
             self.skeleton_rattle_sfx = self.audio3d.loadSfx(rattle_p)
             if self.skeleton_rattle_sfx:
                 self.skeleton_rattle_sfx.setLoop(True)
@@ -155,7 +249,7 @@ class AudioManager:
                 self.audio3d.attachSoundToObject(self.skeleton_rattle_sfx, skeleton.node)
                 self.skeleton_rattle_sfx.play()
 
-        if groan_p:
+        if groan_p and skeleton and hasattr(skeleton, 'node'):
             self.skeleton_groan_sfx = self.audio3d.loadSfx(groan_p)
             if self.skeleton_groan_sfx:
                 self.skeleton_groan_sfx.setVolume(0.8)
@@ -345,6 +439,83 @@ class AudioManager:
         if self.crate_open_sfx:
             self.crate_open_sfx.setVolume(0.90)
             self.crate_open_sfx.play()
+
+    def play_bullet_time(self, is_start=True):
+        """시간 감속 불릿 타임 진입/해제 왜곡 음향"""
+        snd = self.bullet_time_start_sfx if is_start else self.bullet_time_end_sfx
+        if snd:
+            snd.setVolume(1.0)
+            snd.play()
+
+    def play_overcharge_shot(self):
+        """오버차지 고폭 플라즈마 소이탄 격발음"""
+        if self.overcharge_shot_sfx:
+            self.overcharge_shot_sfx.setVolume(1.0)
+            self.overcharge_shot_sfx.play()
+
+    def play_headshot_crunch(self):
+        """치명타 헤드샷 적중 시 뼈 파쇄 크런치 음향"""
+        if self.headshot_crunch_sfx:
+            self.headshot_crunch_sfx.setVolume(1.0)
+            self.headshot_crunch_sfx.play()
+
+    def play_elite_kill(self):
+        """정예 변이 몬스터 처치 시 웅장한 시네마틱 킬 사운드"""
+        if self.elite_kill_sfx:
+            self.elite_kill_sfx.setVolume(1.0)
+            self.elite_kill_sfx.play()
+
+    def play_shotgun_blast(self):
+        """12게이지 샷건 산탄 대폭발 사운드"""
+        if self.shotgun_blast_sfx:
+            self.shotgun_blast_sfx.setVolume(1.0)
+            self.shotgun_blast_sfx.play()
+
+    def play_shotgun_pump(self):
+        """샷건 펌프액션 슬라이드 왕복 장전음"""
+        if self.shotgun_pump_sfx:
+            self.shotgun_pump_sfx.setVolume(0.95)
+            self.shotgun_pump_sfx.play()
+
+    def play_weapon_switch(self):
+        """무기 교체 스왑 사운드"""
+        if self.weapon_switch_sfx:
+            self.weapon_switch_sfx.setVolume(0.90)
+            self.weapon_switch_sfx.play()
+
+    def play_hound_growl(self, node=None):
+        """지옥의 파수견 으르렁거림 (3D 위치 음향 지원)"""
+        if node and self.audio3d:
+            self.play_pooled_3d("hound_growl", node, volume=1.0)
+        elif self.hound_growl_sfx:
+            self.hound_growl_sfx.setVolume(0.95)
+            self.hound_growl_sfx.play()
+
+    def play_hound_dodge(self, node=None):
+        """지옥의 파수견 총알 도약 회피 음향"""
+        if self.hound_dodge_sfx:
+            self.hound_dodge_sfx.setVolume(1.0)
+            self.hound_dodge_sfx.play()
+
+    def play_hound_death(self):
+        """지옥의 파수견 사망 하울링 및 뼈 파열음"""
+        if self.hound_death_sfx:
+            self.hound_death_sfx.setVolume(1.0)
+            self.hound_death_sfx.play()
+
+    def play_hound_step(self, node=None):
+        """지옥의 파수견 고속 발톱 착지음"""
+        if node and self.audio3d:
+            self.play_pooled_3d("hound_step", node, volume=0.85)
+        elif self.hound_step_sfx:
+            self.hound_step_sfx.setVolume(0.80)
+            self.hound_step_sfx.play()
+
+    def play_bullet_time_pulse(self):
+        """불릿 타임 (시간 감속) 진행 중 시공간 팽창 펄스 사운드"""
+        if self.bullet_time_pulse_sfx:
+            self.bullet_time_pulse_sfx.setVolume(1.0)
+            self.bullet_time_pulse_sfx.play()
 
     def update(self, dt, dist_serpent, dist_skeleton, s_los, k_los):
         """프레임별 3D 오디오 리스너 및 몬스터 거리 감쇠/포효 갱신"""
