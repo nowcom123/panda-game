@@ -1,7 +1,7 @@
 import math
 import random
 from panda3d.core import Vec3, LColor, PointLight, ClockObject
-from geometry import make_cube, make_cube_to
+from geometry import make_cube, make_cube_to, make_sphere, make_sphere_to, make_cylinder, make_cylinder_to
 
 
 def create_monster_explosion(parent, pos, monster_type, audio_mgr=None):
@@ -258,6 +258,7 @@ class LongBlackSerpent:
         self.exp_value = 55
         self.attack_damage = 30
         self.speed = 9.0
+        self.col_radius = 0.38
         self.is_striking = False
         self.strike_timer = 0.0
         self.strike_cooldown = 0.0
@@ -285,7 +286,7 @@ class LongBlackSerpent:
         eye_ember = LColor(1.0, 0.22, 0.06, 1.0)
 
         # 1. 뱀 머리 -> 거대 백골 해골 두개골 (Skeletal Skull Head: 폭 1.25m, 길이 1.45m, 높이 1.10m)
-        self.head = make_cube('serpent_skull_cranium', 1.25, 1.45, 1.10, bone_white)
+        self.head = make_sphere('serpent_skull_cranium', 1.25, 1.45, 1.10, bone_white)
         self.head.setPos(0, 0.40, 0)
         self.head.reparentTo(self.body_root)
 
@@ -295,12 +296,12 @@ class LongBlackSerpent:
         brow.reparentTo(self.head)
 
         # (A) 크고 비어있는 눈동자 / 거대 안와 공동 (Large & Empty Orbital Sockets)
-        eye_socket_l = make_cube('skull_socket_l', 0.40, 0.32, 0.36, void_black)
+        eye_socket_l = make_sphere('skull_socket_l', 0.40, 0.32, 0.36, void_black)
         eye_socket_l.setPos(-0.36, 0.76, 0.14)
         eye_socket_l.setLightOff()
         eye_socket_l.reparentTo(self.head)
 
-        eye_socket_r = make_cube('skull_socket_r', 0.40, 0.32, 0.36, void_black)
+        eye_socket_r = make_sphere('skull_socket_r', 0.40, 0.32, 0.36, void_black)
         eye_socket_r.setPos(0.36, 0.76, 0.14)
         eye_socket_r.setLightOff()
         eye_socket_r.reparentTo(self.head)
@@ -883,6 +884,7 @@ class TallSkeletonMonster:
         self.exp_value = 45
         self.attack_damage = 35
         self.speed = 9.5
+        self.col_radius = 0.40
         self.debris_list = []
         self.blast_light_np = None
         self.puddle_np = None
@@ -932,11 +934,11 @@ class TallSkeletonMonster:
         self.skull_pivot.setP(-28)
 
         # (A) 두개골 본체 및 이마 뼈대 (Cranium & Forehead)
-        cranium = make_cube('cranium', 0.46, 0.48, 0.52, bone_col)
+        cranium = make_sphere('cranium', 0.46, 0.48, 0.52, bone_col)
         cranium.setPos(0, 0.04, 0.14)
         cranium.reparentTo(self.skull_pivot)
 
-        forehead = make_cube('skel_forehead', 0.42, 0.20, 0.20, bone_col)
+        forehead = make_sphere('skel_forehead', 0.42, 0.20, 0.20, bone_col)
         forehead.setPos(0, 0.20, 0.26)
         forehead.reparentTo(self.skull_pivot)
 
@@ -947,12 +949,12 @@ class TallSkeletonMonster:
 
         # (B) 크고 비어있는 눈동자 / 안와 공동 (Large & Empty Hollow Orbital Sockets)
         # 안구 없이 뻥 뚫린 거대한 칠흑빛 안와 구멍
-        eye_socket_l = make_cube('skel_socket_l', 0.16, 0.22, 0.20, void_black)
+        eye_socket_l = make_sphere('skel_socket_l', 0.16, 0.22, 0.20, void_black)
         eye_socket_l.setPos(-0.13, 0.24, 0.12)
         eye_socket_l.setLightOff()
         eye_socket_l.reparentTo(self.skull_pivot)
 
-        eye_socket_r = make_cube('skel_socket_r', 0.16, 0.22, 0.20, void_black)
+        eye_socket_r = make_sphere('skel_socket_r', 0.16, 0.22, 0.20, void_black)
         eye_socket_r.setPos(0.13, 0.24, 0.12)
         eye_socket_r.setLightOff()
         eye_socket_r.reparentTo(self.skull_pivot)
@@ -1059,7 +1061,7 @@ class TallSkeletonMonster:
 
             # 상완 (Humerus: 길이 1.30m)
             upper_arm = shoulder.attachNewNode(f"upper_arm_{name}")
-            upper_geom = make_cube(f"upper_geom_{name}", 0.14, 0.14, 1.30, bone_col)
+            upper_geom = make_cylinder(f"upper_geom_{name}", 0.14, 0.14, 1.30, bone_col)
             upper_geom.setPos(0, 0, -0.65)
             upper_geom.reparentTo(upper_arm)
 
@@ -1099,7 +1101,7 @@ class TallSkeletonMonster:
 
             knee = femur.attachNewNode(f"knee_{name}")
             knee.setPos(0, 0, -0.95)
-            tibia_geom = make_cube(f"tibia_geom_{name}", 0.11, 0.11, 0.95, bone_col)
+            tibia_geom = make_cylinder(f"tibia_geom_{name}", 0.11, 0.11, 0.95, bone_col)
             tibia_geom.setPos(0, 0, -0.475)
             tibia_geom.reparentTo(knee)
 
@@ -1383,6 +1385,7 @@ class AbominableMudOrc:
         self.name = "혐오스런 진흙 오크"
         self.max_hp = 280
         self.hp = self.max_hp
+        self.col_radius = 0.45
         self.exp_value = 65
         self.attack_damage = 35
         self.speed = 7.6
@@ -1495,7 +1498,7 @@ class AbominableMudOrc:
 
         # 거대한 뼈 어깨 구관절 (Shoulder Ball Joints)
         for side, name in ((-1, "l"), (1, "r")):
-            shoulder_socket = make_cube(f'shoulder_socket_{name}', 0.24, 0.24, 0.24, bone_ivory)
+            shoulder_socket = make_sphere(f'shoulder_socket_{name}', 0.24, 0.24, 0.24, bone_ivory)
             shoulder_socket.setPos(side * 0.72, 0.06, 1.76)
             shoulder_socket.reparentTo(self.body_root)
 
@@ -1504,11 +1507,11 @@ class AbominableMudOrc:
         self.head_pivot.setPos(0, 0.20, 1.95)
 
         # 두개골 본체 (체형에 맞춘 균형 잡힌 크기: 폭 0.38m, 깊이 0.40m, 높이 0.36m)
-        cranium = make_cube('orc_skull_cranium', 0.38, 0.40, 0.36, bone_ivory)
+        cranium = make_sphere('orc_skull_cranium', 0.38, 0.40, 0.36, bone_ivory)
         cranium.setPos(0, 0, 0.10)
         cranium.reparentTo(self.head_pivot)
 
-        forehead = make_cube('orc_forehead', 0.34, 0.18, 0.14, bone_ivory)
+        forehead = make_sphere('orc_forehead', 0.34, 0.18, 0.14, bone_ivory)
         forehead.setPos(0, 0.16, 0.18)
         forehead.reparentTo(self.head_pivot)
 
@@ -1629,21 +1632,21 @@ class AbominableMudOrc:
         self.arm_l.setPos(-0.75, 0.05, 1.70)
 
         # 상완골 (Humerus)
-        humerus_l = make_cube('orc_humerus_l', 0.18, 0.18, 0.52, bone_ivory)
+        humerus_l = make_cylinder('orc_humerus_l', 0.18, 0.18, 0.52, bone_ivory)
         humerus_l.setPos(0, 0, -0.26)
         humerus_l.reparentTo(self.arm_l)
 
         # 팔꿈치 관절 (Elbow Joint)
-        elbow_l = make_cube('orc_elbow_l', 0.20, 0.20, 0.16, bone_dark)
+        elbow_l = make_sphere('orc_elbow_l', 0.20, 0.20, 0.16, bone_dark)
         elbow_l.setPos(0, 0.02, -0.52)
         elbow_l.reparentTo(self.arm_l)
 
         # 전완 이중 뼈 (Radius & Ulna)
-        radius_l = make_cube('orc_radius_l', 0.09, 0.09, 0.44, bone_ivory)
+        radius_l = make_cylinder('orc_radius_l', 0.09, 0.09, 0.44, bone_ivory)
         radius_l.setPos(-0.06, 0.06, -0.74)
         radius_l.reparentTo(self.arm_l)
 
-        ulna_l = make_cube('orc_ulna_l', 0.09, 0.09, 0.44, bone_ivory)
+        ulna_l = make_cylinder('orc_ulna_l', 0.09, 0.09, 0.44, bone_ivory)
         ulna_l.setPos(0.06, 0.06, -0.74)
         ulna_l.reparentTo(self.arm_l)
 
@@ -1662,11 +1665,11 @@ class AbominableMudOrc:
         hair_black = LColor(0.04, 0.04, 0.05, 1.0)
         eye_dead = LColor(0.28, 0.25, 0.24, 1.0)
 
-        hair_grasp_l = make_cube('hair_grasp_l', 0.28, 0.30, 0.22, hair_black)
+        hair_grasp_l = make_sphere('hair_grasp_l', 0.28, 0.30, 0.22, hair_black)
         hair_grasp_l.setPos(0, 0.14, -1.02)
         hair_grasp_l.reparentTo(self.arm_l)
 
-        trophy_head_l = make_cube('trophy_head_l', 0.36, 0.38, 0.42, pale_dead_flesh)
+        trophy_head_l = make_sphere('trophy_head_l', 0.36, 0.38, 0.42, pale_dead_flesh)
         trophy_head_l.setPos(0, 0.16, -1.25)
         trophy_head_l.reparentTo(self.arm_l)
 
@@ -1674,11 +1677,11 @@ class AbominableMudOrc:
         trophy_face_l.setPos(0, 0.34, -1.25)
         trophy_face_l.reparentTo(self.arm_l)
 
-        trophy_eye_l1 = make_cube('trophy_eye_l1', 0.08, 0.04, 0.06, eye_dead)
+        trophy_eye_l1 = make_sphere('trophy_eye_l1', 0.08, 0.04, 0.06, eye_dead)
         trophy_eye_l1.setPos(-0.09, 0.43, -1.20)
         trophy_eye_l1.reparentTo(self.arm_l)
 
-        trophy_eye_l2 = make_cube('trophy_eye_l2', 0.08, 0.04, 0.06, eye_dead)
+        trophy_eye_l2 = make_sphere('trophy_eye_l2', 0.08, 0.04, 0.06, eye_dead)
         trophy_eye_l2.setPos(0.09, 0.43, -1.20)
         trophy_eye_l2.reparentTo(self.arm_l)
 
@@ -1699,12 +1702,12 @@ class AbominableMudOrc:
         self.arm_r.setPos(0.75, 0.05, 1.70)
 
         # 상완골 (Humerus)
-        humerus_r = make_cube('orc_humerus_r', 0.18, 0.18, 0.52, bone_ivory)
+        humerus_r = make_cylinder('orc_humerus_r', 0.18, 0.18, 0.52, bone_ivory)
         humerus_r.setPos(0, 0, -0.26)
         humerus_r.reparentTo(self.arm_r)
 
         # 팔꿈치 관절
-        elbow_r = make_cube('orc_elbow_r', 0.20, 0.20, 0.16, bone_dark)
+        elbow_r = make_sphere('orc_elbow_r', 0.20, 0.20, 0.16, bone_dark)
         elbow_r.setPos(0, 0.02, -0.52)
         elbow_r.reparentTo(self.arm_r)
 
@@ -1712,11 +1715,11 @@ class AbominableMudOrc:
         self.forearm_r.setPos(0, 0.08, -0.60)
 
         # 전완 이중 뼈 (Radius & Ulna)
-        radius_r = make_cube('orc_radius_r', 0.09, 0.09, 0.44, bone_ivory)
+        radius_r = make_cylinder('orc_radius_r', 0.09, 0.09, 0.44, bone_ivory)
         radius_r.setPos(-0.06, 0, -0.16)
         radius_r.reparentTo(self.forearm_r)
 
-        ulna_r = make_cube('orc_ulna_r', 0.09, 0.09, 0.44, bone_ivory)
+        ulna_r = make_cylinder('orc_ulna_r', 0.09, 0.09, 0.44, bone_ivory)
         ulna_r.setPos(0.06, 0, -0.16)
         ulna_r.reparentTo(self.forearm_r)
 
@@ -1730,12 +1733,12 @@ class AbominableMudOrc:
         bone_hand_r.reparentTo(self.forearm_r)
 
         # 오른손에 움켜쥔 머리칼
-        hair_grasp_r = make_cube('hair_grasp_r', 0.30, 0.30, 0.26, hair_black)
+        hair_grasp_r = make_sphere('hair_grasp_r', 0.30, 0.30, 0.26, hair_black)
         hair_grasp_r.setPos(0, 0.22, -0.44)
         hair_grasp_r.reparentTo(self.forearm_r)
 
         # 비명지르는 또 다른 사람의 머리통 (타격 및 내리치기용)
-        trophy_head_r = make_cube('trophy_head_r', 0.42, 0.44, 0.48, pale_dead_flesh)
+        trophy_head_r = make_sphere('trophy_head_r', 0.42, 0.44, 0.48, pale_dead_flesh)
         trophy_head_r.setPos(0, 0.32, -0.72)
         trophy_head_r.setP(25)
         trophy_head_r.reparentTo(self.forearm_r)
@@ -1745,25 +1748,25 @@ class AbominableMudOrc:
         trophy_face_r.setP(25)
         trophy_face_r.reparentTo(self.forearm_r)
 
-        eye_r1_w = make_cube('trophy_eye_r1_w', 0.10, 0.05, 0.08, LColor(0.92, 0.90, 0.85, 1.0))
+        eye_r1_w = make_sphere('trophy_eye_r1_w', 0.10, 0.05, 0.08, LColor(0.92, 0.90, 0.85, 1.0))
         eye_r1_w.setPos(-0.11, 0.62, -0.66)
         eye_r1_w.setP(25)
         eye_r1_w.setLightOff()
         eye_r1_w.reparentTo(self.forearm_r)
 
-        eye_r2_w = make_cube('trophy_eye_r2_w', 0.10, 0.05, 0.08, LColor(0.92, 0.90, 0.85, 1.0))
+        eye_r2_w = make_sphere('trophy_eye_r2_w', 0.10, 0.05, 0.08, LColor(0.92, 0.90, 0.85, 1.0))
         eye_r2_w.setPos(0.11, 0.62, -0.66)
         eye_r2_w.setP(25)
         eye_r2_w.setLightOff()
         eye_r2_w.reparentTo(self.forearm_r)
 
-        pupil_r1 = make_cube('trophy_pupil_r1', 0.05, 0.03, 0.05, LColor(0.40, 0.05, 0.05, 1.0))
+        pupil_r1 = make_sphere('trophy_pupil_r1', 0.05, 0.03, 0.05, LColor(0.40, 0.05, 0.05, 1.0))
         pupil_r1.setPos(-0.11, 0.65, -0.66)
         pupil_r1.setP(25)
         pupil_r1.setLightOff()
         pupil_r1.reparentTo(self.forearm_r)
 
-        pupil_r2 = make_cube('trophy_pupil_r2', 0.05, 0.03, 0.05, LColor(0.40, 0.05, 0.05, 1.0))
+        pupil_r2 = make_sphere('trophy_pupil_r2', 0.05, 0.03, 0.05, LColor(0.40, 0.05, 0.05, 1.0))
         pupil_r2.setPos(0.11, 0.65, -0.66)
         pupil_r2.setP(25)
         pupil_r2.setLightOff()
@@ -1797,26 +1800,26 @@ class AbominableMudOrc:
             hip.setPos(side * 0.38, 0, 0.85)
 
             # 대퇴골 (Femur)
-            thigh = make_cube(f'orc_thigh_{name}', 0.18, 0.18, 0.50, bone_ivory)
+            thigh = make_cylinder(f'orc_thigh_{name}', 0.18, 0.18, 0.50, bone_ivory)
             thigh.setPos(0, 0, -0.25)
             thigh.reparentTo(hip)
 
             # 무릎뼈 (Patella)
-            patella = make_cube(f'orc_patella_{name}', 0.14, 0.12, 0.14, bone_dark)
+            patella = make_sphere(f'orc_patella_{name}', 0.14, 0.12, 0.14, bone_dark)
             patella.setPos(0, 0.11, -0.50)
             patella.reparentTo(hip)
 
             # 하퇴 이중 뼈: 경골(Tibia) 및 비골(Fibula)
-            shin = make_cube(f'orc_shin_{name}', 0.14, 0.14, 0.48, bone_ivory)
+            shin = make_cylinder(f'orc_shin_{name}', 0.14, 0.14, 0.48, bone_ivory)
             shin.setPos(0, 0.04, -0.72)
             shin.reparentTo(hip)
 
-            fibula = make_cube(f'orc_fibula_{name}', 0.07, 0.07, 0.46, bone_dark)
+            fibula = make_cylinder(f'orc_fibula_{name}', 0.07, 0.07, 0.46, bone_dark)
             fibula.setPos(side * 0.08, -0.04, -0.72)
             fibula.reparentTo(hip)
 
             # 발목 관절 (Ankle)
-            ankle = make_cube(f'orc_ankle_{name}', 0.18, 0.20, 0.12, bone_dark)
+            ankle = make_sphere(f'orc_ankle_{name}', 0.18, 0.20, 0.12, bone_dark)
             ankle.setPos(0, 0.04, -0.94)
             ankle.reparentTo(hip)
 
@@ -2074,6 +2077,7 @@ class AlluringAshWitch:
         self.exp_value = 55
         self.attack_damage = 25
         self.speed = 10.5
+        self.col_radius = 0.38
         self.debris_list = []
         self.blast_light_np = None
         self.puddle_np = None
@@ -2154,7 +2158,7 @@ class AlluringAshWitch:
         rib_3.reparentTo(self.body_root)
 
         # 녹아내린 가슴 안에서 박동하는 진홍빛 마그마 코어 심장
-        self.molten_core = make_cube('molten_core', 0.18, 0.16, 0.22, ember_crimson)
+        self.molten_core = make_sphere('molten_core', 0.18, 0.16, 0.22, ember_crimson)
         self.molten_core.setPos(0, 0.06, 1.35)
         self.molten_core.setLightOff()
         self.molten_core.reparentTo(self.body_root)
@@ -2187,12 +2191,12 @@ class AlluringAshWitch:
         melt_jaw.reparentTo(self.head_pivot)
 
         # 좌측 루비 안광 / 우측 불타 녹아내린 검은 안와
-        eye_l = make_cube('witch_eye_l', 0.06, 0.04, 0.06, eye_ruby)
+        eye_l = make_sphere('witch_eye_l', 0.06, 0.04, 0.06, eye_ruby)
         eye_l.setPos(-0.08, 0.16, 0.08)
         eye_l.setLightOff()
         eye_l.reparentTo(self.head_pivot)
 
-        eye_melt = make_cube('witch_eye_melt', 0.08, 0.05, 0.08, charred_rag)
+        eye_melt = make_sphere('witch_eye_melt', 0.08, 0.05, 0.08, charred_rag)
         eye_melt.setPos(0.08, 0.16, 0.06)
         eye_melt.reparentTo(self.head_pivot)
 
@@ -2232,7 +2236,7 @@ class AlluringAshWitch:
         staff_rod = make_cube('staff_rod', 0.06, 0.06, 1.65, wood_char)
         staff_rod.reparentTo(self.staff_node)
 
-        self.orb = make_cube('ember_orb', 0.22, 0.22, 0.22, ember_crimson)
+        self.orb = make_sphere('ember_orb', 0.22, 0.22, 0.22, ember_crimson)
         self.orb.setPos(0, 0, 0.90)
         self.orb.setH(45)
         self.orb.setLightOff()
@@ -2445,7 +2449,7 @@ class SkeletalDobermanHellhound:
     - 쫑긋 세워진 단이(Cropped) 뼈 귀, 날카로운 두개골과 송곳니, 붉게 타오르는 안와
     - 흉곽 내부에서 맥동하는 지옥불 심장(Hellfire Core) 및 붉은 안광 오라
     - 4족 보행 역동적인 질주(Gallop Cycle) 애니메이션
-    - 총알을 50% 확률로 횡방향 공중 회피(Evasive Dodge Roll / Leap)하며 무효화
+    - 총알을 35% 확률로 횡방향 공중 회피(Evasive Dodge Roll / Leap)하며 무효화
     """
     def __init__(self, parent, start_x, start_y):
         self.node = parent.attachNewNode("skeletal_doberman_hellhound")
@@ -2462,6 +2466,7 @@ class SkeletalDobermanHellhound:
         self.exp_value = 50
         self.attack_damage = 28
         self.speed = 12.0
+        self.col_radius = 0.35
         self.debris_list = []
         self.blast_light_np = None
         self.puddle_np = None
@@ -2523,7 +2528,7 @@ class SkeletalDobermanHellhound:
         # 3. 흉곽 내부 초소형 지옥불 심장 불씨 (거대 네모박스 완전 제거: 32cm 갈비뼈 내부 깊숙이 위치하는 3cm 미니멀 불씨)
         self.heart_pivot = self.body_root.attachNewNode("hound_heart_pivot")
         self.heart_pivot.setPos(0, 0.08, -0.06)
-        self.heart_core = make_cube_to(self.heart_pivot, 0.028, 0.035, 0.028, hellfire_core, 0, 0, 0)
+        self.heart_core = make_sphere_to(self.heart_pivot, 0.028, 0.035, 0.028, hellfire_core, 0, 0, 0)
         self.heart_core.setLightOff()
 
         # 4. 목 및 도베르만 해골 머리 (Neck & Cropped Doberman Skull)
@@ -2539,7 +2544,7 @@ class SkeletalDobermanHellhound:
         self.head_pivot.setPos(0, 0.22, 0.20)
 
         # 두개골 (Cranium)
-        make_cube_to(self.head_pivot, 0.26, 0.30, 0.20, bone_white, 0, 0.04, 0.02)
+        make_sphere_to(self.head_pivot, 0.26, 0.30, 0.20, bone_white, 0, 0.04, 0.02)
         # 길쭉하고 각진 뼈 주둥이 (Snout / Maxilla)
         make_cube_to(self.head_pivot, 0.16, 0.34, 0.13, bone_white, 0, 0.28, -0.02, rot_p=8)
         # 비강 결손 (Nasal Cavity Void)
@@ -2560,8 +2565,8 @@ class SkeletalDobermanHellhound:
         self._add_vein(self.head_pivot, 0.016, 0.035, 0.22, 0.115, -0.04, 0.18, rot_h=12, rot_p=-16, rot_r=15)
 
         # 타오르는 지옥 안광 (Hellfire Ember Sockets)
-        eye_l = make_cube_to(self.head_pivot, 0.055, 0.075, 0.055, eye_ember, -0.095, 0.14, 0.05)
-        eye_r = make_cube_to(self.head_pivot, 0.055, 0.075, 0.055, eye_ember, 0.095, 0.14, 0.05)
+        eye_l = make_sphere_to(self.head_pivot, 0.055, 0.075, 0.055, eye_ember, -0.095, 0.14, 0.05)
+        eye_r = make_sphere_to(self.head_pivot, 0.055, 0.075, 0.055, eye_ember, 0.095, 0.14, 0.05)
         eye_l.setLightOff()
         eye_r.setLightOff()
 
@@ -2621,19 +2626,21 @@ class SkeletalDobermanHellhound:
     def _build_front_leg(self, x, y, name, b_col, d_col, c_col):
         shoulder = self.body_root.attachNewNode(f"hound_sh_{name}")
         shoulder.setPos(x, y, -0.06)
+        make_sphere_to(shoulder, .11, .11, .11, b_col, 0, 0, 0)
         # 견갑골 붉은 선
         self._add_vein(shoulder, 0.022, 0.022, 0.14, 0, 0.03, -0.05)
 
         # 상완골 (Humerus)
         upper = shoulder.attachNewNode(f"hound_up_{name}")
-        make_cube_to(upper, 0.08, 0.08, 0.35, b_col, 0, 0, -0.175)
+        make_cylinder_to(upper, 0.08, 0.08, 0.35, b_col, 0, 0, -0.175)
         # 상완골 전면 붉은 선
         self._add_vein(upper, 0.022, 0.022, 0.35, 0, 0.042, -0.175)
 
         # 전완골 (Radius / Ulna)
         elbow = upper.attachNewNode(f"hound_elb_{name}")
         elbow.setPos(0, 0, -0.35)
-        make_cube_to(elbow, 0.065, 0.065, 0.34, d_col, 0, 0.015, -0.17)
+        make_sphere_to(elbow, .09, .09, .09, d_col, 0, 0, 0)
+        make_cylinder_to(elbow, 0.065, 0.065, 0.34, d_col, 0, 0.015, -0.17)
         # 전완골 전면 붉은 선
         self._add_vein(elbow, 0.020, 0.020, 0.34, 0, 0.048, -0.17)
 
@@ -2651,17 +2658,19 @@ class SkeletalDobermanHellhound:
     def _build_rear_leg(self, x, y, name, b_col, d_col, c_col):
         hip = self.body_root.attachNewNode(f"hound_hip_{name}")
         hip.setPos(x, y, 0.0)
+        make_sphere_to(hip, .12, .12, .12, b_col, 0, 0, 0)
 
         # 대퇴골 (Femur - 전방 경사)
         femur = hip.attachNewNode(f"hound_fem_{name}")
-        make_cube_to(femur, 0.095, 0.10, 0.38, b_col, 0, 0.05, -0.19, rot_p=-22)
+        make_cylinder_to(femur, 0.095, 0.10, 0.38, b_col, 0, 0.05, -0.19, rot_p=-22)
         # 대퇴골 외측 붉은 선
         self._add_vein(femur, 0.022, 0.022, 0.38, 0, 0.055, -0.19, rot_p=-22)
 
         # 비절 / 경골 (Tibia / Hock - 후방 역관절 경사)
         knee = femur.attachNewNode(f"hound_knee_{name}")
         knee.setPos(0, 0.11, -0.36)
-        make_cube_to(knee, 0.075, 0.075, 0.36, d_col, 0, -0.06, -0.18, rot_p=32)
+        make_sphere_to(knee, .10, .10, .10, d_col, 0, 0, 0)
+        make_cylinder_to(knee, 0.075, 0.075, 0.36, d_col, 0, -0.06, -0.18, rot_p=32)
         # 경골 후면 붉은 선
         self._add_vein(knee, 0.020, 0.020, 0.36, 0, -0.075, -0.18, rot_p=32)
 
@@ -2677,7 +2686,7 @@ class SkeletalDobermanHellhound:
         return {'hip': hip, 'femur': femur, 'knee': knee, 'paw': paw}
 
     def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
-        """총격 대미지 판정: 50% 확률로 횡방향 공중 회피 도약(Evasive Dodge Leap) 발동"""
+        """총격 대미지 판정: 35% 확률로 횡방향 공중 회피 도약(Evasive Dodge Leap) 발동"""
         if self.hp <= 0 or self.is_corpse:
             return True
 
@@ -2686,8 +2695,8 @@ class SkeletalDobermanHellhound:
             self.last_action_dodged = True
             return False
 
-        # [50% 확률 회피 발동]
-        if random.random() < 0.50:
+        # [35% 확률 회피 발동]
+        if random.random() < 0.35:
             self.is_dodging = True
             self.dodge_timer = 0.35
             self.last_action_dodged = True
@@ -2857,7 +2866,7 @@ class SkeletalDobermanHellhound:
             self.dodge_timer -= dt
             if chunks:
                 from collision import resolve_collision
-                new_x, new_y = resolve_collision(chunks, self.pos.x, self.pos.y, self.dodge_vel.x * dt, self.dodge_vel.y * dt, radius=0.35)
+                new_x, new_y = resolve_collision(chunks, self.pos.x, self.pos.y, self.dodge_vel.x * dt, self.dodge_vel.y * dt, radius=getattr(self, 'col_radius', 0.35))
                 self.pos.x = new_x
                 self.pos.y = new_y
             else:
@@ -2978,6 +2987,7 @@ class CableOverlordBoss:
         self.hp = self.max_hp
         self.phase = 1
         self.speed = 4.8
+        self.col_radius = 0.55
         self.attack_damage = 32
         self.exp_value = 800
         self.anim_time = 0.0
@@ -3029,7 +3039,7 @@ class CableOverlordBoss:
         make_cube_to(self.torso, 0.25, 0.50, 0.08, copper_coil, 0.40, -0.52, 0.35)
 
         # 2. 흉부 중앙 심연의 에너지 코어 (Abyssal Pulsating Core)
-        self.core_geom = make_cube_to(self.torso, 0.48, 0.48, 0.48, core_cyan, 0, 0.32, 0.05, rot_h=45, rot_p=45)
+        self.core_geom = make_sphere_to(self.torso, 0.48, 0.48, 0.48, core_cyan, 0, 0.32, 0.05, rot_h=45, rot_p=45)
         self.core_geom.setLightOff()
 
         # 코어 자체 발광 포인트라이트

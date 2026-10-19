@@ -1,6 +1,110 @@
-from panda3d.core import NodePath, CardMaker
+import math
+from panda3d.core import (NodePath, CardMaker, Geom, GeomNode, GeomTriangles,
+                         GeomVertexData, GeomVertexFormat, GeomVertexWriter)
 
 _UNIT_CUBE = None
+_ROUND_MESHES = {}
+
+
+def _get_round_mesh(shape, axis='z'):
+    """Cached, outward-facing unit meshes; dimensions match the cube helpers."""
+    key = (shape, axis)
+    if key in _ROUND_MESHES:
+        return _ROUND_MESHES[key]
+    if axis not in ('x', 'y', 'z'):
+        raise ValueError('axis must be x, y or z')
+    data = GeomVertexData(shape, GeomVertexFormat.getV3n3t2(), Geom.UHStatic)
+    vertices = GeomVertexWriter(data, 'vertex')
+    normals = GeomVertexWriter(data, 'normal')
+    uv = GeomVertexWriter(data, 'texcoord')
+    triangles = GeomTriangles(Geom.UHStatic)
+
+    def orient(x, y, z):
+        return (x, z, -y) if axis == 'y' else ((z, y, -x) if axis == 'x' else (x, y, z))
+
+    def vertex(pos, normal, tex):
+        index = vertices.getWriteRow()
+        vertices.addData3(*orient(*pos))
+        normals.addData3(*orient(*normal))
+        uv.addData2(*tex)
+        return index
+
+    sides = 16
+    if shape == 'sphere':
+        rings = 8
+        for j in range(rings + 1):
+            latitude = -math.pi / 2 + math.pi * j / rings
+            for i in range(sides + 1):
+                theta = 2 * math.pi * i / sides
+                normal = (math.cos(latitude) * math.cos(theta),
+                          math.cos(latitude) * math.sin(theta), math.sin(latitude))
+                vertex(tuple(v * .5 for v in normal), normal, (i / sides, j / rings))
+        for j in range(rings):
+            for i in range(sides):
+                a = j * (sides + 1) + i
+                b = a + sides + 1
+                if j > 0:
+                    triangles.addVertices(a, a + 1, b)
+                if j < rings - 1:
+                    triangles.addVertices(a + 1, b + 1, b)
+    elif shape == 'cylinder':
+        for i in range(sides + 1):
+            theta = 2 * math.pi * i / sides
+            x, y = math.cos(theta), math.sin(theta)
+            vertex((x * .5, y * .5, -.5), (x, y, 0), (i / sides, 0))
+            vertex((x * .5, y * .5, .5), (x, y, 0), (i / sides, 1))
+        for i in range(sides):
+            a = i * 2
+            triangles.addVertices(a, a + 2, a + 3)
+            triangles.addVertices(a, a + 3, a + 1)
+        for sign in (-1, 1):
+            center = vertex((0, 0, .5 * sign), (0, 0, sign), (.5, .5))
+            for i in range(sides + 1):
+                theta = 2 * math.pi * i / sides
+                x, y = .5 * math.cos(theta), .5 * math.sin(theta)
+                vertex((x, y, .5 * sign), (0, 0, sign), (x + .5, y + .5))
+            for i in range(sides):
+                a, b = center + i + 1, center + i + 2
+                triangles.addVertices(center, a, b) if sign > 0 else triangles.addVertices(center, b, a)
+    else:
+        raise ValueError('unknown round mesh')
+    geom = Geom(data)
+    geom.addPrimitive(triangles)
+    node = GeomNode('unit_' + shape + '_' + axis)
+    node.addGeom(geom)
+    _ROUND_MESHES[key] = NodePath(node)
+    return _ROUND_MESHES[key]
+
+
+def _round_to(shape, parent, sx, sy, sz, color, px, py, pz, rot_h, rot_p, rot_r, axis='z'):
+    node = _get_round_mesh(shape, axis).copyTo(parent)
+    node.setScale(sx, sy, sz)
+    node.setPos(px, py, pz)
+    node.setHpr(rot_h, rot_p, rot_r)
+    node.setColor(color)
+    return node
+
+
+def make_sphere_to(parent, sx, sy, sz, color, px, py, pz, rot_h=0, rot_p=0, rot_r=0):
+    return _round_to('sphere', parent, sx, sy, sz, color, px, py, pz, rot_h, rot_p, rot_r)
+
+
+def make_cylinder_to(parent, sx, sy, sz, color, px, py, pz, rot_h=0, rot_p=0, rot_r=0, axis='z'):
+    return _round_to('cylinder', parent, sx, sy, sz, color, px, py, pz, rot_h, rot_p, rot_r, axis)
+
+
+def make_sphere(name, sx, sy, sz, color):
+    root = NodePath(name)
+    make_sphere_to(root, sx, sy, sz, color, 0, 0, 0)
+    root.flattenStrong()
+    return root
+
+
+def make_cylinder(name, sx, sy, sz, color, axis='z'):
+    root = NodePath(name)
+    make_cylinder_to(root, sx, sy, sz, color, 0, 0, 0, axis=axis)
+    root.flattenStrong()
+    return root
 
 def _get_unit_cube():
     """모듈 단위 1x1x1 단위 큐브 원형(Prototype) 지연 생성 및 캐싱"""

@@ -1,7 +1,7 @@
 import math
 import random
 from panda3d.core import Vec3, LColor, PointLight, LineSegs
-from geometry import make_cube, make_cube_to
+from geometry import make_cube, make_cube_to, make_cylinder_to, make_sphere
 from projectiles import ExplosionVisualEffect
 
 
@@ -18,10 +18,10 @@ class HazardBarrel:
         self.node = render.attachNewNode("hazard_barrel")
         self.node.setPos(self.pos)
 
-        make_cube_to(self.node, 0.65, 0.65, 1.15, LColor(0.85, 0.12, 0.08, 1.0), 0, 0, 0.58)
-        make_cube_to(self.node, 0.70, 0.70, 0.12, LColor(0.15, 0.15, 0.15, 1.0), 0, 0, 0.95)
-        make_cube_to(self.node, 0.70, 0.70, 0.12, LColor(0.15, 0.15, 0.15, 1.0), 0, 0, 0.20)
-        make_cube_to(self.node, 0.67, 0.67, 0.22, LColor(0.95, 0.85, 0.10, 1.0), 0, 0, 0.58)
+        make_cylinder_to(self.node, 0.65, 0.65, 1.15, LColor(0.85, 0.12, 0.08, 1.0), 0, 0, 0.58)
+        make_cylinder_to(self.node, 0.70, 0.70, 0.12, LColor(0.15, 0.15, 0.15, 1.0), 0, 0, 0.95)
+        make_cylinder_to(self.node, 0.70, 0.70, 0.12, LColor(0.15, 0.15, 0.15, 1.0), 0, 0, 0.20)
+        make_cylinder_to(self.node, 0.67, 0.67, 0.22, LColor(0.95, 0.85, 0.10, 1.0), 0, 0, 0.58)
 
         self.fire_node = None
 
@@ -66,7 +66,7 @@ class HazardBarrel:
         if self.audio_mgr and hasattr(self.audio_mgr, 'play_barrel_ignite'):
             self.audio_mgr.play_barrel_ignite()
 
-        self.fire_node = make_cube("barrel_fire", 0.30, 0.30, 0.40, LColor(1.0, 0.70, 0.15, 1.0))
+        self.fire_node = make_sphere("barrel_fire", 0.30, 0.30, 0.40, LColor(1.0, 0.70, 0.15, 1.0))
         self.fire_node.setPos(0, 0, 1.25)
         self.fire_node.setLightOff()
         self.fire_node.reparentTo(self.node)

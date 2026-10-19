@@ -1,0 +1,37 @@
+[
+  {
+    "name": "pump",
+    "author": "MrGungus",
+    "page": "https://freesound.org/people/MrGungus/sounds/773872/",
+    "download": "https://cdn.freesound.org/previews/773/773872_15468302-hq.mp3",
+    "sha256": "c7de8275be21ecf9275edfb1de2050f802620abd5d0e5bc1d3a8cfa38a6bee74"
+  },
+  {
+    "name": "handling",
+    "author": "MrGungus",
+    "page": "https://freesound.org/people/MrGungus/sounds/773869/",
+    "download": "https://cdn.freesound.org/previews/773/773869_15468302-hq.mp3",
+    "sha256": "092803263c3deb5719fda51b693d0c57efc56f6127b3173a9357baa77d3098a3"
+  },
+  {
+    "name": "reload",
+    "author": "nioczkus",
+    "page": "https://freesound.org/people/nioczkus/sounds/396331/",
+    "download": "https://cdn.freesound.org/previews/396/396331_932959-hq.mp3",
+    "sha256": "59756e1f74b0ce181822f46c744de57474309e6b64248c00083d75caf951dc1b"
+  },
+  {
+    "name": "empty",
+    "author": "TampaJoey",
+    "page": "https://freesound.org/people/TampaJoey/sounds/588733/",
+    "download": "https://cdn.freesound.org/previews/588/588733_10507437-hq.mp3",
+    "sha256": "391ee0e39f061e38c3d342a227fcf9cc6ec5521916db341f0217a41266951b0f"
+  },
+  {
+    "name": "shotgun_reload",
+    "author": "AugustSandberg",
+    "page": "https://freesound.org/people/AugustSandberg/sounds/508746/",
+    "download": "https://cdn.freesound.org/previews/508/508746_1934171-hq.mp3",
+    "sha256": "d43bccb4ad604f7c79bfa10b42b492a3fc8e8b9ed9c651bb70f7329c7e0e6e4d"
+  }
+]

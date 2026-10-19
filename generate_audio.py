@@ -1,6 +1,7 @@
 import os
 import wave
 import random
+import shutil
 import numpy as np
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "assets", "audio")
@@ -237,94 +238,27 @@ def make_skeleton_sounds():
     groan = (formant1 + formant2 + formant3 + wind_noise) * env * 0.6
     save_wav("skeleton_groan.wav", groan)
 
+def copy_recorded_firearm(source_name, output_name):
+    """Restore the real firearm recording; never replace it with synthesized audio.
+
+    Sources, license and preparation are documented in assets/audio/SOURCES.md.
+    The bundled PCM masters keep regeneration offline and dependency-free.
+    """
+    source = os.path.join(os.path.dirname(__file__), "assets", "audio", "recordings", source_name)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    shutil.copyfile(source, os.path.join(OUTPUT_DIR, output_name))
+    print(f"Copied recorded firearm: {output_name}")
+
+
 def make_gunshot():
-    """
-    초정밀 9mm 택티컬 권총 격발음 리마스터링 (5개 오디오 레이어 복합 합성)
-    1. 초음속 충격파 크랙 & 공이 스냅 (0~15ms 초고역 균열음)
-    2. 9mm 고압 총구 폭음 서브베이스 펀치 (420Hz -> 50Hz 급강하 흉부 타격음)
-    3. 화약 연소 폭발 질감 및 대역통과 공기 파열음 (Gunpowder Combustion)
-    4. 슬라이드 왕복 블로우백 & 탄피 배출구 금속 메커니컬 클릭 (18ms, 44ms)
-    5. 백룸 콘크리트/타일 복도 슬랩백 에코 및 잔향 테일 (~0.58초)
-    """
-    dur = 0.58
-    t = np.linspace(0, dur, int(SAMPLE_RATE * dur), endpoint=False)
-    np.random.seed(707)
+    """Actual pistol discharge, shared by single and dual pistols."""
+    copy_recorded_firearm("pistol.wav", "gunshot.wav")
 
-    # 1. 초음속 탄환 이탈 크랙 & 공이 스냅 (초단기 0~15ms 스파이크)
-    snap_env = np.exp(-t * 280.0)
-    snap_tone = (
-        0.65 * np.sin(2 * np.pi * 3850.0 * t) +
-        0.45 * np.sin(2 * np.pi * 5400.0 * t) +
-        0.30 * np.sin(2 * np.pi * 7200.0 * t)
-    ) * snap_env
-    snap_noise = np.random.uniform(-1.0, 1.0, len(t)) * np.exp(-t * 360.0) * 0.85
-    layer_crack = snap_tone + snap_noise
 
-    # 2. 9mm 총구 폭음 저음 펀치 (420Hz -> 52Hz 피치 드롭 + 2차 고조파)
-    thump_freq = 420.0 * np.exp(-t * 48.0) + 52.0
-    thump_phase = 2 * np.pi * np.cumsum(thump_freq) / SAMPLE_RATE
-    thump_env = np.exp(-t * 24.0)
-    layer_thump = np.sin(thump_phase) * thump_env * 1.35
-    layer_thump += 0.40 * np.sin(thump_phase * 2.0) * np.exp(-t * 34.0)
+def make_shotgun_blast():
+    """Actual shotgun discharge."""
+    copy_recorded_firearm("shotgun.wav", "shotgun_blast.wav")
 
-    # 3. 화약 폭발 질감 (대역통과 필터링된 공기 파열음)
-    combust_noise = np.random.uniform(-1.0, 1.0, len(t))
-    k_size = 17
-    kernel = np.sin(np.linspace(0, 2 * np.pi * 3, k_size)) * np.hanning(k_size)
-    kernel /= np.sum(np.abs(kernel)) + 1e-6
-    body_noise = np.convolve(combust_noise, kernel, mode='same')
-    body_env = np.exp(-t * 26.0)
-    layer_combust = body_noise * body_env * 1.45
-
-    # 4. 슬라이드 왕복 블로우백 메커니컬 사운드 (금속 마찰음 및 탄피 배출)
-    mech = np.zeros_like(t)
-    # 4-A. 슬라이드 1차 후퇴 충격 (16ms)
-    idx_m1 = (t >= 0.016) & (t < 0.052)
-    t_m1 = t[idx_m1] - 0.016
-    mech[idx_m1] += (
-        0.45 * np.sin(2 * np.pi * 2650.0 * t_m1) +
-        0.35 * np.sin(2 * np.pi * 4350.0 * t_m1)
-    ) * np.exp(-t_m1 * 95.0)
-
-    # 4-B. 챔버 잠금 및 복좌 금속 클릭 (42ms)
-    idx_m2 = (t >= 0.042) & (t < 0.095)
-    t_m2 = t[idx_m2] - 0.042
-    mech[idx_m2] += (
-        0.38 * np.sin(2 * np.pi * 1920.0 * t_m2) +
-        0.28 * np.sin(2 * np.pi * 3150.0 * t_m2)
-    ) * np.exp(-t_m2 * 80.0)
-
-    # 5. 드라이 격발 사운드 합성 및 아날로그 테이프 새츄레이션
-    dry_shot = layer_crack * 0.92 + layer_thump * 1.15 + layer_combust * 0.98 + mech * 0.68
-    dry_shot = np.tanh(dry_shot * 1.40)
-
-    # 6. 백룸 콘크리트 복도 슬랩백 에코 및 잔향 (Concrete Hallway Slapback & Tail)
-    slap_delays = [0.014, 0.028, 0.052, 0.084, 0.126]
-    slap_gains = [0.36, 0.26, 0.18, 0.12, 0.08]
-    reverb = np.zeros_like(t)
-
-    for d, g in zip(slap_delays, slap_gains):
-        shift = int(d * SAMPLE_RATE)
-        if shift < len(dry_shot):
-            echo = np.zeros_like(dry_shot)
-            echo[shift:] = dry_shot[:-shift] * g
-            reverb += echo
-
-    # 고주파 감쇠 공간 잔향 테일
-    tail_noise = np.random.uniform(-1.0, 1.0, len(t))
-    tail_kernel = np.ones(38) / 38
-    tail_filtered = np.convolve(tail_noise, tail_kernel, mode='same')
-    tail_env = np.clip((t - 0.02) / 0.05, 0, 1) * np.exp(-t * 7.5)
-    reverb += tail_filtered * tail_env * 0.40
-
-    # 최종 믹싱 및 마스터링 (피크 정규화 -0.3 dBFS)
-    final_gunshot = dry_shot + reverb * 0.62
-    final_gunshot = np.tanh(final_gunshot * 1.12)
-    max_amp = np.max(np.abs(final_gunshot))
-    if max_amp > 1e-6:
-        final_gunshot = (final_gunshot / max_amp) * 0.95
-
-    save_wav("gunshot.wav", final_gunshot)
 
 def make_tactical_sfx():
     """콤보 킬 효과음 및 보급 상자 오픈 효과음 합성"""
@@ -394,30 +328,7 @@ def make_witch_sounds():
 
 def make_action_sfx():
     """불릿 타임, 오버차지 폭발탄, 헤드샷 타격감 및 정예 처치 효과음 합성"""
-    # 1. bullet_time_start.wav (시간 왜곡 슬로우모션 진입음: 하강 스위프 & 서브베이스 웜홀)
-    dur_bt1 = 0.85
-    t1 = np.linspace(0, dur_bt1, int(SAMPLE_RATE * dur_bt1), endpoint=False)
-    freq1 = 450.0 * np.exp(-t1 * 4.2) + 42.0
-    phase1 = 2 * np.pi * np.cumsum(freq1) / SAMPLE_RATE
-    sub_dive = np.sin(phase1) * np.exp(-t1 * 2.2) * 1.1
-    # 테이프 정지 슬로우다운 노이즈 스위프
-    np.random.seed(901)
-    noise1 = np.random.uniform(-0.8, 0.8, len(t1))
-    filt_k = np.hanning(45) / np.sum(np.hanning(45))
-    filt_noise1 = np.convolve(noise1, filt_k, mode='same') * np.exp(-t1 * 3.5) * (1.0 + np.sin(2 * np.pi * 12.0 * t1))
-    bt_start = np.tanh((sub_dive + filt_noise1 * 0.75) * 1.3)
-    save_wav("bullet_time_start.wav", bt_start * 0.92)
-
-    # 2. bullet_time_end.wav (정상 시간 복귀 상승 워시음)
-    dur_bt2 = 0.65
-    t2 = np.linspace(0, dur_bt2, int(SAMPLE_RATE * dur_bt2), endpoint=False)
-    freq2 = 45.0 * np.exp(t2 * 3.5)
-    phase2 = 2 * np.pi * np.cumsum(freq2) / SAMPLE_RATE
-    sub_rise = np.sin(phase2) * np.sin(np.pi * (t2 / dur_bt2)) * 0.85
-    noise2 = np.random.uniform(-0.6, 0.6, len(t2)) * np.sin(np.pi * (t2 / dur_bt2)) ** 1.5
-    filt_noise2 = np.convolve(noise2, filt_k, mode='same') * 0.6
-    bt_end = np.tanh((sub_rise + filt_noise2) * 1.2)
-    save_wav("bullet_time_end.wav", bt_end * 0.88)
+    make_bullet_time_sounds()
 
     # 3. heartbeat.wav (심장 박동 저주파 더블 쿵-쿵 펄스)
     dur_hb = 0.72
@@ -475,60 +386,12 @@ def make_action_sfx():
     save_wav("elite_kill.wav", ek_sound * 0.92)
 
 def make_shotgun_and_dual_sfx():
-    """12게이지 전술 샷건 격발음, 펌프액션 장전음 및 무기 교체음 합성"""
-    # 1. shotgun_blast.wav (12게이지 묵직한 산탄 대폭발)
-    dur_sg = 0.72
-    tsg = np.linspace(0, dur_sg, int(SAMPLE_RATE * dur_sg), endpoint=False)
-    # 초음속 산탄 충격파 (Supersonic Crack)
-    sg_crack = np.sin(2 * np.pi * (5200.0 * np.exp(-tsg * 90.0) + 380.0) * tsg) * np.exp(-tsg * 55.0) * 1.2
-    # 12게이지 머즐 팽창 서브베이스 펀치 (55Hz -> 28Hz)
-    sg_sub = np.sin(2 * np.pi * (340.0 * np.exp(-tsg * 14.0) + 32.0) * tsg) * np.exp(-tsg * 7.5) * 1.6
-    # 화약 폭풍 난류 노이즈 (Combustion Turbulence)
-    np.random.seed(944)
-    sg_noise = np.random.uniform(-1.0, 1.0, len(tsg)) * np.exp(-tsg * 11.0)
-    sg_k = np.hanning(32) / np.sum(np.hanning(32))
-    sg_filt = np.convolve(sg_noise, sg_k, mode='same') * 1.35
-    # 백룸 콘크리트 슬랩백 에코
-    sg_echo = np.roll(sg_sub, int(0.038 * SAMPLE_RATE)) * 0.45 + np.roll(sg_filt, int(0.065 * SAMPLE_RATE)) * 0.35
-    sg_blast = np.tanh((sg_crack * 0.85 + sg_sub * 1.3 + sg_filt * 1.1 + sg_echo * 0.7) * 1.7)
-    save_wav("shotgun_blast.wav", sg_blast * 0.96)
+    """Restore recorded firing and mechanical actions, never synthesized tones."""
+    make_shotgun_blast()
+    for name in ("shotgun_pump.wav", "weapon_switch.wav", "empty_click.wav",
+                 "reload.wav", "dual_reload.wav", "shotgun_reload.wav", "slide_release.wav"):
+        copy_recorded_firearm(name, name)
 
-    # 2. shotgun_pump.wav (펌프액션 슬라이드 후퇴 철컥 & 전진 찰칵)
-    dur_pump = 0.44
-    tp = np.linspace(0, dur_pump, int(SAMPLE_RATE * dur_pump), endpoint=False)
-    pump = np.zeros_like(tp)
-    # 후퇴 철컥 (0.02s)
-    idx_p1 = (tp >= 0.02) & (tp < 0.18)
-    dt_p1 = tp[idx_p1] - 0.02
-    pump[idx_p1] += (
-        np.sin(2 * np.pi * 1850.0 * dt_p1) * np.exp(-dt_p1 * 45.0) * 0.65 +
-        np.sin(2 * np.pi * 650.0 * dt_p1) * np.exp(-dt_p1 * 32.0) * 0.85 +
-        np.random.uniform(-0.5, 0.5, len(dt_p1)) * np.exp(-dt_p1 * 35.0) * 0.4
-    )
-    # 전진 찰칵 락킹 (0.22s)
-    idx_p2 = (tp >= 0.22) & (tp < 0.42)
-    dt_p2 = tp[idx_p2] - 0.22
-    pump[idx_p2] += (
-        np.sin(2 * np.pi * 2400.0 * dt_p2) * np.exp(-dt_p2 * 50.0) * 0.85 +
-        np.sin(2 * np.pi * 420.0 * dt_p2) * np.exp(-dt_p2 * 28.0) * 1.10 +
-        np.random.uniform(-0.6, 0.6, len(dt_p2)) * np.exp(-dt_p2 * 40.0) * 0.5
-    )
-    save_wav("shotgun_pump.wav", np.tanh(pump * 1.4) * 0.92)
-
-    # 3. weapon_switch.wav (무기 장착 슬링 및 볼트 찰칵 스왑음)
-    dur_sw = 0.32
-    tsw = np.linspace(0, dur_sw, int(SAMPLE_RATE * dur_sw), endpoint=False)
-    sw_swish = np.sin(2 * np.pi * 180.0 * tsw) * np.sin(np.pi * (tsw / dur_sw)) * 0.4
-    sw_noise = np.random.uniform(-0.7, 0.7, len(tsw)) * np.sin(np.pi * (tsw / dur_sw)) ** 2 * 0.5
-    # 0.14초 지점 금속성 락킹 찰칵음
-    idx_sw = (tsw >= 0.12) & (tsw < 0.28)
-    dt_sw = tsw[idx_sw] - 0.12
-    click = np.sin(2 * np.pi * 2100.0 * dt_sw) * np.exp(-dt_sw * 48.0) * 0.95
-    click += np.sin(2 * np.pi * 850.0 * dt_sw) * np.exp(-dt_sw * 35.0) * 0.75
-    w_switch = np.zeros_like(tsw)
-    w_switch += sw_swish + sw_noise
-    w_switch[idx_sw] += click
-    save_wav("weapon_switch.wav", np.tanh(w_switch * 1.45) * 0.90)
 
 def make_hound_sounds():
     """지옥의 파수견 (뼈로 된 도베르만) 사운드 효과 합성: 으르렁, 도약 회피, 뼈 발자국, 사망 비명"""
@@ -580,23 +443,16 @@ def make_hound_sounds():
     sub_tap = np.sin(2 * np.pi * 160.0 * tst) * np.exp(-tst * 38.0) * 0.65
     save_wav("hound_step.wav", np.tanh(claw_tap + sub_tap) * 0.88)
 
-def make_bullet_time_pulse():
-    """슬로우 모션 (불릿 타임) 진행 중 울리는 1.2초 주기 심장 펄스 & 시공간 공명음"""
-    dur_p = 1.20
-    tp = np.linspace(0, dur_p, int(SAMPLE_RATE * dur_p), endpoint=False)
-    # 저주파 시공간 팽창 펄스
-    sub_pulse = np.sin(2 * np.pi * 48.0 * tp) * np.exp(-tp * 3.5) * 1.1
-    # 크리스탈 크로노 틱 링잉 (2400Hz 시계 침)
-    chrono_tick = np.sin(2 * np.pi * 2400.0 * tp) * np.exp(-tp * 28.0) * 0.65
-    chrono_ring = np.sin(2 * np.pi * 1200.0 * tp) * np.exp(-tp * 8.0) * 0.45
-    # 에코 틱 (0.35초 뒤)
-    idx_echo = tp >= 0.35
-    t_echo = tp[idx_echo] - 0.35
-    echo_tick = np.sin(2 * np.pi * 2100.0 * t_echo) * np.exp(-t_echo * 32.0) * 0.35
-    total = np.zeros_like(tp)
-    total += sub_pulse + chrono_tick + chrono_ring
-    total[idx_echo] += echo_tick
-    save_wav("bullet_time_pulse.wav", np.tanh(total * 1.3) * 0.90)
+def make_bullet_time_sounds():
+    """Seamless warm hum; playback slows its pitch during bullet-time entry."""
+    t = np.arange(SAMPLE_RATE * 4) / SAMPLE_RATE
+    # Integer cycles at every layer keep the loop free of clicks. Harmonics
+    # keep the slowing hum audible on speakers without strong sub-bass.
+    phase = 2 * np.pi * 140.0 * t + 0.16 * np.sin(2 * np.pi * 0.5 * t)
+    hum = (np.sin(phase) + 0.40 * np.sin(2 * phase)
+           + 0.20 * np.sin(3 * phase) + 0.08 * np.sin(4 * phase))
+    hum *= 0.94 + 0.06 * np.cos(2 * np.pi * 0.5 * t)
+    save_wav("bullet_time_hum.wav", hum)
 
 if __name__ == "__main__":
     print("=== 백룸 호러 사운드 절차적 합성 시작 ===")
@@ -611,5 +467,4 @@ if __name__ == "__main__":
     make_action_sfx()
     make_shotgun_and_dual_sfx()
     make_hound_sounds()
-    make_bullet_time_pulse()
     print("=== 모든 사운드 생성 완료! ===")

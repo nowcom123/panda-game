@@ -2,7 +2,7 @@ import math
 import random
 from panda3d.core import Vec3, LColor, PointLight, TransparencyAttrib
 from collision import get_nearby_colliders
-from geometry import make_cube, make_cube_to
+from geometry import make_cube, make_cube_to, make_sphere, make_sphere_to, make_cylinder, make_cylinder_to
 
 
 class Fireball:
@@ -26,11 +26,11 @@ class Fireball:
         self.node = self.render.attachNewNode("witch_fireball")
         self.node.hide()
 
-        fire_core = make_cube("fb_core", 0.32, 0.32, 0.32, LColor(1.0, 0.28, 0.05, 1.0))
+        fire_core = make_sphere("fb_core", 0.32, 0.32, 0.32, LColor(1.0, 0.28, 0.05, 1.0))
         fire_core.setLightOff()
         fire_core.reparentTo(self.node)
 
-        fire_inner = make_cube("fb_inner", 0.18, 0.18, 0.18, LColor(1.0, 0.90, 0.30, 1.0))
+        fire_inner = make_sphere("fb_inner", 0.18, 0.18, 0.18, LColor(1.0, 0.90, 0.30, 1.0))
         fire_inner.setLightOff()
         fire_inner.reparentTo(self.node)
 
@@ -108,7 +108,7 @@ class GroundShockwave:
         dust_col = LColor(0.28, 0.22, 0.14, 0.9)
         for i in range(8):
             ang = i * (math.pi / 4.0)
-            p = make_cube(f"sw_{i}", 0.40, 0.40, 0.16, dust_col)
+            p = make_sphere(f"sw_{i}", 0.40, 0.40, 0.16, dust_col)
             p.reparentTo(self.node)
             self.fragments.append((p, math.cos(ang), math.sin(ang)))
 
@@ -150,8 +150,8 @@ class ExplosionVisualEffect:
 
         # 2. 중심 팽창 화구 (Expanding Core Fireball)
         self.core_np = self.root.attachNewNode("core_fireball")
-        self.core_cube1 = make_cube_to(self.core_np, 1.0, 1.0, 1.0, LColor(1.0, 0.90, 0.25, 0.95), 0, 0, 0, rot_h=0)
-        self.core_cube2 = make_cube_to(self.core_np, 0.85, 0.85, 0.85, LColor(1.0, 0.55, 0.10, 0.85), 0, 0, 0, rot_h=45)
+        self.core_cube1 = make_sphere_to(self.core_np, 1.0, 1.0, 1.0, LColor(1.0, 0.90, 0.25, 0.95), 0, 0, 0, rot_h=0)
+        self.core_cube2 = make_sphere_to(self.core_np, 0.85, 0.85, 0.85, LColor(1.0, 0.55, 0.10, 0.85), 0, 0, 0, rot_h=45)
         self.core_cube1.setLightOff()
         self.core_cube2.setLightOff()
         self.core_np.setTransparency(TransparencyAttrib.MAlpha)
@@ -159,7 +159,7 @@ class ExplosionVisualEffect:
 
         # 3. 바닥 충격파 링 (Shockwave Disc)
         self.ring_np = self.root.attachNewNode("shockwave_ring")
-        self.ring_geom = make_cube_to(self.ring_np, 1.0, 1.0, 0.04, LColor(1.0, 0.80, 0.30, 0.80), 0, 0, 0.08)
+        self.ring_geom = make_cylinder_to(self.ring_np, 1.0, 1.0, 0.04, LColor(1.0, 0.80, 0.30, 0.80), 0, 0, 0.08)
         self.ring_geom.setLightOff()
         self.ring_np.setTransparency(TransparencyAttrib.MAlpha)
         self.ring_np.setScale(0.8)
@@ -193,7 +193,7 @@ class ExplosionVisualEffect:
             s_node = self.root.attachNewNode("smoke_puff")
             s_sz = random.uniform(0.35, 0.65)
             s_col = LColor(0.18, 0.16, 0.15, 0.70)
-            s_geom = make_cube_to(s_node, s_sz, s_sz, s_sz, s_col, 0, 0, 0, rot_h=random.uniform(0, 360))
+            s_geom = make_sphere_to(s_node, s_sz, s_sz, s_sz, s_col, 0, 0, 0, rot_h=random.uniform(0, 360))
             s_geom.setLightOff()
             s_node.setTransparency(TransparencyAttrib.MAlpha)
             sx = random.uniform(-0.6, 0.6)
@@ -290,12 +290,12 @@ class FragGrenade:
         self.node = render.attachNewNode("frag_grenade")
         self.node.setPos(self.pos)
 
-        body = make_cube("gr_body", 0.16, 0.16, 0.22, LColor(0.24, 0.35, 0.18, 1.0))
+        body = make_sphere("gr_body", 0.16, 0.16, 0.22, LColor(0.24, 0.35, 0.18, 1.0))
         body.reparentTo(self.node)
-        cap = make_cube("gr_cap", 0.09, 0.09, 0.08, LColor(0.70, 0.60, 0.22, 1.0))
+        cap = make_cylinder("gr_cap", 0.09, 0.09, 0.08, LColor(0.70, 0.60, 0.22, 1.0))
         cap.setPos(0, 0, 0.13)
         cap.reparentTo(self.node)
-        pin = make_cube("gr_pin", 0.04, 0.04, 0.05, LColor(0.9, 0.9, 0.9, 1.0))
+        pin = make_cylinder("gr_pin", 0.04, 0.04, 0.05, LColor(0.9, 0.9, 0.9, 1.0))
         pin.setPos(0.06, 0, 0.15)
         pin.reparentTo(self.node)
 

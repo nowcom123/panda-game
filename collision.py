@@ -53,32 +53,94 @@ def get_nearby_colliders(chunks, px, py, search_dist=2.5):
 
 def resolve_collision(chunks, curr_x, curr_y, dx, dy, radius=PLAYER_RADIUS):
     """
-    정밀 원형-AABB 최단거리 밀어내기(Push-out) 및 연속 벽면 슬라이딩 해결
+    정밀 원형-AABB 최단거리 밀어내기(Push-out) 및 연속 벽면/모서리 슬라이딩 해결
     - 공간 분할 인덱스로 현재 위치 주변 충돌체만 즉각 필터링
-    - 3회 완화(Relaxation) 반복 적용으로 벽 파고들기 및 끼임 완벽 차단
+    - 모서리(Corner) 접촉 시 법선 투영 기반 접선 슬라이딩(Deflection) 적용으로 모서리 쐐기 끼임 방지
+    - 4회 완화(Relaxation) 반복 적용으로 벽 파고들기 및 끼임 완벽 차단
+    - 반경 절반 이하의 이동 간격으로 얇은 벽 통과 방지, 맵 외곽 경계 클램핑
     """
-    max_d = max(abs(dx), abs(dy))
-    margin = radius + max_d + 0.6
-    colliders = get_nearby_colliders(chunks, curr_x, curr_y, search_dist=margin)
-    px = curr_x + dx
-    py = curr_y + dy
     r = radius
+    max_d = max(abs(dx), abs(dy))
+    margin = r + max_d + 0.8
+    colliders = get_nearby_colliders(chunks, curr_x, curr_y, search_dist=margin)
+    if not colliders:
+        # 외곽 절대 경계 클램핑
+        min_bound = MAP_MIN_CHUNK * CHUNK_SIZE + WALL_THICKNESS * 0.5 + r
+        max_bound = (MAP_MAX_CHUNK + 1) * CHUNK_SIZE - WALL_THICKNESS * 0.5 - r
+        return max(min_bound, min(max_bound, curr_x + dx)), max(min_bound, min(max_bound, curr_y + dy))
 
-    min_xb = min(curr_x, px) - margin
-    max_xb = max(curr_x, px) + margin
-    min_yb = min(curr_y, py) - margin
-    max_yb = max(curr_y, py) + margin
+    # Query once; short steps cannot jump over thin walls between endpoints.
+    steps = max(1, math.ceil(math.hypot(dx, dy) / max(0.025, r * 0.5)))
+    # Extreme frame stalls stop safely after a bounded amount of travel.
+    count = min(steps, 512)
+    step_x, step_y = dx / steps, dy / steps
+    px, py = curr_x, curr_y
+    colliders = list(dict.fromkeys(colliders))
+    for _ in range(count):
+        px, py = _resolve_collision_step(colliders, px, py, step_x, step_y, r)
+    return px, py
 
-    active_colliders = [
-        c for c in colliders
-        if not (c[2] < min_xb or c[0] > max_xb or c[3] < min_yb or c[1] > max_yb)
-    ]
-    if not active_colliders:
-        return px, py
 
-    for _ in range(3):
+def _resolve_collision_step(colliders, curr_x, curr_y, dx, dy, radius):
+    r = radius
+    # 1. 초기 위치 침투 복구 (Penetration Recovery)
+    sx, sy = curr_x, curr_y
+    for min_x, min_y, max_x, max_y in colliders:
+        cx = max(min_x, min(sx, max_x))
+        cy = max(min_y, min(sy, max_y))
+        vx = sx - cx
+        vy = sy - cy
+        d_sq = vx * vx + vy * vy
+        if d_sq < r * r:
+            if d_sq > 1e-8:
+                d = math.sqrt(d_sq)
+                push = r - d
+                sx += (vx / d) * push
+                sy += (vy / d) * push
+            else:
+                d_l = sx - (min_x - r)
+                d_r = (max_x + r) - sx
+                d_d = sy - (min_y - r)
+                d_u = (max_y + r) - sy
+                m = min(d_l, d_r, d_d, d_u)
+                if m == d_l:
+                    sx = min_x - r
+                elif m == d_r:
+                    sx = max_x + r
+                elif m == d_d:
+                    sy = min_y - r
+                else:
+                    sy = max_y + r
+
+    # 2. 이동 벡터에 모서리/벽면 접선 슬라이딩(Tangential Deflection) 적용
+    eff_dx, eff_dy = dx, dy
+    if (dx * dx + dy * dy) > 1e-8:
+        # 이동하려는 가상 위치에서 충돌체와의 접촉 법선 검사
+        target_x = sx + dx
+        target_y = sy + dy
+        for min_x, min_y, max_x, max_y in colliders:
+            cx = max(min_x, min(target_x, max_x))
+            cy = max(min_y, min(target_y, max_y))
+            vx = target_x - cx
+            vy = target_y - cy
+            d_sq = vx * vx + vy * vy
+            if d_sq < r * r and d_sq > 1e-8:
+                d = math.sqrt(d_sq)
+                nx = vx / d
+                ny = vy / d
+                # 이동 벡터와 법선의 내적: 안쪽으로 향하는 성분 제거하여 슬라이딩
+                dot = eff_dx * nx + eff_dy * ny
+                if dot < 0.0:
+                    eff_dx -= dot * nx
+                    eff_dy -= dot * ny
+
+    px = sx + eff_dx
+    py = sy + eff_dy
+
+    # 3. 4회 Relaxation 반복 적용으로 엄격한 AABB 겹침 해소
+    for _ in range(4):
         hit = False
-        for min_x, min_y, max_x, max_y in active_colliders:
+        for min_x, min_y, max_x, max_y in colliders:
             cx = max(min_x, min(px, max_x))
             cy = max(min_y, min(py, max_y))
             vx = px - cx
@@ -108,7 +170,7 @@ def resolve_collision(chunks, curr_x, curr_y, dx, dy, radius=PLAYER_RADIUS):
         if not hit:
             break
 
-    # 맵 외곽 절대 경계 내부로 클램핑 (252m x 252m 경계 밖 추락/탈출 100% 차단)
+    # 4. 맵 외곽 절대 경계 내부로 클램핑 (252m x 252m 경계 밖 추락/탈출 100% 차단)
     min_bound = MAP_MIN_CHUNK * CHUNK_SIZE + WALL_THICKNESS * 0.5 + radius
     max_bound = (MAP_MAX_CHUNK + 1) * CHUNK_SIZE - WALL_THICKNESS * 0.5 - radius
     px = max(min_bound, min(max_bound, px))

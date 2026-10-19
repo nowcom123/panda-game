@@ -29,7 +29,7 @@ from constants import (
     MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
 from world_gen import (
-    find_cell_path, check_line_of_sight, cell_has_pillar, set_world_seed
+    check_line_of_sight, cell_has_pillar, set_world_seed
 )
 from chunk import Chunk
 from monster import (
@@ -37,9 +37,10 @@ from monster import (
     AbominableMudOrc, AlluringAshWitch,
     SkeletalDobermanHellhound, CableOverlordBoss
 )
-from geometry import make_cube_to
+from geometry import make_cube_to, make_sphere_to
 
 # 분리된 모듈 임포트
+from navigation import pursuit_target
 from collision import (
     get_nearby_colliders, resolve_collision,
     register_custom_collider, clear_custom_colliders
@@ -173,7 +174,6 @@ class LiminalInfiniteLoop(ShowBase):
         self.gate_reinforce_timer = 0.0
         self.door_defense_spawn_timer = 0.0
         self.bullet_time_timer = 0.0
-        self.bullet_time_heartbeat_timer = 0.0
 
         # 보스 [케이블 엔티티: 심연의 지배자] 상태 관리
         self.boss = None
@@ -422,7 +422,7 @@ class LiminalInfiniteLoop(ShowBase):
         self.blackout_timer = 0.0
         self.blackout_triggered_this_stage = False
         self.bullet_time_timer = 0.0
-        self.bullet_time_heartbeat_timer = 0.0
+        self.audio_mgr.stop_bullet_time()
         self.ui_mgr.hide_blackout_warning()
         if hasattr(self.ui_mgr, 'set_bullet_time_hud'):
             self.ui_mgr.set_bullet_time_hud(False)
@@ -698,7 +698,7 @@ class LiminalInfiniteLoop(ShowBase):
         skel = TallSkeletonMonster(self.world_root, -5.0, 4.0)
         skel.node.setH(180)
 
-        # 3. 지옥의 파수견 (Skeletal Doberman Hellhound - 50% 회피 도약)
+        # 3. 지옥의 파수견 (Skeletal Doberman Hellhound - 35% 회피 도약)
         hound = SkeletalDobermanHellhound(self.world_root, 0.0, 4.0)
         hound.node.setH(180)
 
@@ -836,7 +836,7 @@ class LiminalInfiniteLoop(ShowBase):
         self.door_hold_timer = 5.0
         self.stage_banner_timer = 0.0
         self.bullet_time_timer = 0.0
-        self.bullet_time_heartbeat_timer = 0.0
+        self.audio_mgr.stop_bullet_time()
         if hasattr(self.ui_mgr, 'set_bullet_time_hud'):
             self.ui_mgr.set_bullet_time_hud(False)
 
@@ -1240,7 +1240,7 @@ class LiminalInfiniteLoop(ShowBase):
         self.beacon_is_lit = False
 
         # 비콘 발광 큐브
-        beacon_bulb = make_cube_to(self.escape_portal_np, 0.45, 0.45, 0.55, LColor(0.2, 1.0, 0.4, 1.0), 0, 0, 4.3)
+        beacon_bulb = make_sphere_to(self.escape_portal_np, 0.45, 0.45, 0.55, LColor(0.2, 1.0, 0.4, 1.0), 0, 0, 4.3)
         beacon_bulb.setLightOff()
         self.beacon_bulb = beacon_bulb
 
@@ -1758,7 +1758,7 @@ class LiminalInfiniteLoop(ShowBase):
                         self.ui_mgr.show_stage_banner("[ ! 보스 증원 소환 ! ]\n심연의 괴물들이 소환되었습니다!", color=(1.0, 0.3, 0.1, 1.0))
                         self.stage_banner_timer = 2.5
 
-            # 4. 시선 검사 (Line of Sight)
+            # 4. Visual LOS for attacks; body clearance is handled by navigation.
             has_los = False
             if dist <= 28.0:
                 mid_x, mid_y = (mx + px) * 0.5, (my + py) * 0.5
@@ -1791,138 +1791,92 @@ class LiminalInfiniteLoop(ShowBase):
             # 6. 지능형 길찾기 및 장애물/기둥 회피 (Intelligent Pathfinding & Pillar Bypass)
             mgx = int(math.floor(mx / CELL_SIZE))
             mgy = int(math.floor(my / CELL_SIZE))
-            pgx = int(math.floor(px / CELL_SIZE))
-            pgy = int(math.floor(py / CELL_SIZE))
-
             stuck_timer = getattr(m, '_stuck_timer', 0.0)
-            m.path_timer -= eff_dt
-
-            in_same_cell = (mgx, mgy) == (pgx, pgy)
-
-            # 플레이어 직접 돌진 판정: 동일 셀에 있거나, 근거리(<= 4.0m)에서 직선 시야가 명확히 확보된 경우에만 직접 추격
-            can_direct_charge = False
-            if in_same_cell:
-                can_direct_charge = True
-            elif dist <= 4.0 and has_los and stuck_timer <= 0.05:
-                can_direct_charge = True
-
-            if can_direct_charge:
-                tx, ty = px, py
-                m.path = []
-            else:
-                needs_repath = False
-                if not m.path or m.path_timer <= 0.0 or stuck_timer > 0.18:
-                    needs_repath = True
-                elif len(m.path) > 0 and (mgx, mgy) != m.path[0]:
-                    if len(m.path) > 1 and (mgx, mgy) == m.path[1]:
-                        m.path.pop(0)
-                    else:
-                        needs_repath = True
-
-                if needs_repath:
-                    interval = 0.20 + random.random() * 0.08 if dist_gate <= 35.0 else 0.35 + random.random() * 0.10
-                    m.path_timer = interval
-                    m.path = find_cell_path((mgx, mgy), (pgx, pgy), max_depth=32)
-                    if len(m.path) > 1 and m.path[0] == (mgx, mgy):
-                        pass
-                    elif not m.path:
-                        tx, ty = (pgx + 0.5) * CELL_SIZE, (pgy + 0.5) * CELL_SIZE
-
-                if len(m.path) >= 2:
-                    c1 = m.path[0]
-                    c2 = m.path[1]
-
-                    # 중앙 지지 기둥 회피 라우팅 (Pillar Bypass Routing)
-                    if cell_has_pillar(c1[0], c1[1]):
-                        pil_x = (c1[0] + 0.5) * CELL_SIZE
-                        pil_y = (c1[1] + 0.5) * CELL_SIZE
-                        if c2[1] != c1[1]:
-                            offset_x = 1.8 if mx >= pil_x else -1.8
-                            if (c2[1] > c1[1] and my < pil_y + 1.2) or (c2[1] < c1[1] and my > pil_y - 1.2):
-                                tx = pil_x + offset_x
-                                ty = pil_y
-                            else:
-                                tx = (c1[0] + c2[0] + 1.0) * 0.5 * CELL_SIZE
-                                ty = (c1[1] + c2[1] + 1.0) * 0.5 * CELL_SIZE
-                        elif c2[0] != c1[0]:
-                            offset_y = 1.8 if my >= pil_y else -1.8
-                            if (c2[0] > c1[0] and mx < pil_x + 1.2) or (c2[0] < c1[0] and mx > pil_x - 1.2):
-                                tx = pil_x
-                                ty = pil_y + offset_y
-                            else:
-                                tx = (c1[0] + c2[0] + 1.0) * 0.5 * CELL_SIZE
-                                ty = (c1[1] + c2[1] + 1.0) * 0.5 * CELL_SIZE
-                        else:
-                            tx = (c1[0] + c2[0] + 1.0) * 0.5 * CELL_SIZE
-                            ty = (c1[1] + c2[1] + 1.0) * 0.5 * CELL_SIZE
-                    else:
-                        tx = (c1[0] + c2[0] + 1.0) * 0.5 * CELL_SIZE
-                        ty = (c1[1] + c2[1] + 1.0) * 0.5 * CELL_SIZE
-
-                    # 출입문/웨이포인트 통과 감지
-                    if math.hypot(mx - tx, my - ty) < 0.7:
-                        m.path.pop(0)
-                        if len(m.path) >= 2:
-                            c1 = m.path[0]
-                            c2 = m.path[1]
-                            tx = (c1[0] + c2[0] + 1.0) * 0.5 * CELL_SIZE
-                            ty = (c1[1] + c2[1] + 1.0) * 0.5 * CELL_SIZE
-                        else:
-                            tx, ty = px, py
-                else:
-                    tx, ty = px, py
+            interval = 0.25 if dist_gate <= 35.0 else 0.40
+            tx, ty = pursuit_target(m, self.chunks, (px, py), eff_dt, interval)
 
             dx = tx - mx
             dy = ty - my
             d = math.hypot(dx, dy)
-            if d > 0.05:
+            if d > 0.01:
                 ndx, ndy = dx / d, dy / d
                 speed = getattr(m, 'speed', 8.5) * stage_mult
-                col_radius = 0.40
-                step_dist = speed * eff_dt
+                col_radius = getattr(m, 'col_radius', 0.40)
+                step_dist = min(d, speed * eff_dt)
 
                 # 1차 시도: 목표 방향 이동
                 best_nx, best_ny = resolve_collision(self.chunks, mx, my, ndx * step_dist, ndy * step_dist, radius=col_radius)
                 actual_move = math.hypot(best_nx - mx, best_ny - my)
 
-                # 2차 시도: 벽체/문틀 모서리 저지 시 다각도 접선 슬라이딩 탐색 (Tangential Sliding)
+                # 2차 시도: 벽체/문틀/기둥 모서리 저지 시 광대역 접선 슬라이딩 탐색 (Broad Tangential Sliding)
                 if actual_move < 0.35 * step_dist:
                     base_angle = math.atan2(ndy, ndx)
                     best_progress = actual_move
+                    orig_dist_to_target = math.hypot(mx - tx, my - ty)
 
                     probes = [
                         (ndx * step_dist, 0.0),
                         (0.0, ndy * step_dist),
                     ]
-                    for ang_deg in (35, -35, 55, -55, 75, -75, 90, -90):
+                    for ang_deg in (30, -30, 60, -60, 90, -90, 120, -120, 145, -145):
                         rad = base_angle + math.radians(ang_deg)
                         probes.append((math.cos(rad) * step_dist, math.sin(rad) * step_dist))
 
                     for pdx, pdy in probes:
                         cand_nx, cand_ny = resolve_collision(self.chunks, mx, my, pdx, pdy, radius=col_radius)
                         c_move = math.hypot(cand_nx - mx, cand_ny - my)
-                        if c_move > 0.45 * step_dist:
+                        if c_move > 0.20 * step_dist:
                             dist_to_target = math.hypot(cand_nx - tx, cand_ny - ty)
-                            orig_dist_to_target = math.hypot(mx - tx, my - ty)
-                            progress = (orig_dist_to_target - dist_to_target) + c_move * 0.3
+                            dist_diff = orig_dist_to_target - dist_to_target
+                            progress = c_move * 1.2 + max(-0.25 * step_dist, dist_diff)
                             if progress > best_progress:
                                 best_progress = progress
                                 best_nx, best_ny = cand_nx, cand_ny
 
-                # 3차 시도: 미세 끼임 발생 시 셀 중앙 방향 탈출 추진력 부여 (Active Unstuck Recovery)
+                # 3차 시도: 미세 끼임 발생 시 반발 벡터 기반 능동 탈출 (Repulsion Unstuck Recovery)
                 final_move = math.hypot(best_nx - mx, best_ny - my)
-                if final_move < 0.01:
+                if final_move < 0.015:
                     m._stuck_timer = stuck_timer + eff_dt
-                    if m._stuck_timer > 0.20:
-                        center_x = (mgx + 0.5) * CELL_SIZE
-                        center_y = (mgy + 0.5) * CELL_SIZE
-                        cdx = center_x - mx
-                        cdy = center_y - my
-                        cd = math.hypot(cdx, cdy)
-                        if cd > 0.1:
-                            esc_x, esc_y = resolve_collision(self.chunks, mx, my, (cdx / cd) * step_dist, (cdy / cd) * step_dist, radius=col_radius)
+                    if m._stuck_timer > 0.16:
+                        if cell_has_pillar(mgx, mgy):
+                            # 기둥 셀의 경우 기둥 중심에서 몬스터 바깥 방향으로 반발 추진
+                            pil_x = (mgx + 0.5) * CELL_SIZE
+                            pil_y = (mgy + 0.5) * CELL_SIZE
+                            cdx = mx - pil_x
+                            cdy = my - pil_y
+                            cd = math.hypot(cdx, cdy)
+                            if cd < 0.01:
+                                cdx, cdy, cd = 1.0, 0.0, 1.0
+                            esc_x, esc_y = resolve_collision(self.chunks, mx, my, (cdx / cd) * step_dist * 1.5, (cdy / cd) * step_dist * 1.5, radius=col_radius)
                             best_nx, best_ny = esc_x, esc_y
+                        else:
+                            # 일반 벽/모서리 끼임: 주변 충돌체의 최근접점들로부터의 반발 벡터 계산
+                            cols = get_nearby_colliders(self.chunks, mx, my, search_dist=col_radius + 0.8)
+                            rep_x, rep_y = 0.0, 0.0
+                            for min_x, min_y, max_x, max_y in cols:
+                                cx = max(min_x, min(mx, max_x))
+                                cy = max(min_y, min(my, max_y))
+                                vx = mx - cx
+                                vy = my - cy
+                                vd = math.hypot(vx, vy)
+                                if vd < col_radius + 0.5 and vd > 1e-6:
+                                    rep_x += (vx / vd) * (col_radius + 0.5 - vd)
+                                    rep_y += (vy / vd) * (col_radius + 0.5 - vd)
+                            r_dist = math.hypot(rep_x, rep_y)
+                            if r_dist > 1e-4:
+                                esc_x, esc_y = resolve_collision(self.chunks, mx, my, (rep_x / r_dist) * step_dist * 1.5, (rep_y / r_dist) * step_dist * 1.5, radius=col_radius)
+                                best_nx, best_ny = esc_x, esc_y
+                            else:
+                                center_x = (mgx + 0.5) * CELL_SIZE
+                                center_y = (mgy + 0.5) * CELL_SIZE
+                                cdx = center_x - mx
+                                cdy = center_y - my
+                                cd = math.hypot(cdx, cdy)
+                                if cd > 0.1:
+                                    esc_x, esc_y = resolve_collision(self.chunks, mx, my, (cdx / cd) * step_dist, (cdy / cd) * step_dist, radius=col_radius)
+                                    best_nx, best_ny = esc_x, esc_y
                         m.path = []
+                        m.path_timer = 0.0
                 else:
                     m._stuck_timer = max(0.0, stuck_timer - eff_dt * 2.0)
 
@@ -2135,21 +2089,15 @@ class LiminalInfiniteLoop(ShowBase):
             self.bullet_time_timer = max(0.0, self.bullet_time_timer - raw_dt)
             world_dt = raw_dt * 0.35
             self.ui_mgr.set_bullet_time_hud(True, self.bullet_time_timer)
-            self.bullet_time_heartbeat_timer -= raw_dt
-            if self.bullet_time_heartbeat_timer <= 0.0:
-                self.bullet_time_heartbeat_timer = 0.72
-                if hasattr(self, 'audio_mgr') and self.audio_mgr:
-                    if hasattr(self.audio_mgr, 'play_bullet_time_pulse'):
-                        self.audio_mgr.play_bullet_time_pulse()
-                    else:
-                        self.audio_mgr.play_heartbeat()
             if self.bullet_time_timer <= 0.0:
                 if hasattr(self, 'audio_mgr') and self.audio_mgr:
                     self.audio_mgr.play_bullet_time(is_start=False)
                 self.ui_mgr.set_bullet_time_hud(False)
         else:
             world_dt = raw_dt
-            self.bullet_time_heartbeat_timer = 0.0
+
+        if self.audio_mgr:
+            self.audio_mgr.update_bullet_time(raw_dt)
 
         dt = raw_dt
 

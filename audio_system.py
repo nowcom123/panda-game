@@ -51,6 +51,9 @@ class AudioManager:
         # 4. 권총 발사음
         gunshot_p = self._get_path("gunshot.wav")
         self.gunshot_sfx = self.loader.loadSfx(gunshot_p) if gunshot_p else None
+        # Separate voices preserve shot tails even during rapid dual-pistol fire.
+        self.gunshot_voices = [self.loader.loadSfx(gunshot_p) for _ in range(24)] if gunshot_p else []
+        self.gunshot_voice_index = 0
 
         # 5. 괴물 사운드 참조
         self.serpent_slither_sfx = None
@@ -71,6 +74,12 @@ class AudioManager:
         self.empty_click_sfx = self.loader.loadSfx(empty_p) if empty_p else None
         reload_p = self._get_path("reload.wav")
         self.reload_sfx = self.loader.loadSfx(reload_p) if reload_p else None
+        self.reload_sounds = {"PISTOL": self.reload_sfx}
+        for weapon, filename in (("DUAL_PISTOL", "dual_reload.wav"), ("SHOTGUN", "shotgun_reload.wav")):
+            path = self._get_path(filename)
+            self.reload_sounds[weapon] = self.loader.loadSfx(path) if path else self.reload_sfx
+        slide_p = self._get_path("slide_release.wav")
+        self.slide_release_sfx = self.loader.loadSfx(slide_p) if slide_p else None
         ammo_p = self._get_path("ammo_pickup.wav")
         self.ammo_pickup_sfx = self.loader.loadSfx(ammo_p) if ammo_p else None
         hurt_p = self._get_path("player_hurt.wav")
@@ -97,10 +106,6 @@ class AudioManager:
         self.inv_close_sfx = self.loader.loadSfx(inv_close_p) if inv_close_p else None
         item_use_p = self._get_path("item_use.wav")
         self.item_use_sfx = self.loader.loadSfx(item_use_p) if item_use_p else None
-        ads_in_p = self._get_path("ads_in.wav")
-        self.ads_in_sfx = self.loader.loadSfx(ads_in_p) if ads_in_p else None
-        ads_out_p = self._get_path("ads_out.wav")
-        self.ads_out_sfx = self.loader.loadSfx(ads_out_p) if ads_out_p else None
         explode_p = self._get_path("monster_explode.wav")
         self.monster_explode_sfx = self.loader.loadSfx(explode_p) if explode_p else None
         slide_p = self._get_path("slide.wav")
@@ -117,10 +122,13 @@ class AudioManager:
         self.crate_open_sfx = self.loader.loadSfx(crate_p) if crate_p else None
 
         # 8-1. 불릿 타임, 오버차지 고폭탄, 헤드샷 골절 크런치, 정예 토벌 효과음
-        bt_start_p = self._get_path("bullet_time_start.wav")
-        self.bullet_time_start_sfx = self.loader.loadSfx(bt_start_p) if bt_start_p else None
-        bt_end_p = self._get_path("bullet_time_end.wav")
-        self.bullet_time_end_sfx = self.loader.loadSfx(bt_end_p) if bt_end_p else None
+        bt_hum_p = self._get_path("bullet_time_hum.wav")
+        self.bullet_time_hum_sfx = self.loader.loadSfx(bt_hum_p) if bt_hum_p else None
+        if self.bullet_time_hum_sfx:
+            self.bullet_time_hum_sfx.setLoop(True)
+        self.bullet_time_audio_active = False
+        self.bullet_time_audio_elapsed = 0.0
+        self.bullet_time_audio_level = 0.0
         overcharge_p = self._get_path("overcharge_shot.wav")
         self.overcharge_shot_sfx = self.loader.loadSfx(overcharge_p) if overcharge_p else None
         crunch_p = self._get_path("headshot_crunch.wav")
@@ -131,6 +139,8 @@ class AudioManager:
         # 8-2. 샷건 및 무기 교체 효과음
         sg_blast_p = self._get_path("shotgun_blast.wav")
         self.shotgun_blast_sfx = self.loader.loadSfx(sg_blast_p) if sg_blast_p else None
+        self.shotgun_voices = [self.loader.loadSfx(sg_blast_p) for _ in range(4)] if sg_blast_p else []
+        self.shotgun_voice_index = 0
         sg_pump_p = self._get_path("shotgun_pump.wav")
         self.shotgun_pump_sfx = self.loader.loadSfx(sg_pump_p) if sg_pump_p else None
         w_switch_p = self._get_path("weapon_switch.wav")
@@ -145,8 +155,7 @@ class AudioManager:
         self.hound_death_sfx = self.loader.loadSfx(h_death_p) if h_death_p else None
         h_step_p = self._get_path("hound_step.wav")
         self.hound_step_sfx = self.loader.loadSfx(h_step_p) if h_step_p else None
-        bt_pulse_p = self._get_path("bullet_time_pulse.wav")
-        self.bullet_time_pulse_sfx = self.loader.loadSfx(bt_pulse_p) if bt_pulse_p else None
+
 
         # 9. 몬스터 3D 입체 접근 이동음 & 포효 사운드 풀 (동시 재생 인스턴스)
         self.monster_sound_pools = {}
@@ -281,9 +290,19 @@ class AudioManager:
 
     def play_gunshot(self):
         """권총 발사음"""
-        if self.gunshot_sfx:
-            self.gunshot_sfx.setVolume(0.85)
-            self.gunshot_sfx.play()
+        self._play_firearm_voice("gunshot", 0.72)
+
+    def _play_firearm_voice(self, key, volume):
+        voices = getattr(self, key + "_voices")
+        if not voices:
+            return
+        index = getattr(self, key + "_voice_index")
+        sound = voices[index]
+        setattr(self, key + "_voice_index", (index + 1) % len(voices))
+        if sound:
+            sound.setVolume(volume)
+            sound.setPlayRate(1.0)
+            sound.play()
 
     def play_serpent_hit(self):
         """뱀 피격 쉭쉭 효과음"""
@@ -314,14 +333,27 @@ class AudioManager:
     def play_empty_click(self):
         """탄약 고갈 시 공이 격발음"""
         if self.empty_click_sfx:
-            self.empty_click_sfx.setVolume(0.75)
+            self.empty_click_sfx.setVolume(0.26)
             self.empty_click_sfx.play()
 
-    def play_reload(self):
+    def play_reload(self, weapon="PISTOL", duration=None):
         """탄창 장착 및 슬라이드 장전음"""
-        if self.reload_sfx:
-            self.reload_sfx.setVolume(0.85)
-            self.reload_sfx.play()
+        self.stop_weapon_actions()
+        sound = self.reload_sounds.get(weapon, self.reload_sfx)
+        if sound:
+            sound.setVolume(0.34)
+            sound.setPlayRate(sound.length() / duration if duration and duration > 0 else 1.0)
+            sound.play()
+
+    def play_slide_release(self):
+        if self.slide_release_sfx:
+            self.slide_release_sfx.setVolume(0.30)
+            self.slide_release_sfx.play()
+
+    def stop_weapon_actions(self):
+        for sound in list(self.reload_sounds.values()) + [self.shotgun_pump_sfx]:
+            if sound:
+                sound.stop()
 
     def play_ammo_pickup(self):
         """탄약 상자 습득 차징 사운드"""
@@ -391,13 +423,6 @@ class AudioManager:
             self.item_use_sfx.setVolume(0.90)
             self.item_use_sfx.play()
 
-    def play_ads(self, is_aiming=True):
-        """정밀 조준 진입/해제 무기 파지음"""
-        snd = self.ads_in_sfx if is_aiming else self.ads_out_sfx
-        if snd:
-            snd.setVolume(0.50)
-            snd.play()
-
     def play_monster_explode(self):
         """몬스터 사망 시 신체 폭발 및 파편화 파열음"""
         if self.monster_explode_sfx:
@@ -441,11 +466,45 @@ class AudioManager:
             self.crate_open_sfx.play()
 
     def play_bullet_time(self, is_start=True):
-        """시간 감속 불릿 타임 진입/해제 왜곡 음향"""
-        snd = self.bullet_time_start_sfx if is_start else self.bullet_time_end_sfx
-        if snd:
-            snd.setVolume(1.0)
-            snd.play()
+        """Lower a continuous hum into slow motion, then fade it out."""
+        if is_start:
+            if self.bullet_time_audio_active:
+                return
+            # Retriggering during the exit fade continues the same voice.
+            if self.bullet_time_audio_level <= 0.0:
+                self.bullet_time_audio_elapsed = 0.0
+                if self.bullet_time_hum_sfx:
+                    self.bullet_time_hum_sfx.setVolume(0.0)
+                    self.bullet_time_hum_sfx.setPlayRate(1.0)
+                    self.bullet_time_hum_sfx.play()
+            self.bullet_time_audio_active = True
+        else:
+            self.bullet_time_audio_active = False
+
+    def update_bullet_time(self, dt):
+        snd = self.bullet_time_hum_sfx
+        if self.bullet_time_audio_active:
+            self.bullet_time_audio_elapsed += dt
+            self.bullet_time_audio_level = min(1.0, self.bullet_time_audio_level + dt / 0.12)
+        else:
+            self.bullet_time_audio_level = max(0.0, self.bullet_time_audio_level - dt / 0.30)
+        if not snd:
+            return
+        if not self.bullet_time_audio_active and self.bullet_time_audio_level <= 0.0:
+            snd.stop()
+            return
+        progress = min(1.0, self.bullet_time_audio_elapsed / 0.95)
+        ease = progress * progress * (3.0 - 2.0 * progress)
+        snd.setPlayRate(1.0 - 0.58 * ease)
+        snd.setVolume(0.32 * self.bullet_time_audio_level)
+
+    def stop_bullet_time(self):
+        """Silence the looping effect immediately when resetting the game."""
+        self.bullet_time_audio_active = False
+        self.bullet_time_audio_elapsed = 0.0
+        self.bullet_time_audio_level = 0.0
+        if self.bullet_time_hum_sfx:
+            self.bullet_time_hum_sfx.stop()
 
     def play_overcharge_shot(self):
         """오버차지 고폭 플라즈마 소이탄 격발음"""
@@ -467,20 +526,18 @@ class AudioManager:
 
     def play_shotgun_blast(self):
         """12게이지 샷건 산탄 대폭발 사운드"""
-        if self.shotgun_blast_sfx:
-            self.shotgun_blast_sfx.setVolume(1.0)
-            self.shotgun_blast_sfx.play()
+        self._play_firearm_voice("shotgun", 0.85)
 
     def play_shotgun_pump(self):
         """샷건 펌프액션 슬라이드 왕복 장전음"""
         if self.shotgun_pump_sfx:
-            self.shotgun_pump_sfx.setVolume(0.95)
+            self.shotgun_pump_sfx.setVolume(0.30)
             self.shotgun_pump_sfx.play()
 
     def play_weapon_switch(self):
         """무기 교체 스왑 사운드"""
         if self.weapon_switch_sfx:
-            self.weapon_switch_sfx.setVolume(0.90)
+            self.weapon_switch_sfx.setVolume(0.24)
             self.weapon_switch_sfx.play()
 
     def play_hound_growl(self, node=None):
@@ -510,12 +567,6 @@ class AudioManager:
         elif self.hound_step_sfx:
             self.hound_step_sfx.setVolume(0.80)
             self.hound_step_sfx.play()
-
-    def play_bullet_time_pulse(self):
-        """불릿 타임 (시간 감속) 진행 중 시공간 팽창 펄스 사운드"""
-        if self.bullet_time_pulse_sfx:
-            self.bullet_time_pulse_sfx.setVolume(1.0)
-            self.bullet_time_pulse_sfx.play()
 
     def update(self, dt, dist_serpent, dist_skeleton, s_los, k_los):
         """프레임별 3D 오디오 리스너 및 몬스터 거리 감쇠/포효 갱신"""

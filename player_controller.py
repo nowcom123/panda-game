@@ -116,6 +116,7 @@ class PlayerController:
         # 이동 및 발자국
         self.is_moving = False
         self.last_move_dir = Vec3(0, 0, 0)
+        self.move_speed = 0.0  # Speed before environmental slow effects.
         self.footstep_timer = 0.0
         self.heartbeat_accum = 0.0
         self.is_aiming = False
@@ -373,7 +374,9 @@ class PlayerController:
         self.slide_timer = self.slide_duration
         self.slide_cooldown = 0.82
         self.slide_dir = slide_vec
-        self.slide_speed = 15.2 * self.speed_mult
+        # Preserve incoming movement, including perks, boosts and aiming.
+        # Keep the standing dodge when there is no incoming movement.
+        self.slide_speed = self.move_speed if self.move_speed > 0.0 else 15.2 * self.speed_mult
         self.stamina = max(0.0, self.stamina - 6.0)
 
         if self.audio_mgr and hasattr(self.audio_mgr, 'play_slide'):
@@ -506,8 +509,14 @@ class PlayerController:
         if perk_id == "speed_demon":
             self.speed_mult *= 1.20
             if combat_system:
-                # 재장전 속도 35% 단축
-                combat_system.reload_duration *= 0.65
+                # 현재 재장전 진행 중인 경우 남은 장전 시간을 35% 단축
+                if getattr(combat_system, "is_reloading", False):
+                    combat_system.reload_timer *= 0.65
+                if hasattr(combat_system, "reload_duration"):
+                    try:
+                        combat_system.reload_duration *= 0.65
+                    except Exception:
+                        pass
         elif perk_id == "titan_armor":
             self.max_hp += 25.0
             self.hp = min(self.max_hp, self.hp + 25.0)
@@ -536,6 +545,9 @@ class PlayerController:
         self.is_sliding = False
         self.slide_timer = 0.0
         self.slide_cooldown = 0.0
+        self.slide_speed = 0.0
+        self.move_speed = 0.0
+        self.last_move_dir = Vec3(0, 0, 0)
         self.heading = heading
         self.pitch = pitch
         self.camera.setPos(x, y, z)
@@ -671,8 +683,8 @@ class PlayerController:
             self.slide_timer = max(0.0, self.slide_timer - dt)
             progress = 1.0 - (self.slide_timer / self.slide_duration)  # 0.0 -> 1.0
 
-            # 지면 마찰에 따른 속도 감속 (15.2 -> 6.5 m/s)
-            cur_speed = self.slide_speed * (1.0 - 0.58 * progress) * cur_slow
+            # Maintain entry speed throughout the slide; external slows still apply.
+            cur_speed = self.slide_speed * cur_slow
             disp = self.slide_dir * cur_speed * dt
 
             # 슬라이딩 시 시선 고도 낮추기 (1.7m -> 0.92m 크라우치 슬라이드 -> 복귀)
@@ -707,7 +719,8 @@ class PlayerController:
                 base_speed = SPRINT_SPEED if self.is_sprinting else WALK_SPEED
                 aim_mult = 0.78 if self.is_aiming else 1.0
                 speed_boost = 1.30 if getattr(self, 'speed_boost_timer', 0.0) > 0.0 else 1.0
-                speed = base_speed * self.speed_mult * cur_slow * aim_mult * speed_boost
+                self.move_speed = base_speed * self.speed_mult * aim_mult * speed_boost
+                speed = self.move_speed * cur_slow
                 disp = move_dir * speed * dt
 
                 # 발자국 소리 주기
@@ -724,6 +737,7 @@ class PlayerController:
                 view_changed = True
             else:
                 self.last_move_dir = Vec3(0, 0, 0)
+                self.move_speed = 0.0
                 self.footstep_timer = 0.35
 
         # 5. 빈사 상태(HP < 30) 심장박동 효과음 및 붉은 비네트 맥동

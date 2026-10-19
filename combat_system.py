@@ -13,7 +13,7 @@ from constants import (
     CELL_SIZE, CHUNK_CELLS, MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
 from world_gen import cell_has_pillar
-from geometry import make_cube_to
+from geometry import make_cube_to, make_sphere_to, make_cylinder_to
 from collision import raycast_walls
 from projectiles import ExplosionVisualEffect
 
@@ -188,7 +188,7 @@ class CombatSystem:
         brass_col = LColor(0.92, 0.76, 0.24, 1.0)
         for i in range(24):
             c_node = self.world_root.attachNewNode(f"pooled_casing_{i}")
-            cube = make_cube_to(c_node, 0.016, 0.044, 0.016, brass_col, 0, 0, 0)
+            cube = make_cylinder_to(c_node, 0.016, 0.044, 0.016, brass_col, 0, 0, 0, axis='y')
             cube.setLightOff()
             c_node.hide()
             self.casing_pool.append({
@@ -208,7 +208,7 @@ class CombatSystem:
         smoke_col = LColor(0.75, 0.75, 0.78, 0.35)
         for i in range(20):
             s_node = self.world_root.attachNewNode(f"pooled_smoke_{i}")
-            cube = make_cube_to(s_node, 0.045, 0.045, 0.045, smoke_col, 0, 0, 0)
+            cube = make_sphere_to(s_node, 0.045, 0.045, 0.045, smoke_col, 0, 0, 0)
             cube.setLightOff()
             s_node.hide()
             self.smoke_pool.append({
@@ -263,6 +263,10 @@ class CombatSystem:
             self.reload_timer = 0.0
 
         # 신규 무기 장착
+        self.sg_pump_timer = 0.0
+        self.sg_pump_cycled = False
+        if self.audio_mgr:
+            self.audio_mgr.stop_weapon_actions()
         self.current_weapon = target_weapon
         st = self.weapon_states[self.current_weapon]
         cfg = WEAPON_CONFIGS[self.current_weapon]
@@ -318,15 +322,11 @@ class CombatSystem:
         """우클릭 정밀 조준(ADS) 시작"""
         if not self.is_aiming:
             self.is_aiming = True
-            if self.audio_mgr:
-                self.audio_mgr.play_ads(True)
 
     def stop_aim(self):
         """우클릭 정밀 조준(ADS) 해제"""
         if self.is_aiming:
             self.is_aiming = False
-            if self.audio_mgr:
-                self.audio_mgr.play_ads(False)
 
     def _setup_viewmodel(self):
         """1인칭 택티컬 뷰모델: 안정적 통합 전방 조명 및 3종 무기(9mm 권총, 아킴보 쌍권총, 12게이지 샷건) 지오메트리 구축"""
@@ -389,15 +389,15 @@ class CombatSystem:
         vm_fl = self.frame_node.attachNewNode("vm_fl")
         vm_fl.setPos(0, 0.13, -0.034)
         make_cube_to(vm_fl, 0.060, 0.14, 0.020, steel_slide, 0, -0.012, 0.022)
-        make_cube_to(vm_fl, 0.052, 0.16, 0.044, steel_dark, 0, 0.0, 0.0)
-        make_cube_to(vm_fl, 0.056, 0.028, 0.048, steel_slide, 0, 0.092, 0.0)
-        lens = make_cube_to(vm_fl, 0.046, 0.008, 0.042, LColor(1.0, 0.96, 0.82, 0.95), 0, 0.108, 0.0)
+        make_cylinder_to(vm_fl, 0.052, 0.16, 0.044, steel_dark, 0, 0.0, 0.0, axis='y')
+        make_cylinder_to(vm_fl, 0.056, 0.028, 0.048, steel_slide, 0, 0.092, 0.0, axis='y')
+        lens = make_cylinder_to(vm_fl, 0.046, 0.008, 0.042, LColor(1.0, 0.96, 0.82, 0.95), 0, 0.108, 0.0, axis='y')
         lens.setLightOff()
 
         # 총열 및 약실
         self.barrel_node = self.recoil_node.attachNewNode("barrel_node")
-        make_cube_to(self.barrel_node, 0.042, 0.16, 0.042, steel_barrel, 0, 0.18, 0.04)
-        make_cube_to(self.barrel_node, 0.028, 0.015, 0.028, LColor(0.02, 0.02, 0.02, 1.0), 0, 0.265, 0.04)
+        make_cylinder_to(self.barrel_node, 0.042, 0.16, 0.042, steel_barrel, 0, 0.18, 0.04, axis='y')
+        make_cylinder_to(self.barrel_node, 0.028, 0.015, 0.028, LColor(0.02, 0.02, 0.02, 1.0), 0, 0.265, 0.04, axis='y')
         make_cube_to(self.barrel_node, 0.048, 0.07, 0.046, steel_dark, 0, 0.04, 0.042)
 
         # 왕복 슬라이드
@@ -428,7 +428,7 @@ class CombatSystem:
         make_cube_to(self.mag_node, 0.024, 0.048, 0.024, LColor(0.85, 0.68, 0.22, 1.0), 0, 0.01, 0.08)
 
         # 총구 화염 & 섬광 조명
-        self.muzzle_flash_geom = make_cube_to(self.recoil_node, 0.16, 0.22, 0.16, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.34, 0.04, rot_h=45)
+        self.muzzle_flash_geom = make_sphere_to(self.recoil_node, 0.16, 0.22, 0.16, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.34, 0.04, rot_h=45)
         self.muzzle_flash_geom.setLightOff()
         self.muzzle_flash_geom.hide()
 
@@ -446,8 +446,8 @@ class CombatSystem:
 
         # (1) 오른손 (주무기 권총 그립 파지)
         r_hand = self.recoil_node.attachNewNode("pistol_r_hand")
-        make_cube_to(r_hand, 0.075, 0.28, 0.075, sleeve_col, 0.065, -0.26, -0.20, rot_h=-12, rot_p=30, rot_r=-12)
-        make_cube_to(r_hand, 0.068, 0.045, 0.068, strap_col, 0.038, -0.14, -0.13, rot_h=-10, rot_p=24, rot_r=-8)
+        make_cylinder_to(r_hand, 0.075, 0.28, 0.075, sleeve_col, 0.065, -0.26, -0.20, rot_h=-12, rot_p=30, rot_r=-12, axis='y')
+        make_cylinder_to(r_hand, 0.068, 0.045, 0.068, strap_col, 0.038, -0.14, -0.13, rot_h=-10, rot_p=24, rot_r=-8, axis='y')
         make_cube_to(r_hand, 0.064, 0.095, 0.064, glove_dark, 0.020, -0.075, -0.095, rot_p=16)
         make_cube_to(r_hand, 0.062, 0.040, 0.022, knuckle_col, 0.036, -0.065, -0.082, rot_p=16, rot_r=12)
         make_cube_to(r_hand, 0.060, 0.036, 0.032, glove_dark, 0.005, -0.015, -0.062, rot_p=16)
@@ -458,8 +458,8 @@ class CombatSystem:
 
         # (2) 왼손 (오른손 밑을 받쳐 감싸는 투핸드 전술 서포트)
         l_hand = self.recoil_node.attachNewNode("pistol_l_hand")
-        make_cube_to(l_hand, 0.075, 0.28, 0.075, sleeve_col, -0.082, -0.24, -0.21, rot_h=16, rot_p=30, rot_r=16)
-        make_cube_to(l_hand, 0.068, 0.045, 0.068, strap_col, -0.048, -0.13, -0.14, rot_h=14, rot_p=22, rot_r=10)
+        make_cylinder_to(l_hand, 0.075, 0.28, 0.075, sleeve_col, -0.082, -0.24, -0.21, rot_h=16, rot_p=30, rot_r=16, axis='y')
+        make_cylinder_to(l_hand, 0.068, 0.045, 0.068, strap_col, -0.048, -0.13, -0.14, rot_h=14, rot_p=22, rot_r=10, axis='y')
         make_cube_to(l_hand, 0.066, 0.088, 0.064, glove_dark, -0.024, -0.070, -0.120, rot_p=16, rot_r=-14)
         make_cube_to(l_hand, 0.056, 0.062, 0.032, knuckle_col, -0.012, -0.032, -0.128, rot_p=16, rot_h=12)
         make_cube_to(l_hand, 0.022, 0.072, 0.022, glove_dark, -0.032, -0.008, -0.024, rot_p=6)
@@ -486,6 +486,8 @@ class CombatSystem:
         make_cube_to(left_frame, 0.026, 0.07, 0.055, steel_dark, 0, 0.035, -0.035)
 
         self.dual_left_slide = self.dual_left_recoil.attachNewNode("dual_left_slide")
+        make_cylinder_to(self.dual_left_recoil, .034, .10, .034, steel_dark, 0, .20, .035, axis='y')
+        make_cylinder_to(self.dual_left_recoil, .022, .01, .022, LColor(.015, .015, .015, 1), 0, .254, .035, axis='y')
         make_cube_to(self.dual_left_slide, 0.056, 0.28, 0.068, steel_slide, 0, 0.05, 0.040)
         make_cube_to(self.dual_left_slide, 0.018, 0.06, 0.030, steel_dark, -0.024, 0.04, 0.050)
         l_front = make_cube_to(self.dual_left_slide, 0.010, 0.018, 0.018, tritium_cyan, 0, 0.18, 0.08)
@@ -501,7 +503,7 @@ class CombatSystem:
         self.dual_left_mag.setP(16)
         make_cube_to(self.dual_left_mag, 0.042, 0.075, 0.16, steel_dark, 0, 0, 0)
 
-        self.dual_left_flash_geom = make_cube_to(self.dual_left_recoil, 0.15, 0.20, 0.15, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.32, 0.035, rot_h=45)
+        self.dual_left_flash_geom = make_sphere_to(self.dual_left_recoil, 0.15, 0.20, 0.15, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.32, 0.035, rot_h=45)
         self.dual_left_flash_geom.setLightOff()
         self.dual_left_flash_geom.hide()
 
@@ -513,8 +515,8 @@ class CombatSystem:
 
         # 왼손 아킴보 권총 파지 전술 손 & 팔
         l_hand_dual = self.dual_left_recoil.attachNewNode("dual_l_hand")
-        make_cube_to(l_hand_dual, 0.075, 0.26, 0.075, LColor(0.08, 0.09, 0.11, 1.0), -0.065, -0.25, -0.20, rot_h=12, rot_p=30, rot_r=12)
-        make_cube_to(l_hand_dual, 0.068, 0.045, 0.068, LColor(0.05, 0.05, 0.06, 1.0), -0.038, -0.14, -0.13, rot_h=10, rot_p=24, rot_r=8)
+        make_cylinder_to(l_hand_dual, 0.075, 0.26, 0.075, LColor(0.08, 0.09, 0.11, 1.0), -0.065, -0.25, -0.20, rot_h=12, rot_p=30, rot_r=12, axis='y')
+        make_cylinder_to(l_hand_dual, 0.068, 0.045, 0.068, LColor(0.05, 0.05, 0.06, 1.0), -0.038, -0.14, -0.13, rot_h=10, rot_p=24, rot_r=8, axis='y')
         make_cube_to(l_hand_dual, 0.064, 0.095, 0.064, LColor(0.12, 0.12, 0.14, 1.0), -0.020, -0.075, -0.095, rot_p=16)
         make_cube_to(l_hand_dual, 0.062, 0.040, 0.022, LColor(0.20, 0.22, 0.25, 1.0), -0.036, -0.065, -0.082, rot_p=16, rot_r=-12)
         make_cube_to(l_hand_dual, 0.060, 0.036, 0.032, LColor(0.12, 0.12, 0.14, 1.0), -0.005, -0.015, -0.062, rot_p=16)
@@ -536,6 +538,8 @@ class CombatSystem:
         make_cube_to(right_frame, 0.026, 0.07, 0.055, steel_dark, 0, 0.035, -0.035)
 
         self.dual_right_slide = self.dual_right_recoil.attachNewNode("dual_right_slide")
+        make_cylinder_to(self.dual_right_recoil, .034, .10, .034, steel_dark, 0, .20, .035, axis='y')
+        make_cylinder_to(self.dual_right_recoil, .022, .01, .022, LColor(.015, .015, .015, 1), 0, .254, .035, axis='y')
         make_cube_to(self.dual_right_slide, 0.056, 0.28, 0.068, steel_slide, 0, 0.05, 0.040)
         make_cube_to(self.dual_right_slide, 0.018, 0.06, 0.030, steel_dark, 0.024, 0.04, 0.050)
         r_front = make_cube_to(self.dual_right_slide, 0.010, 0.018, 0.018, tritium_cyan, 0, 0.18, 0.08)
@@ -551,7 +555,7 @@ class CombatSystem:
         self.dual_right_mag.setP(16)
         make_cube_to(self.dual_right_mag, 0.042, 0.075, 0.16, steel_dark, 0, 0, 0)
 
-        self.dual_right_flash_geom = make_cube_to(self.dual_right_recoil, 0.15, 0.20, 0.15, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.32, 0.035, rot_h=45)
+        self.dual_right_flash_geom = make_sphere_to(self.dual_right_recoil, 0.15, 0.20, 0.15, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.32, 0.035, rot_h=45)
         self.dual_right_flash_geom.setLightOff()
         self.dual_right_flash_geom.hide()
 
@@ -563,8 +567,8 @@ class CombatSystem:
 
         # 오른손 아킴보 권총 파지 전술 손 & 팔
         r_hand_dual = self.dual_right_recoil.attachNewNode("dual_r_hand")
-        make_cube_to(r_hand_dual, 0.075, 0.26, 0.075, LColor(0.08, 0.09, 0.11, 1.0), 0.065, -0.25, -0.20, rot_h=-12, rot_p=30, rot_r=-12)
-        make_cube_to(r_hand_dual, 0.068, 0.045, 0.068, LColor(0.05, 0.05, 0.06, 1.0), 0.038, -0.14, -0.13, rot_h=-10, rot_p=24, rot_r=-8)
+        make_cylinder_to(r_hand_dual, 0.075, 0.26, 0.075, LColor(0.08, 0.09, 0.11, 1.0), 0.065, -0.25, -0.20, rot_h=-12, rot_p=30, rot_r=-12, axis='y')
+        make_cylinder_to(r_hand_dual, 0.068, 0.045, 0.068, LColor(0.05, 0.05, 0.06, 1.0), 0.038, -0.14, -0.13, rot_h=-10, rot_p=24, rot_r=-8, axis='y')
         make_cube_to(r_hand_dual, 0.064, 0.095, 0.064, LColor(0.12, 0.12, 0.14, 1.0), 0.020, -0.075, -0.095, rot_p=16)
         make_cube_to(r_hand_dual, 0.062, 0.040, 0.022, LColor(0.20, 0.22, 0.25, 1.0), 0.036, -0.065, -0.082, rot_p=16, rot_r=12)
         make_cube_to(r_hand_dual, 0.060, 0.036, 0.032, LColor(0.12, 0.12, 0.14, 1.0), 0.005, -0.015, -0.062, rot_p=16)
@@ -592,22 +596,22 @@ class CombatSystem:
         make_cube_to(self.sg_recoil_node, 0.025, 0.09, 0.040, steel_dark, 0.030, 0.04, 0.035)
 
         # 12게이지 강선 총열 및 방열판
-        make_cube_to(self.sg_recoil_node, 0.044, 0.52, 0.044, steel_barrel, 0, 0.40, 0.045)
-        make_cube_to(self.sg_recoil_node, 0.032, 0.015, 0.032, LColor(0.01, 0.01, 0.01, 1.0), 0, 0.665, 0.045)
-        make_cube_to(self.sg_recoil_node, 0.054, 0.36, 0.054, steel_dark, 0, 0.32, 0.045)
+        make_cylinder_to(self.sg_recoil_node, 0.044, 0.52, 0.044, steel_barrel, 0, 0.40, 0.045, axis='y')
+        make_cylinder_to(self.sg_recoil_node, 0.032, 0.015, 0.032, LColor(0.01, 0.01, 0.01, 1.0), 0, 0.665, 0.045, axis='y')
+        make_cylinder_to(self.sg_recoil_node, 0.054, 0.36, 0.054, steel_dark, 0, 0.32, 0.045, axis='y')
 
         # 하부 8발 튜브 탄창
-        make_cube_to(self.sg_recoil_node, 0.040, 0.48, 0.040, steel_dark, 0, 0.36, -0.010)
-        make_cube_to(self.sg_recoil_node, 0.044, 0.03, 0.044, steel_slide, 0, 0.60, -0.010)
+        make_cylinder_to(self.sg_recoil_node, 0.040, 0.48, 0.040, steel_dark, 0, 0.36, -0.010, axis='y')
+        make_cylinder_to(self.sg_recoil_node, 0.044, 0.03, 0.044, steel_slide, 0, 0.60, -0.010, axis='y')
 
         # 펌프액션 슬라이드 포어엔드 (Pump Slide Handle)
         self.sg_pump_node = self.sg_recoil_node.attachNewNode("sg_pump_node")
         self.sg_pump_node.setPos(0, 0.28, -0.010)
-        make_cube_to(self.sg_pump_node, 0.072, 0.20, 0.072, grip_col, 0, 0, 0)
+        make_cylinder_to(self.sg_pump_node, 0.072, 0.20, 0.072, grip_col, 0, 0, 0, axis='y')
         make_cube_to(self.sg_pump_node, 0.078, 0.16, 0.025, steel_dark, 0, 0, 0)
         # 펌프 하부 택티컬 라이트 바디
-        make_cube_to(self.sg_pump_node, 0.038, 0.12, 0.038, steel_dark, 0, 0.04, -0.045)
-        lens = make_cube_to(self.sg_pump_node, 0.032, 0.008, 0.032, LColor(1.0, 0.96, 0.82, 0.95), 0, 0.105, -0.045)
+        make_cylinder_to(self.sg_pump_node, 0.038, 0.12, 0.038, steel_dark, 0, 0.04, -0.045, axis='y')
+        lens = make_cylinder_to(self.sg_pump_node, 0.032, 0.008, 0.032, LColor(1.0, 0.96, 0.82, 0.95), 0, 0.105, -0.045, axis='y')
         lens.setLightOff()
 
         # 권총 손잡이 및 전술 개머리판
@@ -616,12 +620,12 @@ class CombatSystem:
         make_cube_to(self.sg_recoil_node, 0.054, 0.045, 0.15, grip_col, 0, -0.43, -0.03)
 
         # 광섬유 가늠쇠 & 고스트링 가늠자
-        front_bead = make_cube_to(self.sg_recoil_node, 0.010, 0.025, 0.014, fiber_red, 0, 0.64, 0.076)
+        front_bead = make_sphere_to(self.sg_recoil_node, 0.010, 0.025, 0.014, fiber_red, 0, 0.64, 0.076)
         front_bead.setLightOff()
         make_cube_to(self.sg_recoil_node, 0.038, 0.020, 0.026, steel_dark, 0, -0.12, 0.076)
 
         # 샷건 대구경 총구 화염 및 조명
-        self.sg_muzzle_flash_geom = make_cube_to(self.sg_recoil_node, 0.28, 0.38, 0.28, LColor(1.0, 0.82, 0.20, 1.0), 0, 0.74, 0.045, rot_h=45)
+        self.sg_muzzle_flash_geom = make_sphere_to(self.sg_recoil_node, 0.28, 0.38, 0.28, LColor(1.0, 0.82, 0.20, 1.0), 0, 0.74, 0.045, rot_h=45)
         self.sg_muzzle_flash_geom.setLightOff()
         self.sg_muzzle_flash_geom.hide()
 
@@ -639,8 +643,8 @@ class CombatSystem:
 
         # (1) 오른손: 샷건 후방 피스톨 그립 파지
         r_hand_sg = self.sg_recoil_node.attachNewNode("sg_r_hand")
-        make_cube_to(r_hand_sg, 0.075, 0.32, 0.075, sg_sleeve, 0.065, -0.34, -0.21, rot_h=-12, rot_p=28, rot_r=-10)
-        make_cube_to(r_hand_sg, 0.068, 0.045, 0.068, sg_strap, 0.036, -0.22, -0.13, rot_h=-10, rot_p=24, rot_r=-6)
+        make_cylinder_to(r_hand_sg, 0.075, 0.32, 0.075, sg_sleeve, 0.065, -0.34, -0.21, rot_h=-12, rot_p=28, rot_r=-10, axis='y')
+        make_cylinder_to(r_hand_sg, 0.068, 0.045, 0.068, sg_strap, 0.036, -0.22, -0.13, rot_h=-10, rot_p=24, rot_r=-6, axis='y')
         make_cube_to(r_hand_sg, 0.064, 0.095, 0.064, sg_glove, 0.020, -0.15, -0.09, rot_p=22)
         make_cube_to(r_hand_sg, 0.062, 0.040, 0.022, sg_knuckle, 0.036, -0.14, -0.08, rot_p=22, rot_r=12)
         make_cube_to(r_hand_sg, 0.060, 0.036, 0.032, sg_glove, 0.005, -0.095, -0.075, rot_p=22)
@@ -651,8 +655,8 @@ class CombatSystem:
 
         # (2) 왼손: 샷건 펌프액션 슬라이드 손잡이(sg_pump_node)에 직접 결속 -> 펌프 당김 시 100% 동기화 슬라이딩
         l_hand_sg = self.sg_pump_node.attachNewNode("sg_l_hand")
-        make_cube_to(l_hand_sg, 0.078, 0.32, 0.078, sg_sleeve, -0.095, -0.26, -0.21, rot_h=18, rot_p=32, rot_r=20)
-        make_cube_to(l_hand_sg, 0.068, 0.055, 0.068, sg_strap, -0.048, -0.11, -0.10, rot_h=15, rot_p=24, rot_r=12)
+        make_cylinder_to(l_hand_sg, 0.078, 0.32, 0.078, sg_sleeve, -0.095, -0.26, -0.21, rot_h=18, rot_p=32, rot_r=20, axis='y')
+        make_cylinder_to(l_hand_sg, 0.068, 0.055, 0.068, sg_strap, -0.048, -0.11, -0.10, rot_h=15, rot_p=24, rot_r=12, axis='y')
         make_cube_to(l_hand_sg, 0.065, 0.11, 0.055, sg_glove, -0.015, -0.015, -0.050, rot_r=15)
         make_cube_to(l_hand_sg, 0.060, 0.05, 0.025, sg_knuckle, -0.038, -0.015, -0.052, rot_r=18)
         make_cube_to(l_hand_sg, 0.076, 0.12, 0.034, sg_glove, 0.006, 0.005, -0.042)
@@ -1223,10 +1227,7 @@ class CombatSystem:
             if self.ammo <= 0:
                 self.slide_locked = True
             if self.audio_mgr:
-                if is_overcharge and hasattr(self.audio_mgr, 'play_overcharge_shot'):
-                    self.audio_mgr.play_overcharge_shot()
-                else:
-                    self.audio_mgr.play_gunshot()
+                self.audio_mgr.play_gunshot()
 
             if hasattr(self, 'muzzle_flash_geom') and not self.muzzle_flash_geom.isEmpty():
                 muzzle_world = self.muzzle_flash_geom.getPos(self.render)
@@ -1259,10 +1260,7 @@ class CombatSystem:
             if self.ammo <= 0:
                 self.slide_locked = True
             if self.audio_mgr:
-                if is_overcharge and hasattr(self.audio_mgr, 'play_overcharge_shot'):
-                    self.audio_mgr.play_overcharge_shot()
-                else:
-                    self.audio_mgr.play_gunshot()
+                self.audio_mgr.play_gunshot()
 
         elif self.current_weapon == "SHOTGUN":
             self.sg_pump_timer = 0.44
@@ -1282,9 +1280,7 @@ class CombatSystem:
             if self.ammo <= 0:
                 self.slide_locked = True
             if self.audio_mgr:
-                if is_overcharge and hasattr(self.audio_mgr, 'play_overcharge_shot'):
-                    self.audio_mgr.play_overcharge_shot()
-                elif hasattr(self.audio_mgr, 'play_shotgun_blast'):
+                if hasattr(self.audio_mgr, 'play_shotgun_blast'):
                     self.audio_mgr.play_shotgun_blast()
                 else:
                     self.audio_mgr.play_gunshot()
@@ -1418,7 +1414,7 @@ class CombatSystem:
             if hasattr(self, 'hammer_node') and self.hammer_node and not self.hammer_node.isEmpty():
                 self.hammer_node.setP(-42)
             if self.audio_mgr:
-                self.audio_mgr.play_reload()
+                self.audio_mgr.play_slide_release()
             self.ui_mgr.show_hit_marker("슬라이드 전진 완료! 격발 준비 완료", (0.35, 1.0, 0.5, 1.0))
             self.hit_marker_timer = 1.0
             return
@@ -1441,11 +1437,11 @@ class CombatSystem:
         self.reload_timer = base_reload_time
         self.was_slide_locked_before_reload = self.slide_locked
 
+        self.sg_pump_timer = 0.0
+        self.sg_pump_cycled = False
         if self.audio_mgr:
-            if self.current_weapon == "SHOTGUN" and hasattr(self.audio_mgr, 'play_shotgun_pump'):
-                self.audio_mgr.play_shotgun_pump()
-            else:
-                self.audio_mgr.play_reload()
+            playback_duration = base_reload_time / (1.35 if self.combo_count >= 2 else 1.0)
+            self.audio_mgr.play_reload(self.current_weapon, duration=playback_duration)
 
         if self.current_weapon == "SHOTGUN":
             status_msg = "12게이지 벅샷 쉘 연속 삽탄 및 펌프 장전 중..."
@@ -1455,6 +1451,21 @@ class CombatSystem:
             status_msg = "9mm 택티컬 전술 탄창 교체 중..."
         self.ui_mgr.show_hit_marker(status_msg, (0.9, 0.9, 0.9, 1.0))
         self.hit_marker_timer = 1.4
+
+    @property
+    def reload_duration(self):
+        """현재 무기의 기본 재장전 시간 (스피드 데몬 퍽 적용 반영)"""
+        cfg = WEAPON_CONFIGS.get(self.current_weapon, {})
+        base_time = cfg.get("reload_time", 1.30)
+        player = getattr(self.base, 'player', None)
+        if player and hasattr(player, 'has_perk') and player.has_perk("speed_demon"):
+            base_time *= 0.65
+        return base_time
+
+    @reload_duration.setter
+    def reload_duration(self, value):
+        if self.is_reloading:
+            self.reload_timer = min(self.reload_timer, value)
 
     def setup_ammo_drops(self, current_stage=1):
         """스테이지 2부터 맵 복도에 3D 밀리터리 탄약 상자 드랍"""
@@ -1599,6 +1610,8 @@ class CombatSystem:
         self.dual_hand_toggle = 0
         self.hammer_timer = 0.0
         self.was_slide_locked_before_reload = False
+        if self.audio_mgr:
+            self.audio_mgr.stop_weapon_actions()
 
         # 권총 3D 노드 복구
         if hasattr(self, 'slide_node') and self.slide_node and not self.slide_node.isEmpty():
@@ -1711,6 +1724,27 @@ class CombatSystem:
         )
 
     _update_ammo_ui = update_ammo_ui
+
+    def _update_shotgun_pump(self, dt):
+        """Keep recorded action and ejection in sync, including skipped frames."""
+        if not getattr(self, "sg_pump_node", None) or self.sg_pump_node.isEmpty():
+            return
+        if self.sg_pump_timer <= 0.0:
+            self.sg_pump_node.setPos(0, 0.28, -0.010)
+            return
+        total = WEAPON_CONFIGS["SHOTGUN"]["pump_time"]
+        previous_elapsed = total - self.sg_pump_timer
+        self.sg_pump_timer = max(0.0, self.sg_pump_timer - dt)
+        elapsed = total - self.sg_pump_timer
+        # The recording's rear/forward impacts occur at ~0.09/~0.38 s.
+        if previous_elapsed < 0.04 <= elapsed and self.audio_mgr:
+            self.audio_mgr.play_shotgun_pump()
+        progress = elapsed / total
+        if progress >= 0.35 and not self.sg_pump_cycled:
+            self.sg_pump_cycled = True
+            self._eject_casing(is_left=False, is_shotgun=True)
+        offset = -0.09 * (progress / 0.5 if progress < 0.5 else (1.0 - progress) / 0.5)
+        self.sg_pump_node.setPos(0, 0.28 + offset, -0.010)
 
     def update(self, dt, px=0.0, py=0.0, is_moving=False, is_sprinting=False):
         """프레임별 트레이서, 탄피 물리, 화약 연기, 슬라이드 블로우백, 펌프액션, 반동/재장전, 밥빙, 탄약 습득 갱신"""
@@ -2029,23 +2063,7 @@ class CombatSystem:
                 self.dual_right_slide.setPos(0, 0, 0)
 
         # (3) 12게이지 샷건 펌프액션 슬라이드 왕복 및 탄피 배출
-        if hasattr(self, 'sg_pump_node') and self.sg_pump_node and not self.sg_pump_node.isEmpty():
-            if self.sg_pump_timer > 0.0:
-                self.sg_pump_timer = max(0.0, self.sg_pump_timer - dt)
-                total_pump = 0.44
-                p_pump = 1.0 - (self.sg_pump_timer / total_pump)
-                if p_pump < 0.50:
-                    pump_offset = (p_pump / 0.50) * -0.09
-                    if p_pump >= 0.35 and not self.sg_pump_cycled:
-                        self.sg_pump_cycled = True
-                        if self.audio_mgr and hasattr(self.audio_mgr, 'play_shotgun_pump'):
-                            self.audio_mgr.play_shotgun_pump()
-                        self._eject_casing(is_left=False, is_shotgun=True)
-                else:
-                    pump_offset = ((1.0 - p_pump) / 0.50) * -0.09
-                self.sg_pump_node.setPos(0, 0.28 + pump_offset, -0.010)
-            else:
-                self.sg_pump_node.setPos(0, 0.28, -0.010)
+        self._update_shotgun_pump(dt)
 
         # 콤보 스트릭 타이머 감쇄
         if self.combo_timer > 0.0:
