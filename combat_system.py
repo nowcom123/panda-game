@@ -16,6 +16,7 @@ from world_gen import cell_has_pillar
 from geometry import make_cube_to, make_sphere_to, make_cylinder_to
 from collision import raycast_walls
 from projectiles import ExplosionVisualEffect
+from perks import get_player_perk_stats
 
 
 WEAPON_CONFIGS = {
@@ -888,16 +889,20 @@ class CombatSystem:
             if is_crit:
                 dmg *= cfg["headshot_mult"] if is_headshot else 1.85
                 if is_headshot and player and hasattr(player, 'has_perk') and player.has_perk("headhunter"):
-                    dmg *= 1.45  # 헤드헌터 퍽: 헤드샷 치명타 피해 +45% 증폭
+                    hh_stats = get_player_perk_stats(player, "headhunter")
+                    dmg *= hh_stats.get("damage_mult", 1.45)  # 헤드헌터 퍽: 헤드샷 치명타 피해 증폭
 
-            # 아드레날린 슬라이딩 퍽: 슬라이딩 중 사격 시 피해 1.5배 증폭 & 불릿타임
+            # 아드레날린 슬라이딩 퍽: 슬라이딩 중 사격 시 피해 증폭 & 불릿타임
             if is_sliding and player and hasattr(player, 'has_perk') and player.has_perk("adrenaline_slide"):
-                dmg *= 1.50
+                as_stats = get_player_perk_stats(player, "adrenaline_slide")
+                as_mult = as_stats.get("damage_mult", 1.50)
+                as_dur = as_stats.get("duration", 1.8)
+                dmg *= as_mult
                 game_inst = getattr(self.base, 'game', None) or self.base
                 if hasattr(game_inst, 'trigger_bullet_time'):
-                    game_inst.trigger_bullet_time(1.8)
+                    game_inst.trigger_bullet_time(as_dur)
                 if p_idx == 0:
-                    self.ui_mgr.show_hit_marker("⏱ [아드레날린 슬라이드 샷!] 피해 1.5x & 불릿타임!", (0.35, 1.0, 0.8, 1.0))
+                    self.ui_mgr.show_hit_marker(f"⏱ [아드레날린 슬라이드 샷!] 피해 {as_mult:.1f}x & 불릿타임!", (0.35, 1.0, 0.8, 1.0))
 
             # 샷건 원거리 탄속/운동에너지 감쇄 (7.0m 초과 시 점진적 감쇄, 22.0m 이상에서 최대 40%까지 감소)
             if cfg.get("pellets", 1) > 1 and tracer_dist > 7.0:
@@ -927,50 +932,68 @@ class CombatSystem:
 
             # 드래곤 브레스 퍽: 지속 화염 피해 상태이상 부여
             if player and hasattr(player, 'has_perk') and player.has_perk("dragons_breath"):
+                db_stats = get_player_perk_stats(player, "dragons_breath")
+                db_dps = db_stats.get("dps", 25.0)
+                db_dur = db_stats.get("duration", 3.0)
                 if hasattr(closest_monster, 'apply_burn'):
-                    closest_monster.apply_burn(dps=25.0, duration=3.0)
+                    closest_monster.apply_burn(dps=db_dps, duration=db_dur)
                 else:
-                    closest_monster.burn_timer = 3.0
-                    closest_monster.burn_dps = 25.0
+                    closest_monster.burn_timer = db_dur
+                    closest_monster.burn_dps = db_dps
                 if p_idx == 0:
                     self.ui_mgr.show_hit_marker("[화염] [드래곤 브레스 착탄!] 지속 화염 피해!", (1.0, 0.45, 0.15, 1.0))
 
-            # 흡혈 탄환 퍽: 헤드샷 치명타 적중 시 체력 +5 회복
+            # 흡혈 탄환 퍽: 헤드샷 치명타 적중 시 체력 회복
             if is_headshot and player and hasattr(player, 'has_perk') and player.has_perk("vampiric_leech"):
-                player.heal(5.0)
+                vl_stats = get_player_perk_stats(player, "vampiric_leech")
+                player.heal(vl_stats.get("headshot_heal", 5.0))
 
-            # 테슬라 아크 퍽: 치명타 시 주변 2체 연쇄 감전 (착탄 생성지 기준 방사형 번개 방출)
+            # 테슬라 아크 퍽: 치명타 시 주변 연쇄 감전 (착탄 생성지 기준 방사형 번개 방출)
             if is_crit and player and hasattr(player, 'has_perk') and player.has_perk("tesla_arc") and p_idx == 0:
+                tesla_stats = get_player_perk_stats(player, "tesla_arc")
+                t_dmg = tesla_stats.get("damage", 35.0)
+                t_radius = tesla_stats.get("radius", 7.5)
+                max_targets = min(8, int(tesla_stats.get("targets", 2)))
+                t_shock_dur = tesla_stats.get("shock_duration", 0.85)
+                t_prim_dur = tesla_stats.get("primary_duration", 0.65)
+                t_stun_dur = tesla_stats.get("stun_duration", 0.40)
+
                 if hasattr(closest_monster, 'apply_shock'):
-                    closest_monster.apply_shock(damage=0.0, duration=0.65, hit_pos=impact_world)
+                    closest_monster.apply_shock(damage=0.0, duration=t_prim_dur, hit_pos=impact_world)
 
                 shocked = 0
                 for om in monster_list:
                     if om != closest_monster and getattr(om, 'hp', 0) > 0 and not getattr(om, 'is_corpse', False):
-                        if (om.pos - impact_world).length() <= 7.5:
+                        if (om.pos - impact_world).length() <= t_radius:
                             if hasattr(om, 'apply_shock'):
-                                om.apply_shock(damage=35.0, duration=0.85, hit_pos=impact_world)
+                                om.apply_shock(damage=t_dmg, duration=t_shock_dur, hit_pos=impact_world)
                             else:
-                                om.take_damage(35.0, apply_knockback=True, hit_dir=(om.pos - impact_world).normalized())
-                                om.stun(0.40)
+                                om.take_damage(t_dmg, apply_knockback=True, hit_dir=(om.pos - impact_world).normalized())
+                                om.stun(t_stun_dur)
                             shocked += 1
-                            if shocked >= 2:
+                            if shocked >= max_targets:
                                 break
                 if shocked > 0:
                     self.ui_mgr.show_hit_marker(f"[★ 테슬라 아크!] {shocked}체 연쇄 방전 감전!", (0.4, 0.9, 1.0, 1.0))
 
             # 장갑 관통탄 퍽: 몬스터를 관통하여 후방의 적 추가 타격
             if player and hasattr(player, 'has_perk') and player.has_perk("armor_piercing"):
+                ap_stats = get_player_perk_stats(player, "armor_piercing")
+                max_targets = int(ap_stats.get("targets", 1))
                 pierce_origin = impact_world + ray_dir * 0.4
-                sec_monster = None
-                sec_dist = 20.0
+                chunks = getattr(self.base, 'chunks', {})
+                pierce_wall_dist, _ = raycast_walls(chunks, pierce_origin, ray_dir, max_dist=55.0)
+
+                pierce_candidates = []
                 for m2 in monster_list:
                     if m2 != closest_monster and getattr(m2, 'hp', 0) > 0 and not getattr(m2, 'is_corpse', False):
                         hit2, dist2 = m2.is_hit_by_ray(pierce_origin, ray_dir)
-                        if hit2 and dist2 < sec_dist:
-                            sec_dist = dist2
-                            sec_monster = m2
-                if sec_monster is not None:
+                        if hit2 and 0.0 < dist2 < pierce_wall_dist:
+                            pierce_candidates.append((dist2, m2))
+
+                pierce_candidates.sort(key=lambda item: item[0])
+                hit_count = 0
+                for sec_dist, sec_monster in pierce_candidates[:max_targets]:
                     sec_dead = sec_monster.take_damage(dmg, apply_knockback=True, hit_dir=ray_dir)
                     sec_impact = pierce_origin + ray_dir * sec_dist
                     self.spawn_hit_particles(sec_impact, is_blood=True)
@@ -980,8 +1003,9 @@ class CombatSystem:
                             sec_monster.turn_into_corpse(audio_mgr=self.audio_mgr)
                         if player:
                             player.gain_exp(getattr(sec_monster, 'exp_value', 35))
-                    if p_idx == 0:
-                        self.ui_mgr.show_hit_marker("🎯 [장갑 관통탄 적중!] 후방 적 관통 타격!", (0.4, 0.85, 1.0, 1.0))
+                    hit_count += 1
+                if hit_count > 0 and p_idx == 0:
+                    self.ui_mgr.show_hit_marker(f"🎯 [장갑 관통탄!] 후방 적 {hit_count}체 관통 타격!", (0.4, 0.85, 1.0, 1.0))
 
             if player and hasattr(player, 'recover_stamina'):
                 gain = 24.0 if is_crit else 10.0
@@ -1040,18 +1064,25 @@ class CombatSystem:
                 if player and hasattr(player, 'relics') and "blood_thirst" in player.relics:
                     player.heal(12.0)
 
-                # 흡혈 탄환 퍽: 처치 시 체력 +12 회복
+                # 흡혈 탄환 퍽: 처치 시 체력 회복
                 if player and hasattr(player, 'has_perk') and player.has_perk("vampiric_leech"):
-                    player.heal(12.0)
-                    self.ui_mgr.show_hit_marker("🩸 [흡혈 탄환!] 체력 +12 회복", (0.35, 1.0, 0.45, 1.0))
+                    vl_stats = get_player_perk_stats(player, "vampiric_leech")
+                    k_heal = vl_stats.get("kill_heal", 12.0)
+                    player.heal(k_heal)
+                    self.ui_mgr.show_hit_marker(f"🩸 [흡혈 탄환!] 체력 +{int(k_heal)} 회복", (0.35, 1.0, 0.45, 1.0))
 
-                # 탄환 폭풍 퍽: 처치 시 3.5초간 무한 연사 폭주
+                # 탄환 폭풍 퍽: 처치 시 무한 연사 폭주
                 if player and hasattr(player, 'has_perk') and player.has_perk("bullet_storm"):
-                    self.bullet_storm_timer = 3.5
-                    self.ui_mgr.show_hit_marker("🌪 [탄환 폭풍 발동!] 3.5초간 무한 연사 폭주! 🌪", (1.0, 0.85, 0.2, 1.0))
+                    bs_stats = get_player_perk_stats(player, "bullet_storm")
+                    dur = bs_stats.get("duration", 3.5)
+                    self.bullet_storm_timer = dur
+                    self.ui_mgr.show_hit_marker(f"🌪 [탄환 폭풍 발동!] {dur:.1f}초간 무한 연사 폭주! 🌪", (1.0, 0.85, 0.2, 1.0))
 
                 # 파편 폭발 퍽: 처치 시 고열 파편 비산 범위 폭발
                 if player and hasattr(player, 'has_perk') and player.has_perk("shrapnel_burst"):
+                    sb_stats = get_player_perk_stats(player, "shrapnel_burst")
+                    sb_dmg = sb_stats.get("damage", 75.0)
+                    sb_rad = sb_stats.get("radius", 3.8)
                     game_inst = getattr(self.base, 'game', None) or self.base
                     exp_list = getattr(game_inst, 'explosions', None)
                     if exp_list is not None:
@@ -1059,8 +1090,8 @@ class CombatSystem:
                     for som in monster_list:
                         if som != closest_monster and getattr(som, 'hp', 0) > 0 and not getattr(som, 'is_corpse', False):
                             s_dist = (som.pos - impact_world).length()
-                            if s_dist <= 3.8:
-                                s_dmg = 75.0 * (1.0 - s_dist / 3.8 * 0.40)
+                            if s_dist <= sb_rad:
+                                s_dmg = sb_dmg * (1.0 - s_dist / sb_rad * 0.40)
                                 s_dead = som.take_damage(s_dmg, apply_knockback=True, hit_dir=(som.pos - impact_world).normalized())
                                 if s_dead:
                                     self.register_kill(player=player)
@@ -1070,9 +1101,10 @@ class CombatSystem:
                                         player.gain_exp(getattr(som, 'exp_value', 35))
                     self.ui_mgr.show_hit_marker("💥 [파편 폭발!] 고열 파편 비산 범위 타격! 💥", (1.0, 0.55, 0.2, 1.0))
 
-                # 헤드헌터 퍽: 헤드샷 처치 시 경험치 2배
+                # 헤드헌터 퍽: 헤드샷 처치 시 경험치 증폭
                 if is_headshot and player and hasattr(player, 'has_perk') and player.has_perk("headhunter"):
-                    exp_gain *= 2
+                    hh_stats = get_player_perk_stats(player, "headhunter")
+                    exp_gain = int(exp_gain * hh_stats.get("xp_mult", 2.0))
 
                 if hasattr(closest_monster, 'turn_into_corpse'):
                     closest_monster.turn_into_corpse(audio_mgr=self.audio_mgr)
@@ -1094,10 +1126,13 @@ class CombatSystem:
             impact_world = wall_hit_pos
             self.spawn_hit_particles(impact_world, is_blood=False)
 
-            # 도탄 사격 퍽: 벽면에 맞은 탄환이 반경 14m 이내의 최근접 몬스터로 도탄
+            # 도탄 사격 퍽: 벽면에 맞은 탄환이 이내의 최근접 몬스터로 도탄
             if player and hasattr(player, 'has_perk') and player.has_perk("ricochet"):
+                rico_stats = get_player_perk_stats(player, "ricochet")
+                rico_range = rico_stats.get("range", 14.0)
+                rico_dmg_mult = rico_stats.get("damage_mult", 0.70)
                 rico_target = None
-                rico_min_d = 14.0
+                rico_min_d = rico_range
                 for rm in monster_list:
                     if getattr(rm, 'hp', 0) > 0 and not getattr(rm, 'is_corpse', False):
                         d_rico = (rm.pos - wall_hit_pos).length()
@@ -1106,7 +1141,7 @@ class CombatSystem:
                             rico_target = rm
                 if rico_target is not None:
                     rico_dir = (rico_target.pos - wall_hit_pos).normalized()
-                    rico_dmg = cfg["damage"] * 0.70
+                    rico_dmg = cfg["damage"] * rico_dmg_mult
                     r_dead = rico_target.take_damage(rico_dmg, apply_knockback=True, hit_dir=rico_dir)
                     self.spawn_hit_particles(rico_target.pos, is_blood=True)
                     self._spawn_tracer_effect(wall_hit_pos, rico_target.pos, rico_dir, rico_min_d, is_overcharge=True)
@@ -1203,7 +1238,8 @@ class CombatSystem:
         # 쿨다운 & 반동 시간 설정
         cd = cfg["combo_cooldown"] if self.combo_count >= 2 else cfg["cooldown"]
         if in_bullet_storm:
-            cd *= 0.65  # 탄환 폭풍 퍽 활성화 시 연사 속도 +35% 극대화
+            bs_stats = get_player_perk_stats(player, "bullet_storm")
+            cd *= bs_stats.get("cooldown_mult", 0.65)  # 탄환 폭풍 퍽 활성화 시 연사 속도 극대화
         self.shoot_cooldown = cd
         self.recoil_timer = cfg["recoil_time"]
         self.muzzle_timer = 0.05
@@ -1442,7 +1478,8 @@ class CombatSystem:
         base_reload_time = cfg.get("reload_time", 1.30)
         player = getattr(self.base, 'player', None)
         if player and hasattr(player, 'has_perk') and player.has_perk("speed_demon"):
-            base_reload_time *= 0.65  # 스피드 데몬 퍽: 재장전 시간 35% 가속
+            sd_stats = get_player_perk_stats(player, "speed_demon")
+            base_reload_time *= sd_stats.get("reload_mult", 0.65)  # 스피드 데몬 퍽: 재장전 시간 가속
         self.reload_timer = base_reload_time
         self.was_slide_locked_before_reload = self.slide_locked
 
@@ -1468,7 +1505,8 @@ class CombatSystem:
         base_time = cfg.get("reload_time", 1.30)
         player = getattr(self.base, 'player', None)
         if player and hasattr(player, 'has_perk') and player.has_perk("speed_demon"):
-            base_time *= 0.65
+            sd_stats = get_player_perk_stats(player, "speed_demon")
+            base_time *= sd_stats.get("reload_mult", 0.65)
         return base_time
 
     @reload_duration.setter

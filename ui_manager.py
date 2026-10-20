@@ -16,7 +16,7 @@ from direct.gui.OnscreenImage import OnscreenImage
 from direct.gui.DirectGui import DirectButton, DirectFrame, DGG
 from panda3d.core import TextNode, TransparencyAttrib, LineSegs
 from constants import CURSED_RELICS
-from perks import PERK_CATALOG, draw_random_perks, RARITY_COLORS, RARITY_NAMES
+from perks import PERK_CATALOG, draw_random_perks, RARITY_COLORS, RARITY_NAMES, get_perk_level, describe_perk
 
 
 class TacticalCrosshair:
@@ -1472,17 +1472,28 @@ class UIManager:
             self.relic_badge_text.setText(f"[유물]  {'  '.join(names)}")
             self.relic_badge_text.setFg((0.95, 0.75, 1.0, 1.0))
 
-    def update_perk_badges(self, perk_ids):
+    def update_perk_badges(self, perk_ids, perk_levels=None):
         """플레이어가 획득한 로그라이크 전술 퍽 HUD 텍스트 갱신"""
         if not hasattr(self, 'perk_badge_text') or not self.perk_badge_text:
             return
         if not perk_ids:
             self.perk_badge_text.setText("[장착 퍽] 없음")
             self.perk_badge_text.setFg((0.6, 0.6, 0.6, 0.8))
-        else:
-            names = [f"{PERK_CATALOG[pid]['icon']} {PERK_CATALOG[pid]['name']}" for pid in perk_ids if pid in PERK_CATALOG]
-            self.perk_badge_text.setText(f"[퍽]  {'  '.join(names)}")
-            self.perk_badge_text.setFg((0.35, 0.90, 1.0, 1.0))
+            return
+
+        if perk_levels is None:
+            player = getattr(self, 'shop_player', None)
+            if not player and hasattr(self, 'base'):
+                player = getattr(self.base, 'player', None)
+            perk_levels = getattr(player, 'perk_levels', None) if player else None
+
+        names = []
+        for pid in perk_ids:
+            if pid in PERK_CATALOG:
+                lvl = perk_levels.get(pid, 1) if isinstance(perk_levels, dict) else 1
+                names.append(f"{PERK_CATALOG[pid]['icon']} {PERK_CATALOG[pid]['name']} Lv.{lvl}")
+        self.perk_badge_text.setText(f"[퍽]  {'  '.join(names)}")
+        self.perk_badge_text.setFg((0.35, 0.90, 1.0, 1.0))
 
     def show_boss_hp_bar(self, boss_name="[ ☠ BOSS: 케이블 엔티티 - 심연의 지배자 ☠ ]", hp=None, max_hp=None):
         """보스 출현 시 상단 전용 체력바 표시"""
@@ -2017,39 +2028,51 @@ class UIManager:
         if not self.shop_player:
             return
         perks = getattr(self.shop_player, 'perks', set())
+        perk_levels = getattr(self.shop_player, 'perk_levels', {})
         if not perks:
             self.shop_owned_perks_text.setText("[ 현재 장착 퍽: 없음 ]")
             self.shop_owned_perks_text.setFg((0.6, 0.6, 0.6, 0.9))
         else:
-            names = [f"{PERK_CATALOG[pid]['icon']} {PERK_CATALOG[pid]['name']}" for pid in perks if pid in PERK_CATALOG]
+            names = []
+            for pid in perks:
+                if pid in PERK_CATALOG:
+                    lvl = perk_levels.get(pid, 1) if isinstance(perk_levels, dict) else 1
+                    names.append(f"{PERK_CATALOG[pid]['icon']} {PERK_CATALOG[pid]['name']} Lv.{lvl}")
             self.shop_owned_perks_text.setText(f"[ 현재 장착 퍽 ({len(perks)}개) ]  {'  •  '.join(names)}")
             self.shop_owned_perks_text.setFg((0.35, 0.90, 1.0, 1.0))
 
     def _select_perk_card(self, card_idx):
         """퍽 카드 선택 클릭 또는 키보드 [1, 2, 3] 이벤트"""
-        if card_idx >= len(self.offered_perks) or not self.shop_player:
+        if getattr(self.shop_modal, 'isHidden', lambda: False)():
             return
-        perk = self.offered_perks[card_idx]
-        self.shop_player.add_perk(perk["id"], self.shop_combat)
+        if self.selected_perk_idx != -1:
+            return
+        if card_idx < 0 or card_idx >= len(self.offered_perks) or not self.shop_player:
+            return
+
         self.selected_perk_idx = card_idx
+        perk = self.offered_perks[card_idx]
+        new_lvl = self.shop_player.add_perk(perk["id"], self.shop_combat)
+        if new_lvl is None:
+            new_lvl = get_perk_level(self.shop_player, perk["id"])
 
         # 카드 하이라이트 및 비활성화
         for idx, card in enumerate(self.perk_cards):
             card["btn"]["state"] = DGG.DISABLED
             if idx == card_idx:
                 card["frame"]["image"] = 'assets/ui/card_relic_active.png'
-                card["btn"]["text"] = "[ 장착 완료 ★ ]"
+                card["btn"]["text"] = f"[ Lv.{new_lvl} 장착 완료 ★ ]"
                 card["btn"]["text_fg"] = (1.0, 0.90, 0.25, 1.0)
             else:
                 card["btn"]["text"] = "[ 미선택 ]"
                 card["btn"]["text_fg"] = (0.5, 0.5, 0.5, 0.8)
 
-        self.shop_msg_text.setText(f"★ [{perk['name']}] 퍽 장착 완료! 하단 버튼 또는 [Enter]/[Space]를 눌러 계속하세요.")
+        self.shop_msg_text.setText(f"★ [{perk['name']} Lv.{new_lvl}] 퍽 장착 완료! 하단 버튼 또는 [Enter]/[Space]를 눌러 계속하세요.")
         self.shop_msg_text.setFg((0.35, 1.0, 0.55, 1.0))
         self._refresh_owned_perks_label()
 
         if hasattr(self, 'update_perk_badges'):
-            self.update_perk_badges(self.shop_player.perks)
+            self.update_perk_badges(self.shop_player.perks, getattr(self.shop_player, 'perk_levels', None))
 
     def select_perk_by_key(self, key_num):
         """키보드 [1], [2], [3] 입력 시 퍽 카드 즉시 선택"""
@@ -2116,10 +2139,13 @@ class UIManager:
                 card["rarity"].setText(f"[ {rarity_name} ]")
                 card["rarity"].setFg(rarity_col)
 
-                card["title"].setText(f"{perk['icon']} {perk['name']}")
+                cur_lvl = get_perk_level(player, perk["id"])
+                next_lvl = cur_lvl + 1
+                card["title"].setText(f"{perk['icon']} {perk['name']} (Lv.{cur_lvl} → Lv.{next_lvl})")
                 tags_str = " ".join([f"#{t}" for t in perk.get("tags", [])])
                 card["category"].setText(f"[{perk.get('category', '전술')}]  {tags_str}")
-                card["desc"].setText(perk["desc"])
+                desc_text = describe_perk(perk["id"], next_lvl)
+                card["desc"].setText(desc_text)
 
                 card["btn"]["state"] = DGG.NORMAL
                 card["btn"]["text"] = f"[ {i+1}번 퍽 선택 (KEY {i+1}) ]"
@@ -2165,10 +2191,13 @@ class UIManager:
                 card["rarity"].setText(f"[ {rarity_name} ]")
                 card["rarity"].setFg(rarity_col)
 
-                card["title"].setText(f"{perk['icon']} {perk['name']}")
+                cur_lvl = get_perk_level(player, perk["id"])
+                next_lvl = cur_lvl + 1
+                card["title"].setText(f"{perk['icon']} {perk['name']} (Lv.{cur_lvl} → Lv.{next_lvl})")
                 tags_str = " ".join([f"#{t}" for t in perk.get("tags", [])])
                 card["category"].setText(f"[{perk.get('category', '전술')}]  {tags_str}")
-                card["desc"].setText(perk["desc"])
+                desc_text = describe_perk(perk["id"], next_lvl)
+                card["desc"].setText(desc_text)
 
                 card["btn"]["state"] = DGG.NORMAL
                 card["btn"]["text"] = f"[ {i+1}번 퍽 선택 (KEY {i+1}) ]"

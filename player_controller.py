@@ -11,6 +11,7 @@ from constants import (
 )
 from collision import resolve_collision
 from elevation import get_floor_height
+from perks import PERK_CATALOG, get_perk_level, get_perk_stats, get_player_perk_stats
 
 
 ITEM_CATALOG = {
@@ -460,7 +461,7 @@ class PlayerController:
             amount *= 1.40
         # 타이탄 방탄 외골격 퍽: 받는 피해 25% 상시 감소
         if self.has_perk("titan_armor"):
-            amount *= 0.75
+            amount *= get_player_perk_stats(self, "titan_armor")['damage_mult']
 
         self.hp = max(0.0, self.hp - amount)
         self.invincible_timer = 0.55  # 0.55초 무적 쿨다운
@@ -515,20 +516,19 @@ class PlayerController:
 
     def add_perk(self, perk_id, combat_system=None):
         """로그라이크 전술 퍽 획득 및 즉각적인 스탯/패시브 적용"""
+        if perk_id not in PERK_CATALOG:
+            raise ValueError(f"Unknown perk: {perk_id}")
+        previous_level = get_perk_level(self, perk_id)
         self.perks.add(perk_id)
-        self.perk_levels[perk_id] = self.perk_levels.get(perk_id, 0) + 1
+        self.perk_levels[perk_id] = previous_level + 1
 
         if perk_id == "speed_demon":
-            self.speed_mult *= 1.20
-            if combat_system:
-                # 현재 재장전 진행 중인 경우 남은 장전 시간을 35% 단축
-                if getattr(combat_system, "is_reloading", False):
-                    combat_system.reload_timer *= 0.65
-                if hasattr(combat_system, "reload_duration"):
-                    try:
-                        combat_system.reload_duration *= 0.65
-                    except Exception:
-                        pass
+            old = get_perk_stats(perk_id, previous_level)
+            new = get_player_perk_stats(self, perk_id)
+            # Apply only the upgrade delta, preserving relic movement modifiers.
+            self.speed_mult *= new['move_mult'] / old['move_mult']
+            if combat_system and getattr(combat_system, "is_reloading", False):
+                combat_system.reload_timer *= new['reload_mult'] / old['reload_mult']
         elif perk_id == "titan_armor":
             self.max_hp += 25.0
             self.hp = min(self.max_hp, self.hp + 25.0)
@@ -537,13 +537,15 @@ class PlayerController:
 
         self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, pending_perks=self.pending_perk_picks)
         if hasattr(self.ui_mgr, 'update_perk_badges'):
-            self.ui_mgr.update_perk_badges(self.perks)
+            self.ui_mgr.update_perk_badges(self.perks, self.perk_levels)
+        return self.perk_levels[perk_id]
 
     def apply_slow(self, duration=2.8, factor=0.40):
         """진흙 괴물 땅울림으로 인한 지면 균열 이동 방해(슬로우) 부여"""
         if self.has_perk("titan_armor"):
-            duration *= 0.50
-            factor = min(1.0, factor + 0.30)
+            stats = get_player_perk_stats(self, "titan_armor")
+            duration *= stats['slow_duration_mult']
+            factor = 1.0 - (1.0 - factor) * stats['slow_strength_mult']
         self.slow_timer = duration
         self.slow_factor = factor
 
@@ -681,7 +683,7 @@ class PlayerController:
             self.is_sprinting = wants_to_sprint and (self.stamina > 0.0)
 
         if self.is_sprinting:
-            drain = 22.0 * (0.60 if self.has_perk("speed_demon") else 1.0)
+            drain = 22.0 * get_player_perk_stats(self, "speed_demon")['stamina_mult']
             self.stamina -= drain * dt  # 스피드 데몬 퍽 보유 시 소모 40% 절감
             if self.stamina <= 0.0:
                 self.stamina = 0.0

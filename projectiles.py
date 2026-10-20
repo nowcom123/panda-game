@@ -3,6 +3,7 @@ import random
 from panda3d.core import Vec3, LColor, PointLight, TransparencyAttrib
 from collision import get_nearby_colliders
 from geometry import make_cube, make_cube_to, make_sphere, make_sphere_to, make_cylinder, make_cylinder_to
+from perks import get_player_perk_stats
 
 
 class Fireball:
@@ -403,17 +404,21 @@ class FragGrenade:
                     if db <= blast_radius:
                         b.ignite()
 
-        # 집속 수류탄 퍽: 4개의 자탄이 사방으로 비산하여 2차 연쇄 폭발
+        # 집속 수류탄 퍽: 자탄이 사방으로 비산하여 2차 연쇄 폭발
         if player and hasattr(player, 'has_perk') and player.has_perk("cluster_grenade"):
-            angles = [0.0, math.pi * 0.5, math.pi, math.pi * 1.5]
+            cg_stats = get_player_perk_stats(player, "cluster_grenade")
+            sub_count = int(cg_stats.get("count", 4))
+            sub_damage = float(cg_stats.get("damage", 90.0))
+            sub_radius = float(cg_stats.get("radius", 3.5))
+            angles = [2.0 * math.pi * i / max(1, sub_count) for i in range(sub_count)]
             for ang in angles:
                 sub_pos = Vec3(self.pos.x + math.cos(ang) * 2.2, self.pos.y + math.sin(ang) * 2.2, self.pos.z)
                 if explosion_list is not None:
                     explosion_list.append(ExplosionVisualEffect(self.render, sub_pos, self.render))
                 for m in monsters:
                     if getattr(m, 'hp', 0) > 0 and not getattr(m, 'is_corpse', False):
-                        if (m.pos - sub_pos).length() <= 3.5:
-                            s_dead = m.take_damage(90.0, apply_knockback=True, hit_dir=(m.pos - sub_pos).normalized())
+                        if (m.pos - sub_pos).length() <= sub_radius:
+                            s_dead = m.take_damage(sub_damage, apply_knockback=True, hit_dir=(m.pos - sub_pos).normalized())
                             if s_dead:
                                 kill_count += 1
                                 if hasattr(m, 'turn_into_corpse'):
@@ -421,7 +426,7 @@ class FragGrenade:
                                 if player and hasattr(player, 'gain_exp'):
                                     player.gain_exp(getattr(m, 'exp_value', 35))
             if ui_mgr:
-                ui_mgr.show_hit_marker("💣 [집속 수류탄!] 4방향 2차 연쇄 폭발!", (1.0, 0.6, 0.2, 1.0))
+                ui_mgr.show_hit_marker(f"💣 [집속 수류탄!] {sub_count}방향 2차 연쇄 폭발!", (1.0, 0.6, 0.2, 1.0))
 
         if kill_count >= 2 and ui_mgr:
             ui_mgr.show_style_kill(f"[ GRENADE MULTI-KILL! ×{kill_count} ]", f"+{kill_count * 80} EXP", (1.0, 0.75, 0.2, 1.0))
