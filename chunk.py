@@ -1,12 +1,27 @@
+import math
 import collections
-from panda3d.core import CardMaker, TextureStage, NodePath
+from panda3d.core import CardMaker, TextureStage, NodePath, LColor
 from constants import (
     CELL_SIZE, CHUNK_CELLS, CHUNK_SIZE, TIER_HEIGHT, WALL_HEIGHT, DOOR_HEIGHT, WALL_THICKNESS,
     MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
 from world_gen import get_edge_types, cell_has_pillar
+from geometry import make_cube_to
+from elevation import get_chunk_elevation, PLATFORM_HEIGHT
 
 
+
+
+def _register_multi_cell_collider(target_dict, col):
+    """AABB 충돌체가 걸쳐 있는 모든 그리드 셀(gx, gy) 공간 인덱스에 등록"""
+    min_x, min_y, max_x, max_y = col
+    min_gx = int(math.floor(min_x / CELL_SIZE))
+    max_gx = int(math.floor(max_x / CELL_SIZE))
+    min_gy = int(math.floor(min_y / CELL_SIZE))
+    max_gy = int(math.floor(max_y / CELL_SIZE))
+    for gx in range(min_gx, max_gx + 1):
+        for gy in range(min_gy, max_gy + 1):
+            target_dict[(gx, gy)].append(col)
 
 
 class Chunk:
@@ -20,6 +35,8 @@ class Chunk:
             self.node = NodePath(f"chunk_{cx}_{cy}")
         self.colliders = [] # [(min_x, min_y, max_x, max_y), ...]
         self.cell_colliders = collections.defaultdict(list) # (gx, gy) -> [collider, ...] 초고속 공간 인덱스
+        self.cell_colliders_ground = collections.defaultdict(list) # 1층 전용 충돌체 (기둥, 경사로 옆면)
+        self.cell_colliders_elevated = collections.defaultdict(list) # 2층 복층 전용 충돌체 (안전 난간)
         self.is_hidden = False
 
         chunk_origin_x = cx * CHUNK_SIZE
@@ -444,7 +461,153 @@ class Chunk:
                     self.colliders.append(col_pillar)
                     self.cell_colliders[(gx, gy)].append(col_pillar)
 
-        # 4. 드로우 콜 최적화 (청크 벽체 및 바닥/천장 지오메트리 병합)
+        # --- (4) 3D 복층(2층) 플랫폼, 경사로, 지지 기둥 및 안전 난간 건축 ---
+        elev_data = get_chunk_elevation(cx, cy)
+        rail_dark = LColor(0.22, 0.22, 0.24, 1.0)
+        rail_bright = LColor(0.95, 0.65, 0.15, 1.0) # 안전 오렌지 악센트
+        fascia_col = LColor(0.35, 0.33, 0.30, 1.0) # 콘크리트 슬래브 테두리
+
+        for plat in elev_data.get("platforms", []):
+            pw = plat.max_x - plat.min_x
+            ph = plat.max_y - plat.min_y
+            if pw <= 0.1 or ph <= 0.1:
+                continue
+
+            # 1) 플랫폼 2층 바닥면 (Floor)
+            cm_pfloor = CardMaker(f'plat_floor_{plat.id}')
+            cm_pfloor.setFrame(0, pw, 0, ph)
+            p_fl = self.node.attachNewNode(cm_pfloor.generate())
+            p_fl.setP(-90)
+            p_fl.setPos(plat.min_x, plat.min_y, plat.z)
+            p_fl.setTexture(floor_tex)
+            p_fl.setTexScale(TextureStage.getDefault(), round(pw / 3.5, 2), round(ph / 3.5, 2))
+            p_fl.setColorScale(0.70, 0.67, 0.60, 1.0) # 2층 고급 테라스 타일
+
+            # 2) 플랫폼 1층 천장면 (Soffit underneath)
+            p_ceil = self.node.attachNewNode(cm_pfloor.generate())
+            p_ceil.setP(90)
+            p_ceil.setPos(plat.min_x, plat.min_y + ph, plat.z - plat.thickness)
+            p_ceil.setTexture(floor_tex)
+            p_ceil.setTexScale(TextureStage.getDefault(), round(pw / 3.5, 2), round(ph / 3.5, 2))
+            p_ceil.setColorScale(0.45, 0.43, 0.38, 1.0)
+            p_ceil.setTwoSided(True)
+
+            # 3) 슬래브 테두리 패시아 (0.35m 두께 마감)
+            mid_z = plat.z - plat.thickness * 0.5
+            make_cube_to(self.node, pw, 0.18, plat.thickness, fascia_col, (plat.min_x + plat.max_x) * 0.5, plat.min_y, mid_z)
+            make_cube_to(self.node, pw, 0.18, plat.thickness, fascia_col, (plat.min_x + plat.max_x) * 0.5, plat.max_y, mid_z)
+            make_cube_to(self.node, 0.18, ph, plat.thickness, fascia_col, plat.min_x, (plat.min_y + plat.max_y) * 0.5, mid_z)
+            make_cube_to(self.node, 0.18, ph, plat.thickness, fascia_col, plat.max_x, (plat.min_y + plat.max_y) * 0.5, mid_z)
+
+        # 4) 지지 기둥 (Pillars underneath)
+        for (px, py, pw, pd) in elev_data.get("pillars", []):
+            ph = PLATFORM_HEIGHT - 0.35
+            make_cube_to(self.node, pw, pd, ph, fascia_col, px, py, ph * 0.5)
+            col_pil = (px - pw * 0.5, py - pd * 0.5, px + pw * 0.5, py + pd * 0.5)
+            self.colliders.append(col_pil)
+            _register_multi_cell_collider(self.cell_colliders, col_pil)
+            _register_multi_cell_collider(self.cell_colliders_ground, col_pil)
+
+        # 5) 2층 안전 난간 (Railings)
+        for (rx1, ry1, rx2, ry2) in elev_data.get("railings", []):
+            rw = max(0.12, abs(rx2 - rx1))
+            rd = max(0.12, abs(ry2 - ry1))
+            rcx = (rx1 + rx2) * 0.5
+            rcy = (ry1 + ry2) * 0.5
+            # 핸드레일 상단 바
+            make_cube_to(self.node, rw, rd, 0.08, rail_dark, rcx, rcy, PLATFORM_HEIGHT + 0.95)
+            # 중간 악센트 바
+            make_cube_to(self.node, rw, rd, 0.05, rail_bright, rcx, rcy, PLATFORM_HEIGHT + 0.50)
+            # 하단 킥플레이트
+            make_cube_to(self.node, rw, rd, 0.12, rail_dark, rcx, rcy, PLATFORM_HEIGHT + 0.06)
+            col_r = (min(rx1, rx2) - 0.15, min(ry1, ry2) - 0.15, max(rx1, rx2) + 0.15, max(ry1, ry2) + 0.15)
+            _register_multi_cell_collider(self.cell_colliders_elevated, col_r)
+
+        # 6) 경사로 (Ramps)
+        for ramp in elev_data.get("ramps", []):
+            is_y_dir = ramp.direction in ('+y', '-y')
+            rw = ramp.max_x - ramp.min_x if is_y_dir else ramp.max_y - ramp.min_y
+            rl = ramp.max_y - ramp.min_y if is_y_dir else ramp.max_x - ramp.min_x
+            diag = math.hypot(rl, ramp.z_top - ramp.z_bottom)
+            pitch = ramp.slope_pitch
+
+            cm_ramp = CardMaker(f'ramp_surf_{ramp.id}')
+            cm_ramp.setFrame(0, rw, 0, diag)
+            r_np = self.node.attachNewNode(cm_ramp.generate())
+            if ramp.direction == '+y':
+                r_np.setP(-(90 - pitch))
+                r_np.setPos(ramp.min_x, ramp.min_y, ramp.z_bottom)
+            elif ramp.direction == '-y':
+                r_np.setH(180)
+                r_np.setP(-(90 - pitch))
+                r_np.setPos(ramp.max_x, ramp.max_y, ramp.z_bottom)
+            elif ramp.direction == '+x':
+                r_np.setH(-90)
+                r_np.setP(-(90 - pitch))
+                r_np.setPos(ramp.min_x, ramp.max_y, ramp.z_bottom)
+            elif ramp.direction == '-x':
+                r_np.setH(90)
+                r_np.setP(-(90 - pitch))
+                r_np.setPos(ramp.max_x, ramp.min_y, ramp.z_bottom)
+
+            r_np.setTexture(floor_tex)
+            r_np.setTexScale(TextureStage.getDefault(), round(rw / 3.0, 2), round(diag / 3.0, 2))
+            r_np.setColorScale(0.72, 0.70, 0.62, 1.0)
+            r_np.setTwoSided(True)
+
+            # 경사로 양측 핸드레일 바
+            if is_y_dir:
+                for side_x in (ramp.min_x + 0.08, ramp.max_x - 0.08):
+                    hr = self.node.attachNewNode(cm_ramp.generate())
+                    if ramp.direction == '+y':
+                        hr.setP(-(90 - pitch))
+                        hr.setPos(side_x - 0.04, ramp.min_y, ramp.z_bottom + 0.90)
+                    else:
+                        hr.setH(180)
+                        hr.setP(-(90 - pitch))
+                        hr.setPos(side_x + 0.04, ramp.max_y, ramp.z_bottom + 0.90)
+                    hr.setScale(0.08 / max(0.01, rw), 1.0, 1.0)
+                    hr.setColor(rail_bright)
+
+            # 경사로 측면 난간벽 및 솔리드 스트링거 벽체 (Architectural Stepped Balustrades & Stringers)
+            # 경사로 좌우 양측에 지면(0.0m)부터 경사면(+0.88m 안전 난간 상단)까지 완벽 밀폐되는 입체 측벽 및 핸드레일 캡 생성
+            num_segs = 12
+            seg_len = rl / num_segs
+            wall_thick = 0.28
+            rail_cap_thick = wall_thick + 0.08
+
+            for i in range(num_segs):
+                dist = (i + 0.5) * seg_len
+                if ramp.direction in ('+y', '+x'):
+                    ratio = dist / max(0.001, rl)
+                else:
+                    ratio = 1.0 - (dist / max(0.001, rl))
+                local_floor_z = ramp.z_bottom + ratio * (ramp.z_top - ramp.z_bottom)
+                seg_h = local_floor_z + 0.88
+                seg_z = seg_h * 0.5
+
+                if is_y_dir:
+                    seg_y = ramp.min_y + dist
+                    for side_x in (ramp.min_x, ramp.max_x):
+                        make_cube_to(self.node, wall_thick, seg_len + 0.03, seg_h, fascia_col, side_x, seg_y, seg_z)
+                        make_cube_to(self.node, rail_cap_thick, seg_len + 0.03, 0.08, rail_dark, side_x, seg_y, seg_h + 0.04)
+                        make_cube_to(self.node, rail_cap_thick + 0.02, seg_len + 0.03, 0.04, rail_bright, side_x, seg_y, seg_h)
+                else:
+                    seg_x = ramp.min_x + dist
+                    for side_y in (ramp.min_y, ramp.max_y):
+                        make_cube_to(self.node, seg_len + 0.03, wall_thick, seg_h, fascia_col, seg_x, side_y, seg_z)
+                        make_cube_to(self.node, seg_len + 0.03, rail_cap_thick, 0.08, rail_dark, seg_x, side_y, seg_h + 0.04)
+                        make_cube_to(self.node, seg_len + 0.03, rail_cap_thick + 0.02, 0.04, rail_bright, seg_x, side_y, seg_h)
+
+        # 7) 경사로 측면 쐐기 및 좌우 통행 차단벽 충돌체 (Ramp side blockers)
+        # 1층, 2층, 경사로 보행 등 모든 고도에서 좌우 벽체 통과를 100% 차단 (모든 셀 공간 인덱스 등록)
+        for col_b in elev_data.get("ramp_blockers", []):
+            self.colliders.append(col_b)
+            _register_multi_cell_collider(self.cell_colliders, col_b)
+            _register_multi_cell_collider(self.cell_colliders_ground, col_b)
+            _register_multi_cell_collider(self.cell_colliders_elevated, col_b)
+
+        # 5. 드로우 콜 최적화 (청크 벽체, 바닥/천장 및 복층 지오메트리 완전 병합)
         self.node.flattenStrong()
 
     def set_visible(self, visible):
@@ -471,3 +634,7 @@ class Chunk:
         self.colliders.clear()
         if hasattr(self, 'cell_colliders'):
             self.cell_colliders.clear()
+        if hasattr(self, 'cell_colliders_ground'):
+            self.cell_colliders_ground.clear()
+        if hasattr(self, 'cell_colliders_elevated'):
+            self.cell_colliders_elevated.clear()

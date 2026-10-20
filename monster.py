@@ -2,6 +2,8 @@ import math
 import random
 from panda3d.core import Vec3, LColor, PointLight, ClockObject
 from geometry import make_cube, make_cube_to, make_sphere, make_sphere_to, make_cylinder, make_cylinder_to
+from elemental_effects import ElementalMonsterMixin
+from elevation import get_floor_height
 
 
 def create_monster_explosion(parent, pos, monster_type, audio_mgr=None):
@@ -232,7 +234,7 @@ def update_monster_debris_list(debris_list, dt):
                 d["node"].setScale(scale)
 
 
-class LongBlackSerpent:
+class LongBlackSerpent(ElementalMonsterMixin):
     """
     몸통이 긴 칠흑의 대사(뱀) 괴물 엔티티
     - 14개의 마디형 세그먼트가 부드럽게 S자 파동(Sinusoidal Undulation)을 그리며 슬리더링
@@ -242,7 +244,9 @@ class LongBlackSerpent:
     """
     def __init__(self, parent, start_x, start_y):
         self.node = parent.attachNewNode("long_black_serpent")
-        self.pos = Vec3(start_x, start_y, 0.45)
+        floor_z, _ = get_floor_height(start_x, start_y)
+        self.climb_z = 0.45
+        self.pos = Vec3(start_x, start_y, floor_z + self.climb_z)
         self.node.setPos(self.pos)
         self.anim_time = 0.0
         self.path = []
@@ -525,9 +529,15 @@ class LongBlackSerpent:
         if hasattr(self, 'aura_np') and self.aura_np:
             self.aura_np.node().setColor((2.2, 1.8, 0.4, 1.0))
 
-    def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None):
         """피해 적용 및 사망 여부 반환 (기본 넉백 확률 적용)"""
         self.hp = max(0, self.hp - dmg)
+        if damage_type == 'fire':
+            self.apply_burn(dps=max(20.0, dmg * 0.4), duration=3.0)
+        elif damage_type == 'electric':
+            entry_pos = (self.pos - hit_dir * 0.25) if hit_dir is not None else None
+            self.apply_shock(damage=0.0, duration=0.65, hit_pos=entry_pos)
+
         if apply_knockback is None:
             apply_knockback = (random.random() < 0.28)
 
@@ -548,6 +558,7 @@ class LongBlackSerpent:
         self.is_corpse = True
         self.is_striking = False
         self.hp = 0
+        self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
                 self.parent_ref.clearLight(self.aura_np)
@@ -579,6 +590,7 @@ class LongBlackSerpent:
 
     def destroy(self):
         """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
                 self.parent_ref.clearLight(self.aura_np)
@@ -758,10 +770,11 @@ class LongBlackSerpent:
                 self.aura_np.node().setColor((0.95, 0.05, 0.05, 1.0))
             return
 
+        floor_z, s_type = get_floor_height(new_x, new_y, self.pos.z)
         self.climb_z += (climb_target_z - self.climb_z) * min(1.0, dt * 4.5)
         self.pos.x = new_x
         self.pos.y = new_y
-        self.pos.z = self.climb_z
+        self.pos.z = floor_z + self.climb_z
         self.node.setPos(self.pos)
 
         target_h = math.degrees(math.atan2(-dir_x, dir_y))
@@ -789,6 +802,7 @@ class LongBlackSerpent:
 
     def update(self, dt, is_moving, is_attacking=False):
         """14마디 S자 파동 슬리더링 및 혀 날름거림 애니메이션"""
+        self.update_elemental(dt)
         if self.stun_timer > 0.0:
             self.stun_timer = max(0.0, self.stun_timer - dt)
             if self.stun_timer <= 0.0 and hasattr(self, 'aura_np') and self.aura_np:
@@ -860,7 +874,7 @@ class LongBlackSerpent:
                 seg['pivot'].setP(0)
 
 
-class TallSkeletonMonster:
+class TallSkeletonMonster(ElementalMonsterMixin):
     """
     비정상적으로 긴 두 팔로 바닥을 기어 다니며 턱이 쩍 벌어진 기괴한 해골 보행 괴물 엔티티
     - 두 다리를 뒤로 꺾어 치켜든 채, 2.7m에 달하는 거대한 두 팔로 바닥을 짚고 성큼성큼 기어 다니는 암 워커(Arm-Crawler) 형태
@@ -871,7 +885,8 @@ class TallSkeletonMonster:
     """
     def __init__(self, parent, start_x, start_y):
         self.node = parent.attachNewNode("tall_skeleton_monster")
-        self.pos = Vec3(start_x, start_y, 0.0)
+        floor_z, _ = get_floor_height(start_x, start_y)
+        self.pos = Vec3(start_x, start_y, floor_z)
         self.node.setPos(self.pos)
         self.anim_time = 0.0
         self.path = []
@@ -1153,9 +1168,15 @@ class TallSkeletonMonster:
         if hasattr(self, 'aura_np') and self.aura_np:
             self.aura_np.node().setColor((2.2, 2.0, 0.6, 1.0))
 
-    def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None):
         """피해 적용 및 사망 여부 반환 (기본 넉백 확률 적용)"""
         self.hp = max(0, self.hp - dmg)
+        if damage_type == 'fire':
+            self.apply_burn(dps=max(20.0, dmg * 0.4), duration=3.0)
+        elif damage_type == 'electric':
+            entry_pos = (self.pos - hit_dir * 0.25) if hit_dir is not None else None
+            self.apply_shock(damage=0.0, duration=0.65, hit_pos=entry_pos)
+
         if apply_knockback is None:
             apply_knockback = (random.random() < 0.28)
 
@@ -1175,6 +1196,7 @@ class TallSkeletonMonster:
         """사망 시 산산조각 폭발 파편화: 거대 두개골, 갈비뼈, 척추, 사지 장골 및 시안빛 안광 파편이 사방으로 비산"""
         self.is_corpse = True
         self.hp = 0
+        self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
                 self.parent_ref.clearLight(self.aura_np)
@@ -1206,6 +1228,7 @@ class TallSkeletonMonster:
 
     def destroy(self):
         """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
                 self.parent_ref.clearLight(self.aura_np)
@@ -1278,9 +1301,13 @@ class TallSkeletonMonster:
                 self.aura_np.node().setColor((0.35, 0.55, 0.95, 1.0))
             return
 
+        floor_z, s_type = get_floor_height(new_x, new_y, self.pos.z)
         self.pos.x = new_x
         self.pos.y = new_y
-        self.pos.z = 0.0
+        if self.pos.z < floor_z:
+            self.pos.z = floor_z
+        elif self.pos.z > floor_z:
+            self.pos.z = max(floor_z, self.pos.z - dt * 24.0)
         self.node.setPos(self.pos)
 
         target_h = math.degrees(math.atan2(-dir_x, dir_y))
@@ -1288,10 +1315,15 @@ class TallSkeletonMonster:
         diff_h = (target_h - curr_h + 180) % 360 - 180
         self.node.setH(curr_h + diff_h * min(1.0, dt * 10.0))
 
+        target_p = 14.0 if s_type == 'ramp' else 0.0
+        curr_p = self.node.getP()
+        self.node.setP(curr_p + (target_p - curr_p) * min(1.0, dt * 8.0))
+
         self.update(dt, is_moving=True)
 
     def update(self, dt, is_moving, is_attacking=False):
         """2.7m의 긴 팔로 바닥을 짚고 쇄도하는 암 워커(Arm-Walking) 기괴 보행 애니메이션 (바닥 관통 0%)"""
+        self.update_elemental(dt)
         if self.stun_timer > 0.0:
             self.stun_timer = max(0.0, self.stun_timer - dt)
             if self.stun_timer <= 0.0 and hasattr(self, 'aura_np') and self.aura_np:
@@ -1357,7 +1389,7 @@ class TallSkeletonMonster:
             self.jaw_pivot.setP(35 + math.sin(t * 2.5) * 5.0)
 
 
-class AbominableMudOrc:
+class AbominableMudOrc(ElementalMonsterMixin):
     """
     1. 혐오스런 진흙 오크 (Abominable Mud Orc)
     - 진흙과 오물, 이끼로 뒤덮인 거대하고 육중한 야만 오크 괴물 (신장 약 2.6m, 폭 1.6m)
@@ -1367,7 +1399,8 @@ class AbominableMudOrc:
     """
     def __init__(self, parent, start_x, start_y):
         self.node = parent.attachNewNode("mud_orc")
-        self.pos = Vec3(start_x, start_y, 0.0)
+        floor_z, _ = get_floor_height(start_x, start_y)
+        self.pos = Vec3(start_x, start_y, floor_z)
         self.node.setPos(self.pos)
         self.anim_time = 0.0
         self.path = []
@@ -1855,9 +1888,15 @@ class AbominableMudOrc:
         if hasattr(self, 'aura_np') and self.aura_np:
             self.aura_np.node().setColor((2.2, 1.8, 0.4, 1.0))
 
-    def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None):
         """피해 적용 및 사망 여부 반환 (기본 넉백 확률 적용, 오크는 체형상 20% 확률)"""
         self.hp = max(0, self.hp - dmg)
+        if damage_type == 'fire':
+            self.apply_burn(dps=max(20.0, dmg * 0.4), duration=3.0)
+        elif damage_type == 'electric':
+            entry_pos = (self.pos - hit_dir * 0.25) if hit_dir is not None else None
+            self.apply_shock(damage=0.0, duration=0.65, hit_pos=entry_pos)
+
         if apply_knockback is None:
             apply_knockback = (random.random() < 0.20)
 
@@ -1877,6 +1916,7 @@ class AbominableMudOrc:
         """사망 시 유혈 진흙 폭발 파편화: 오크 머리통, 엄니, 철갑주 파편, 거대한 근육질 팔/다리 살점 덩어리가 사방으로 폭발 분출"""
         self.is_corpse = True
         self.hp = 0
+        self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
                 self.parent_ref.clearLight(self.aura_np)
@@ -1908,6 +1948,7 @@ class AbominableMudOrc:
 
     def destroy(self):
         """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
                 self.parent_ref.clearLight(self.aura_np)
@@ -1963,15 +2004,24 @@ class AbominableMudOrc:
                 self.aura_np.node().setColor((0.65, 0.65, 0.60, 1.0))
             return
 
+        floor_z, s_type = get_floor_height(new_x, new_y, self.pos.z)
         self.pos.x = new_x
         self.pos.y = new_y
-        self.pos.z = 0.0
+        if self.pos.z < floor_z:
+            self.pos.z = floor_z
+        elif self.pos.z > floor_z:
+            self.pos.z = max(floor_z, self.pos.z - dt * 24.0)
         self.node.setPos(self.pos)
 
         target_h = math.degrees(math.atan2(-dir_x, dir_y))
         curr_h = self.node.getH()
         diff_h = (target_h - curr_h + 180) % 360 - 180
         self.node.setH(curr_h + diff_h * min(1.0, dt * 8.0))
+
+        target_p = 12.0 if s_type == 'ramp' else 0.0
+        curr_p = self.node.getP()
+        self.node.setP(curr_p + (target_p - curr_p) * min(1.0, dt * 8.0))
+
         self.update(dt, is_moving=True)
 
     def slam_ground(self, dt):
@@ -2010,6 +2060,7 @@ class AbominableMudOrc:
         return False
 
     def update(self, dt, is_moving, is_attacking=False):
+        self.update_elemental(dt)
         if self.stun_timer > 0.0:
             self.stun_timer = max(0.0, self.stun_timer - dt)
             if self.stun_timer <= 0.0 and hasattr(self, 'aura_np') and self.aura_np:
@@ -2045,7 +2096,7 @@ class AbominableMudOrc:
             self.head_pivot.setH(math.sin(t * 1.2) * 4.0)
 
 
-class AlluringAshWitch:
+class AlluringAshWitch(ElementalMonsterMixin):
     """
     2. 매혹의 잿더미 마녀 (Alluring Ash Witch)
     - 칠흑과 잿더미 로브를 휘감고 공중에 부유(Levitation)하는 날렵하고 매혹적인 마녀 괴물
@@ -2056,7 +2107,8 @@ class AlluringAshWitch:
     """
     def __init__(self, parent, start_x, start_y):
         self.node = parent.attachNewNode("ash_witch")
-        self.pos = Vec3(start_x, start_y, 0.85)
+        floor_z, _ = get_floor_height(start_x, start_y)
+        self.pos = Vec3(start_x, start_y, floor_z + 0.85)
         self.node.setPos(self.pos)
         self.anim_time = 0.0
         self.path = []
@@ -2256,9 +2308,15 @@ class AlluringAshWitch:
         if hasattr(self, 'aura_np') and self.aura_np:
             self.aura_np.node().setColor((2.4, 2.0, 0.6, 1.0))
 
-    def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None):
         """피해 적용 및 사망 여부 반환 (기본 넉백 확률 적용)"""
         self.hp = max(0, self.hp - dmg)
+        if damage_type == 'fire':
+            self.apply_burn(dps=max(20.0, dmg * 0.4), duration=3.0)
+        elif damage_type == 'electric':
+            entry_pos = (self.pos - hit_dir * 0.25) if hit_dir is not None else None
+            self.apply_shock(damage=0.0, duration=0.65, hit_pos=entry_pos)
+
         if apply_knockback is None:
             apply_knockback = (random.random() < 0.28)
 
@@ -2278,6 +2336,7 @@ class AlluringAshWitch:
         """사망 시 잿더미와 마력 화염 폭발 파편화: 마녀 가면, 찢겨진 베일 리본, 불타는 잿더미 마력 불씨가 사방으로 비산"""
         self.is_corpse = True
         self.hp = 0
+        self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
                 self.parent_ref.clearLight(self.aura_np)
@@ -2309,6 +2368,7 @@ class AlluringAshWitch:
 
     def destroy(self):
         """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
                 self.parent_ref.clearLight(self.aura_np)
@@ -2364,10 +2424,12 @@ class AlluringAshWitch:
                 self.aura_np.node().setColor((1.2, 0.35, 0.18, 1.0))
             return
 
+        floor_z, s_type = get_floor_height(new_x, new_y, self.pos.z)
         self.pos.x = new_x
         self.pos.y = new_y
-        # 공중 부유 높이 진동
-        self.pos.z = 0.85 + math.sin(self.anim_time * 2.8) * 0.22
+        # 공중 부유 높이 진동 (해당 지면/플랫폼 기준 +0.85m)
+        target_z = floor_z + 0.85 + math.sin(self.anim_time * 2.8) * 0.22
+        self.pos.z += (target_z - self.pos.z) * min(1.0, dt * 10.0)
         self.node.setPos(self.pos)
 
         target_h = math.degrees(math.atan2(-dir_x, dir_y))
@@ -2407,6 +2469,7 @@ class AlluringAshWitch:
         return False
 
     def update(self, dt, is_moving, is_attacking=False):
+        self.update_elemental(dt)
         if self.stun_timer > 0.0:
             self.stun_timer = max(0.0, self.stun_timer - dt)
             if self.stun_timer <= 0.0 and hasattr(self, 'aura_np') and self.aura_np:
@@ -2442,7 +2505,7 @@ CreepySpiderMonster = LongBlackSerpent
 TallShadowMonster = TallSkeletonMonster
 
 
-class SkeletalDobermanHellhound:
+class SkeletalDobermanHellhound(ElementalMonsterMixin):
     """
     지옥의 파수견 (Skeletal Doberman Hellhound)
     - 뼈로만 이루어진 사나운 도베르만 골격 괴물
@@ -2453,7 +2516,8 @@ class SkeletalDobermanHellhound:
     """
     def __init__(self, parent, start_x, start_y):
         self.node = parent.attachNewNode("skeletal_doberman_hellhound")
-        self.pos = Vec3(start_x, start_y, 0.0)
+        floor_z, _ = get_floor_height(start_x, start_y)
+        self.pos = Vec3(start_x, start_y, floor_z)
         self.node.setPos(self.pos)
         self.anim_time = 0.0
         self.path = []
@@ -2685,18 +2749,18 @@ class SkeletalDobermanHellhound:
 
         return {'hip': hip, 'femur': femur, 'knee': knee, 'paw': paw}
 
-    def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None):
         """총격 대미지 판정: 35% 확률로 횡방향 공중 회피 도약(Evasive Dodge Leap) 발동"""
         if self.hp <= 0 or self.is_corpse:
             return True
 
-        # 이미 회피 무적 프레임(i-frame) 중이면 대미지 100% 무효
-        if self.is_dodging:
+        # 이미 회피 무적 프레임(i-frame) 중이면 대미지 100% 무효 (지속 도트 피해 제외)
+        if self.is_dodging and damage_type != 'dot':
             self.last_action_dodged = True
             return False
 
-        # [35% 확률 회피 발동]
-        if random.random() < 0.35:
+        # [35% 확률 회피 발동 (지속 도트 피해는 회피 불가)]
+        if damage_type != 'dot' and random.random() < 0.35:
             self.is_dodging = True
             self.dodge_timer = 0.35
             self.last_action_dodged = True
@@ -2729,6 +2793,12 @@ class SkeletalDobermanHellhound:
         self.hp = max(0, self.hp - dmg)
         self.last_action_dodged = False
 
+        if damage_type == 'fire':
+            self.apply_burn(dps=max(20.0, dmg * 0.4), duration=3.0)
+        elif damage_type == 'electric':
+            entry_pos = (self.pos - hit_dir * 0.25) if hit_dir is not None else None
+            self.apply_shock(damage=0.0, duration=0.65, hit_pos=entry_pos)
+
         if hit_dir is not None and self.hp > 0:
             self.pos.x += hit_dir.x * 0.32
             self.pos.y += hit_dir.y * 0.32
@@ -2744,6 +2814,7 @@ class SkeletalDobermanHellhound:
         self.is_corpse = True
         self.is_dodging = False
         self.hp = 0
+        self.cleanup_elemental()
 
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
@@ -2777,6 +2848,7 @@ class SkeletalDobermanHellhound:
             update_monster_debris_list(self.debris_list, dt)
 
     def destroy(self):
+        self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
                 self.parent_ref.clearLight(self.aura_np)
@@ -2848,19 +2920,29 @@ class SkeletalDobermanHellhound:
             self.node.setPos(self.pos.x + shake, self.pos.y, self.pos.z)
             return
 
+        floor_z, s_type = get_floor_height(new_x, new_y, self.pos.z)
         self.pos.x = new_x
         self.pos.y = new_y
-        self.pos.z = 0.0
+        if self.pos.z < floor_z:
+            self.pos.z = floor_z
+        elif self.pos.z > floor_z:
+            self.pos.z = max(floor_z, self.pos.z - dt * 26.0)
         self.node.setPos(self.pos)
 
         target_h = math.degrees(math.atan2(-dir_x, dir_y))
         curr_h = self.node.getH()
         diff_h = (target_h - curr_h + 180) % 360 - 180
         self.node.setH(curr_h + diff_h * min(1.0, dt * 14.0))
+
+        target_p = 15.0 if s_type == 'ramp' else 0.0
+        curr_p = self.node.getP()
+        self.node.setP(curr_p + (target_p - curr_p) * min(1.0, dt * 10.0))
+
         self.update(dt, is_moving=True)
 
     def update(self, dt, is_moving, is_attacking=False, chunks=None):
         """애니메이션 및 회피 물리 갱신"""
+        self.update_elemental(dt)
         # 1. 회피 도약(Evasive Dodge) 물리 및 롤링 갱신
         if self.is_dodging:
             self.dodge_timer -= dt
@@ -2963,7 +3045,7 @@ class SkeletalDobermanHellhound:
                     vn.setColorScale(r_glow, g_glow, b_glow, alpha)
 
 
-class CableOverlordBoss:
+class CableOverlordBoss(ElementalMonsterMixin):
     """
     [ 백룸 거대 보스 엔티티: 케이블 엔티티 - 심연의 지배자 (Cable Overlord Boss) ]
     - 높이 약 4.5m의 거대한 고압 절연 케이블 타래, 구리 도선 코일 및 중장갑 골격체
@@ -2979,7 +3061,8 @@ class CableOverlordBoss:
     def __init__(self, parent, start_x, start_y):
         self.parent_ref = parent
         self.node = parent.attachNewNode("cable_overlord_boss")
-        self.pos = Vec3(start_x, start_y, 0.0)
+        floor_z, _ = get_floor_height(start_x, start_y)
+        self.pos = Vec3(start_x, start_y, floor_z)
         self.node.setPos(self.pos)
         self.name = "케이블 엔티티: 심연의 지배자"
         self.is_boss = True
@@ -3106,14 +3189,18 @@ class CableOverlordBoss:
         """보스는 강력한 질량 저항으로 인해 스턴 시간이 70% 감쇄됨"""
         self.stun_timer = max(self.stun_timer, duration * 0.30)
 
-    def apply_burn(self, dps, duration):
-        """용의 숨결 특성 지속 화염 피해 적용"""
-        self.burn_dps = max(getattr(self, 'burn_dps', 0.0), dps)
-        self.burn_timer = max(getattr(self, 'burn_timer', 0.0), duration)
+    def apply_burn(self, dps=25.0, duration=3.0):
+        """용의 숨결 특성 지속 화염 피해 적용 및 원소 시각 효과 연동"""
+        super().apply_burn(dps, duration)
 
-    def take_damage(self, dmg, apply_knockback=None, hit_dir=None):
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None):
         """보스 피해 적용 및 UI 보스 체력바 갱신"""
         self.hp = max(0, self.hp - dmg)
+        if damage_type == 'fire':
+            self.apply_burn(dps=max(20.0, dmg * 0.4), duration=3.0)
+        elif damage_type == 'electric':
+            entry_pos = (self.pos - hit_dir * 0.25) if hit_dir is not None else None
+            self.apply_shock(damage=0.0, duration=0.65, hit_pos=entry_pos)
 
         # 피격 순간 코어 라이트 섬광
         if hasattr(self, 'core_light') and self.core_light:
@@ -3155,6 +3242,7 @@ class CableOverlordBoss:
         self.is_corpse = True
         self.is_dead = True
         self.hp = 0
+        self.cleanup_elemental()
 
         if hasattr(self, 'core_light_np') and self.core_light_np and not self.core_light_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
@@ -3169,9 +3257,13 @@ class CableOverlordBoss:
             self.stun_timer -= dt
             return
 
+        floor_z, s_type = get_floor_height(new_x, new_y, self.pos.z)
         self.pos.x = new_x
         self.pos.y = new_y
-        self.pos.z = 0.0
+        if self.pos.z < floor_z:
+            self.pos.z = floor_z
+        elif self.pos.z > floor_z:
+            self.pos.z = max(floor_z, self.pos.z - dt * 20.0)
         self.node.setPos(self.pos)
 
         target_h = math.degrees(math.atan2(-dir_x, dir_y))
@@ -3185,10 +3277,8 @@ class CableOverlordBoss:
         self.anim_time += dt * (7.5 if self.phase == 2 else 4.2)
         phase = self.anim_time
 
-        # 화염 지속 피해(Burn DoT) 적용
-        if self.burn_timer > 0.0:
-            self.burn_timer = max(0.0, self.burn_timer - dt)
-            self.take_damage(self.burn_dps * dt, apply_knockback=False)
+        # 화염 지속 피해 및 전기 원소 시각 효과 갱신
+        self.update_elemental(dt)
 
         # 스킬 쿨다운 감소
         if self.cable_lash_cooldown > 0.0:
@@ -3255,6 +3345,7 @@ class CableOverlordBoss:
 
     def destroy(self):
         """노드 및 라이트 자원 완전 해제"""
+        self.cleanup_elemental()
         if hasattr(self, 'core_light_np') and self.core_light_np and not self.core_light_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
                 self.parent_ref.clearLight(self.core_light_np)

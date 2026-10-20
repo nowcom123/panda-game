@@ -10,6 +10,7 @@ from constants import (
     PLAYER_RADIUS, PLAYER_EYE_HEIGHT, WALK_SPEED, SPRINT_SPEED
 )
 from collision import resolve_collision
+from elevation import get_floor_height
 
 
 ITEM_CATALOG = {
@@ -121,13 +122,16 @@ class PlayerController:
         self.heartbeat_accum = 0.0
         self.is_aiming = False
 
-        # 스페이스바 전술 컴뱃 슬라이드 & 긴급 회피 대시
+        # 스페이스바 전술 컴뱃 슬라이드 & 3D 도약 점프
         self.is_sliding = False
         self.slide_timer = 0.0
         self.slide_duration = 0.62
         self.slide_cooldown = 0.0
         self.slide_dir = Vec3(0, 0, 0)
         self.slide_speed = 0.0
+        self.vertical_vel = 0.0
+        self.is_grounded = True
+        self.current_floor_z = 0.0
 
         # 전술 인벤토리 소지품 초기화 (기본 생존 보급품)
         self.inventory = [
@@ -350,37 +354,45 @@ class PlayerController:
         return False, f"[{slot_num}]번 퀵슬롯에 등록된 아이템이 없습니다."
 
     def trigger_slide(self):
-        """[Space] 전술 컴뱃 슬라이드 & 긴급 회피 대시 (낮은 자세로 미끄러지며 사격 가능)"""
+        """[Space] 전술 컴뱃 슬라이드(전력질주 중) 또는 3D 도약 점프(일반 보행/정지 중)"""
         # 퍽 선택 모달 활성화 중에는 Space 키로 확인/전투 재개
         if hasattr(self.base, 'game_state') and self.base.game_state == "SHOP":
             if hasattr(self.ui_mgr, 'shop_modal') and not self.ui_mgr.shop_modal.isHidden():
                 self.ui_mgr._confirm_shop_and_start()
                 return
 
-        if self.slide_cooldown > 0.0 or self.is_sliding:
+        # 전력질주(Shift) 중일 때는 전술 컴뱃 슬라이드 발동
+        if self.is_sprinting or self.key_map.get("shift"):
+            if self.slide_cooldown > 0.0 or self.is_sliding:
+                return
+            if self.stamina < 5.0:
+                return
+
+            # 슬라이딩 방향 결정 (이동 중이면 이동 방향, 정지 상태면 전방 시선 방향)
+            if self.last_move_dir.lengthSquared() > 0.01:
+                slide_vec = Vec3(self.last_move_dir)
+            else:
+                h_rad = math.radians(self.heading)
+                slide_vec = Vec3(-math.sin(h_rad), math.cos(h_rad), 0)
+            slide_vec.normalize()
+
+            self.is_sliding = True
+            self.slide_timer = self.slide_duration
+            self.slide_cooldown = 0.82
+            self.slide_dir = slide_vec
+            self.slide_speed = self.move_speed if self.move_speed > 0.0 else 15.2 * self.speed_mult
+            self.stamina = max(0.0, self.stamina - 6.0)
+
+            if self.audio_mgr and hasattr(self.audio_mgr, 'play_slide'):
+                self.audio_mgr.play_slide()
             return
-        if self.stamina < 5.0:
-            return
 
-        # 슬라이딩 방향 결정 (이동 중이면 이동 방향, 정지 상태면 전방 시선 방향)
-        if self.last_move_dir.lengthSquared() > 0.01:
-            slide_vec = Vec3(self.last_move_dir)
-        else:
-            h_rad = math.radians(self.heading)
-            slide_vec = Vec3(-math.sin(h_rad), math.cos(h_rad), 0)
-        slide_vec.normalize()
-
-        self.is_sliding = True
-        self.slide_timer = self.slide_duration
-        self.slide_cooldown = 0.82
-        self.slide_dir = slide_vec
-        # Preserve incoming movement, including perks, boosts and aiming.
-        # Keep the standing dodge when there is no incoming movement.
-        self.slide_speed = self.move_speed if self.move_speed > 0.0 else 15.2 * self.speed_mult
-        self.stamina = max(0.0, self.stamina - 6.0)
-
-        if self.audio_mgr and hasattr(self.audio_mgr, 'play_slide'):
-            self.audio_mgr.play_slide()
+        # 일반 보행 또는 정지 중일 때는 3D 도약 점프 발동
+        if getattr(self, 'is_grounded', True) and not self.is_sliding:
+            self.vertical_vel = 7.5
+            self.is_grounded = False
+            if self.audio_mgr and hasattr(self.audio_mgr, 'play_footstep'):
+                self.audio_mgr.play_footstep(is_sprinting=True)
 
     def _on_aim_down(self, cb):
         self.is_aiming = True
@@ -560,6 +572,9 @@ class PlayerController:
         self.slow_timer = 0.0
         self.slow_factor = 1.0
         self.shake_timer = 0.0
+        self.vertical_vel = 0.0
+        self.is_grounded = True
+        self.current_floor_z = max(0.0, z - PLAYER_EYE_HEIGHT)
         self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level)
 
     def update(self, dt, chunks):
@@ -697,8 +712,11 @@ class PlayerController:
                 cur_z = crouch_height + (PLAYER_EYE_HEIGHT - crouch_height) * t_out
 
             curr_pos = self.camera.getPos()
-            new_x, new_y = resolve_collision(chunks, curr_pos.x, curr_pos.y, disp.x, disp.y, radius=PLAYER_RADIUS)
-            self.camera.setPos(new_x, new_y, cur_z)
+            curr_floor = getattr(self, 'current_floor_z', 0.0)
+            new_x, new_y = resolve_collision(chunks, curr_pos.x, curr_pos.y, disp.x, disp.y, radius=PLAYER_RADIUS, curr_z=curr_floor)
+            floor_z, s_type = get_floor_height(new_x, new_y, curr_pos.z - PLAYER_EYE_HEIGHT)
+            self.current_floor_z = floor_z
+            self.camera.setPos(new_x, new_y, floor_z + cur_z)
 
             # 슬라이딩 시 카메라 다이내믹 뱅킹 틸트 (좌우 2.5도 기울임)
             tilt_r = math.sin(progress * math.pi) * 2.6
@@ -709,10 +727,11 @@ class PlayerController:
 
             if self.slide_timer <= 0.0:
                 self.is_sliding = False
-                self.camera.setPos(new_x, new_y, PLAYER_EYE_HEIGHT)
+                self.camera.setPos(new_x, new_y, floor_z + PLAYER_EYE_HEIGHT)
                 self.camera.setR(0.0)
         else:
-            # 일반 지면 이동 및 정밀 충돌 슬라이딩
+            # 일반 지면/경사로/복층 이동 및 정밀 충돌 슬라이딩
+            curr_pos = self.camera.getPos()
             if is_moving:
                 move_dir.normalize()
                 self.last_move_dir = move_dir
@@ -728,17 +747,39 @@ class PlayerController:
                 self.footstep_timer += dt
                 if self.footstep_timer >= step_interval:
                     self.footstep_timer = 0.0
-                    if self.audio_mgr:
+                    if self.audio_mgr and self.is_grounded:
                         self.audio_mgr.play_footstep(self.is_sprinting)
 
-                curr_pos = self.camera.getPos()
-                new_x, new_y = resolve_collision(chunks, curr_pos.x, curr_pos.y, disp.x, disp.y, radius=PLAYER_RADIUS)
-                self.camera.setPos(new_x, new_y, PLAYER_EYE_HEIGHT)
+                curr_floor = getattr(self, 'current_floor_z', 0.0)
+                new_x, new_y = resolve_collision(chunks, curr_pos.x, curr_pos.y, disp.x, disp.y, radius=PLAYER_RADIUS, curr_z=curr_floor)
                 view_changed = True
             else:
                 self.last_move_dir = Vec3(0, 0, 0)
                 self.move_speed = 0.0
                 self.footstep_timer = 0.35
+                new_x, new_y = curr_pos.x, curr_pos.y
+
+            floor_z, s_type = get_floor_height(new_x, new_y, curr_pos.z - PLAYER_EYE_HEIGHT)
+            self.current_floor_z = floor_z
+            target_cam_z = floor_z + PLAYER_EYE_HEIGHT
+
+            # 중력 및 수직 물리 (도약 점프 / 공중 낙하 / 경사로 보행)
+            if not self.is_grounded or curr_pos.z > target_cam_z + 0.10:
+                self.vertical_vel -= 26.0 * dt
+                next_z = curr_pos.z + self.vertical_vel * dt
+                if next_z <= target_cam_z:
+                    next_z = target_cam_z
+                    self.vertical_vel = 0.0
+                    self.is_grounded = True
+                else:
+                    self.is_grounded = False
+                    view_changed = True
+            else:
+                next_z = target_cam_z
+                self.vertical_vel = 0.0
+                self.is_grounded = True
+
+            self.camera.setPos(new_x, new_y, next_z)
 
         # 5. 빈사 상태(HP < 30) 심장박동 효과음 및 붉은 비네트 맥동
         if 0.0 < self.hp < 30.0:

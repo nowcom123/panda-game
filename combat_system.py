@@ -927,23 +927,32 @@ class CombatSystem:
 
             # 드래곤 브레스 퍽: 지속 화염 피해 상태이상 부여
             if player and hasattr(player, 'has_perk') and player.has_perk("dragons_breath"):
-                closest_monster.burn_timer = 3.0
-                closest_monster.burn_dps = 25.0
+                if hasattr(closest_monster, 'apply_burn'):
+                    closest_monster.apply_burn(dps=25.0, duration=3.0)
+                else:
+                    closest_monster.burn_timer = 3.0
+                    closest_monster.burn_dps = 25.0
                 if p_idx == 0:
-                    self.ui_mgr.show_hit_marker("🔥 [드래곤 브레스 착탄!] 지속 화염 피해!", (1.0, 0.45, 0.15, 1.0))
+                    self.ui_mgr.show_hit_marker("[화염] [드래곤 브레스 착탄!] 지속 화염 피해!", (1.0, 0.45, 0.15, 1.0))
 
             # 흡혈 탄환 퍽: 헤드샷 치명타 적중 시 체력 +5 회복
             if is_headshot and player and hasattr(player, 'has_perk') and player.has_perk("vampiric_leech"):
                 player.heal(5.0)
 
-            # 테슬라 아크 퍽: 치명타 시 주변 2체 연쇄 감전
+            # 테슬라 아크 퍽: 치명타 시 주변 2체 연쇄 감전 (착탄 생성지 기준 방사형 번개 방출)
             if is_crit and player and hasattr(player, 'has_perk') and player.has_perk("tesla_arc") and p_idx == 0:
+                if hasattr(closest_monster, 'apply_shock'):
+                    closest_monster.apply_shock(damage=0.0, duration=0.65, hit_pos=impact_world)
+
                 shocked = 0
                 for om in monster_list:
                     if om != closest_monster and getattr(om, 'hp', 0) > 0 and not getattr(om, 'is_corpse', False):
-                        if (om.pos - impact_world).length() <= 6.0:
-                            om.take_damage(35.0, apply_knockback=True, hit_dir=(om.pos - impact_world).normalized())
-                            om.stun(0.40)
+                        if (om.pos - impact_world).length() <= 7.5:
+                            if hasattr(om, 'apply_shock'):
+                                om.apply_shock(damage=35.0, duration=0.85, hit_pos=impact_world)
+                            else:
+                                om.take_damage(35.0, apply_knockback=True, hit_dir=(om.pos - impact_world).normalized())
+                                om.stun(0.40)
                             shocked += 1
                             if shocked >= 2:
                                 break

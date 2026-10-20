@@ -216,28 +216,37 @@ class ExplosionVisualEffect:
 
         # 조명 감쇠
         if hasattr(self, 'light') and hasattr(self, 'light_np') and not self.light_np.isEmpty():
-            light_alpha = max(0.0, 1.0 - progress * 2.8)
+            light_alpha = max(0.0, 1.0 - progress * 4.2)
             self.light.setColor((4.8 * light_alpha, 2.6 * light_alpha, 0.6 * light_alpha, 1.0))
             if light_alpha <= 0.0 and self.render:
                 self.render.clearLight(self.light_np)
 
-        # 화구 급격한 팽창 후 소멸
+        # 화구(반구형 돔) 순간 팽창 후 초고속 소멸 (0.16초 내 완전 소멸)
         if hasattr(self, 'core_np') and not self.core_np.isEmpty():
-            if progress < 0.22:
-                c_scale = 0.6 + (progress / 0.22) * 2.8
+            if progress < 0.08:
+                c_scale = 0.6 + (progress / 0.08) * 2.4
                 self.core_np.setScale(c_scale)
+            elif progress < 0.25:
+                # 0.08~0.25 진행도(약 0.05초~0.16초) 동안 가파른 감쇠 곡선으로 빠르게 투명화
+                fade = max(0.0, 1.0 - (progress - 0.08) / 0.17)
+                fade_curved = fade * fade
+                self.core_np.setScale(3.0 + (1.0 - fade) * 0.6)
+                self.core_cube1.setColor(1.0, 0.45 * fade_curved, 0.1 * fade_curved, 0.95 * fade_curved)
+                self.core_cube2.setColor(0.8 * fade_curved, 0.2 * fade_curved, 0.05 * fade_curved, 0.85 * fade_curved)
             else:
-                fade = max(0.0, 1.0 - (progress - 0.22) / 0.78)
-                self.core_np.setScale(3.4 * (1.0 + (1.0 - fade) * 0.4))
-                self.core_cube1.setColor(1.0, 0.45 * fade, 0.1 * fade, 0.95 * fade)
-                self.core_cube2.setColor(0.8 * fade, 0.2 * fade, 0.05 * fade, 0.85 * fade)
+                if not self.core_np.isHidden():
+                    self.core_np.hide()
 
-        # 충격파 링 팽창
+        # 충격파 링 팽창 및 신속 소멸
         if hasattr(self, 'ring_np') and not self.ring_np.isEmpty():
-            ring_scale = 0.8 + progress * 6.5
-            ring_alpha = max(0.0, 0.80 * (1.0 - progress * 1.5))
-            self.ring_np.setScale(ring_scale, ring_scale, 1.0)
-            self.ring_geom.setColor(1.0, 0.80, 0.30, ring_alpha)
+            ring_scale = 0.8 + progress * 7.5
+            ring_alpha = max(0.0, 0.80 * (1.0 - progress * 4.0))
+            if ring_alpha > 0.0:
+                self.ring_np.setScale(ring_scale, ring_scale, 1.0)
+                self.ring_geom.setColor(1.0, 0.80, 0.30, ring_alpha)
+            else:
+                if not self.ring_np.isHidden():
+                    self.ring_np.hide()
 
         # 파편 물리
         for p in self.particles:
@@ -308,13 +317,17 @@ class FragGrenade:
         self.vel.z -= 13.5 * dt
         next_pos = self.pos + self.vel * dt
 
-        if next_pos.z <= 0.12:
-            next_pos.z = 0.12
+        from elevation import get_floor_height
+        floor_z, _ = get_floor_height(next_pos.x, next_pos.y, self.pos.z)
+        min_bounce_z = floor_z + 0.12
+
+        if next_pos.z <= min_bounce_z:
+            next_pos.z = min_bounce_z
             self.vel.z = -self.vel.z * 0.40
             self.vel.x *= 0.70
             self.vel.y *= 0.70
 
-        cols = get_nearby_colliders(chunks, self.pos.x, self.pos.y, search_dist=2.0)
+        cols = get_nearby_colliders(chunks, self.pos.x, self.pos.y, search_dist=2.0, curr_z=self.pos.z)
         for min_x, min_y, max_x, max_y in cols:
             if min_x - 0.12 <= next_pos.x <= max_x + 0.12 and min_y - 0.12 <= next_pos.y <= max_y + 0.12:
                 self.vel.x = -self.vel.x * 0.45
@@ -333,7 +346,8 @@ class FragGrenade:
             if getattr(m, 'hp', 0) > 0 and not getattr(m, 'is_corpse', False):
                 dx = m.pos.x - self.pos.x
                 dy = m.pos.y - self.pos.y
-                if (dx * dx + dy * dy) < 1.3225:  # 1.15m 반경 직접 접촉 신관
+                dz = (m.pos.z + getattr(m, 'height', 1.5) * 0.5) - self.pos.z
+                if (dx * dx + dy * dy) < 1.3225 and abs(dz) < 2.0:  # 1.15m 반경 직접 접촉 신관
                     return False
 
         self.timer -= dt
@@ -363,12 +377,13 @@ class FragGrenade:
             if getattr(m, 'hp', 0) > 0 and not getattr(m, 'is_corpse', False):
                 dx = m.pos.x - self.pos.x
                 dy = m.pos.y - self.pos.y
-                d_sq = dx * dx + dy * dy
+                dz = (m.pos.z + getattr(m, 'height', 1.5) * 0.5) - self.pos.z
+                d_sq = dx * dx + dy * dy + dz * dz * 0.8
                 if d_sq <= blast_r_sq:
-                    d = math.sqrt(d_sq)
+                    d = math.sqrt(max(0.01, d_sq))
                     falloff = max(0.35, 1.0 - (d / blast_radius))
                     dmg = blast_dmg * falloff
-                    hit_dir = Vec3(dx, dy, 0)
+                    hit_dir = Vec3(dx, dy, dz * 0.5)
                     if d > 0.01:
                         hit_dir /= d
                     is_dead = m.take_damage(dmg, apply_knockback=True, hit_dir=hit_dir)

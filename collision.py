@@ -24,12 +24,14 @@ def clear_custom_colliders():
     _CUSTOM_COLLIDERS.clear()
 
 
-def get_nearby_colliders(chunks, px, py, search_dist=2.5):
-    """그리드 셀 해시 기반 주변 충돌체 추출 (600개 전수검사 -> 8~12개 즉시 반환) 및 커스텀 충돌체 결합"""
+def get_nearby_colliders(chunks, px, py, search_dist=2.5, curr_z=None):
+    """그리드 셀 해시 기반 주변 충돌체 추출 (600개 전수검사 -> 8~12개 즉시 반환), 복층/1층 높이별 필터링 및 커스텀 충돌체 결합"""
     min_gx = int(math.floor((px - search_dist) / CELL_SIZE))
     max_gx = int(math.floor((px + search_dist) / CELL_SIZE))
     min_gy = int(math.floor((py - search_dist) / CELL_SIZE))
     max_gy = int(math.floor((py + search_dist) / CELL_SIZE))
+
+    is_elevated = (curr_z is not None and curr_z >= 2.2)
 
     nearby = []
     for gx in range(min_gx, max_gx + 1):
@@ -41,6 +43,14 @@ def get_nearby_colliders(chunks, px, py, search_dist=2.5):
                 cols = chunk.cell_colliders.get((gx, gy))
                 if cols:
                     nearby.extend(cols)
+                if is_elevated and hasattr(chunk, 'cell_colliders_elevated'):
+                    e_cols = chunk.cell_colliders_elevated.get((gx, gy))
+                    if e_cols:
+                        nearby.extend(e_cols)
+                elif not is_elevated and hasattr(chunk, 'cell_colliders_ground'):
+                    g_cols = chunk.cell_colliders_ground.get((gx, gy))
+                    if g_cols:
+                        nearby.extend(g_cols)
 
     # 탈출 관문 등 특수 오브젝트의 커스텀 AABB 충돌체 검사
     if _CUSTOM_COLLIDERS:
@@ -51,7 +61,7 @@ def get_nearby_colliders(chunks, px, py, search_dist=2.5):
     return nearby
 
 
-def resolve_collision(chunks, curr_x, curr_y, dx, dy, radius=PLAYER_RADIUS):
+def resolve_collision(chunks, curr_x, curr_y, dx, dy, radius=PLAYER_RADIUS, curr_z=None):
     """
     정밀 원형-AABB 최단거리 밀어내기(Push-out) 및 연속 벽면/모서리 슬라이딩 해결
     - 공간 분할 인덱스로 현재 위치 주변 충돌체만 즉각 필터링
@@ -62,7 +72,7 @@ def resolve_collision(chunks, curr_x, curr_y, dx, dy, radius=PLAYER_RADIUS):
     r = radius
     max_d = max(abs(dx), abs(dy))
     margin = r + max_d + 0.8
-    colliders = get_nearby_colliders(chunks, curr_x, curr_y, search_dist=margin)
+    colliders = get_nearby_colliders(chunks, curr_x, curr_y, search_dist=margin, curr_z=curr_z)
     if not colliders:
         # 외곽 절대 경계 클램핑
         min_bound = MAP_MIN_CHUNK * CHUNK_SIZE + WALL_THICKNESS * 0.5 + r

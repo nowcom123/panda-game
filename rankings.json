@@ -1829,5 +1829,137 @@
     "ammo_left": 12,
     "reserve_ammo": 31,
     "ammo_used": 0
+  },
+  {
+    "timestamp": "2026-10-20 10:05:10",
+    "stage": 1,
+    "result": "사망 (지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 11.0,
+    "time_left": 289.0,
+    "ammo_left": 6,
+    "reserve_ammo": 36,
+    "ammo_used": 6
+  },
+  {
+    "timestamp": "2026-10-20 10:05:18",
+    "stage": 1,
+    "result": "사망 ([지옥의 마견령] 지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 6.1,
+    "time_left": 293.9,
+    "ammo_left": 6,
+    "reserve_ammo": 24,
+    "ammo_used": 6
+  },
+  {
+    "timestamp": "2026-10-20 10:11:21",
+    "stage": 1,
+    "result": "사망 ([심연의 대마녀] 매혹의 잿더미 마녀)",
+    "success": false,
+    "time_elapsed": 8.8,
+    "time_left": 291.2,
+    "ammo_left": 12,
+    "reserve_ammo": 36,
+    "ammo_used": 0
+  },
+  {
+    "timestamp": "2026-10-20 10:11:34",
+    "stage": 1,
+    "result": "사망 (매혹의 잿더미 마녀)",
+    "success": false,
+    "time_elapsed": 9.8,
+    "time_left": 290.2,
+    "ammo_left": 2,
+    "reserve_ammo": 36,
+    "ammo_used": 10
+  },
+  {
+    "timestamp": "2026-10-20 10:12:11",
+    "stage": 1,
+    "result": "사망 (장신 해골 괴물)",
+    "success": false,
+    "time_elapsed": 24.2,
+    "time_left": 275.8,
+    "ammo_left": 4,
+    "reserve_ammo": 52,
+    "ammo_used": 8
+  },
+  {
+    "timestamp": "2026-10-20 10:12:35",
+    "stage": 1,
+    "result": "사망 (매혹의 잿더미 마녀)",
+    "success": false,
+    "time_elapsed": 19.7,
+    "time_left": 280.3,
+    "ammo_left": 1,
+    "reserve_ammo": 36,
+    "ammo_used": 11
+  },
+  {
+    "timestamp": "2026-10-20 10:12:47",
+    "stage": 1,
+    "result": "사망 ([지옥의 마견령] 지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 9.8,
+    "time_left": 290.2,
+    "ammo_left": 0,
+    "reserve_ammo": 24,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-10-20 10:13:17",
+    "stage": 1,
+    "result": "사망 ([지옥의 마견령] 지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 25.8,
+    "time_left": 274.2,
+    "ammo_left": 7,
+    "reserve_ammo": 33,
+    "ammo_used": 5
+  },
+  {
+    "timestamp": "2026-10-20 14:52:49",
+    "stage": 1,
+    "result": "사망 (지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 14.6,
+    "time_left": 285.4,
+    "ammo_left": 10,
+    "reserve_ammo": 36,
+    "ammo_used": 2
+  },
+  {
+    "timestamp": "2026-10-20 16:22:35",
+    "stage": 1,
+    "result": "사망 (지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 12.6,
+    "time_left": 287.4,
+    "ammo_left": 3,
+    "reserve_ammo": 36,
+    "ammo_used": 9
+  },
+  {
+    "timestamp": "2026-10-20 16:26:54",
+    "stage": 1,
+    "result": "사망 (지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 11.2,
+    "time_left": 288.8,
+    "ammo_left": 7,
+    "reserve_ammo": 36,
+    "ammo_used": 5
+  },
+  {
+    "timestamp": "2026-10-20 17:49:03",
+    "stage": 1,
+    "result": "사망 (지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 16.2,
+    "time_left": 283.8,
+    "ammo_left": 10,
+    "reserve_ammo": 36,
+    "ammo_used": 2
   }
 ]

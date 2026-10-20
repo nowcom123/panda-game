@@ -7,9 +7,12 @@ from projectiles import ExplosionVisualEffect
 
 class HazardBarrel:
     """던전 복도에 배치되는 붉은색 고위험 폭발성 유류 드럼통"""
-    def __init__(self, render, x, y, audio_mgr):
+    def __init__(self, render, x, y, audio_mgr, z=None):
+        if z is None:
+            from elevation import get_floor_height
+            z, _ = get_floor_height(x, y)
         self.render = render
-        self.pos = Vec3(x, y, 0.0)
+        self.pos = Vec3(x, y, z)
         self.audio_mgr = audio_mgr
         self.is_ignited = False
         self.fuse_timer = 0.42
@@ -32,7 +35,7 @@ class HazardBarrel:
 
         min_x, max_x = self.pos.x - 0.38, self.pos.x + 0.38
         min_y, max_y = self.pos.y - 0.38, self.pos.y + 0.38
-        min_z, max_z = 0.0, 1.25
+        min_z, max_z = self.pos.z, self.pos.z + 1.25
 
         dx, dy, dz = ray_dir.x, ray_dir.y, ray_dir.z
         px, py, pz = ray_origin.x, ray_origin.y, ray_origin.z
@@ -112,13 +115,16 @@ class HazardBarrel:
                     hit_dir = Vec3(m.pos.x - self.pos.x, m.pos.y - self.pos.y, 0)
                     if hit_dir.length() > 0.01:
                         hit_dir.normalize()
-                    is_dead = m.take_damage(dmg, apply_knockback=True, hit_dir=hit_dir)
+                    is_dead = m.take_damage(dmg, apply_knockback=True, hit_dir=hit_dir, damage_type='fire')
                     if is_dead:
                         kill_count += 1
                         if hasattr(m, 'turn_into_corpse'):
                             m.turn_into_corpse(audio_mgr=self.audio_mgr)
                         if player and hasattr(player, 'gain_exp'):
                             player.gain_exp(getattr(m, 'exp_value', 35) + 50)
+                    else:
+                        if hasattr(m, 'apply_burn'):
+                            m.apply_burn(dps=30.0, duration=3.5)
 
         if player:
             dp = math.hypot(player.camera.getX() - self.pos.x, player.camera.getY() - self.pos.y)
@@ -148,9 +154,12 @@ class HazardBarrel:
 
 class TacticalSupplyCrate:
     """던전 필드 곳곳에 배치되어 [E] 키로 개봉할 수 있는 전술 군용 보급 상자"""
-    def __init__(self, parent, x, y, audio_mgr=None):
+    def __init__(self, parent, x, y, audio_mgr=None, z=None):
+        if z is None:
+            from elevation import get_floor_height
+            z, _ = get_floor_height(x, y)
         self.parent = parent
-        self.pos = Vec3(x, y, 0.0)
+        self.pos = Vec3(x, y, z)
         self.audio_mgr = audio_mgr
         self.is_opened = False
         self.lid_angle = 0.0
@@ -201,9 +210,11 @@ class TacticalSupplyCrate:
         self.beacon_np = self.node.attachNewNode(self.beacon_light)
         self.beacon_np.setPos(0, 0, 0.6)
 
-    def can_interact(self, px, py):
-        """플레이어 접근 시 상호작용 가능 여부 판정 (반경 2.6m)"""
+    def can_interact(self, px, py, pz=None):
+        """플레이어 접근 시 상호작용 가능 여부 판정 (반경 2.6m, 수직 고도차 2.2m 이내)"""
         if self.is_opened:
+            return False
+        if pz is not None and abs(pz - self.pos.z) > 2.2:
             return False
         return math.hypot(px - self.pos.x, py - self.pos.y) <= 2.6
 
@@ -312,9 +323,12 @@ class TacticalItemDrop:
         }
     }
 
-    def __init__(self, parent, x, y, item_id="ammo_pack", audio_mgr=None):
+    def __init__(self, parent, x, y, item_id="ammo_pack", audio_mgr=None, z=None):
+        if z is None:
+            from elevation import get_floor_height
+            z, _ = get_floor_height(x, y)
         self.parent = parent
-        self.pos = Vec3(x, y, 0.0)
+        self.pos = Vec3(x, y, z)
         self.item_id = item_id
         self.audio_mgr = audio_mgr
         self.cfg = self.ITEM_CONFIGS.get(item_id, self.ITEM_CONFIGS["ammo_pack"])
@@ -385,14 +399,17 @@ class TacticalItemDrop:
         beam = self.model_root.attachNewNode(ls.create())
         beam.setLightOff()
 
-    def update(self, dt, px, py):
-        """부유 및 회전 애니메이션, 플레이어 거리 판정"""
+    def update(self, dt, px, py, pz=None):
+        """부유 및 회전 애니메이션, 플레이어 거리 및 수직 고도 판정"""
         if self.is_collected:
             return "DESTROYED"
 
         self.anim_time += dt
         self.node.setH((self.anim_time * 65.0) % 360.0)
         self.model_root.setZ(0.28 + math.sin(self.anim_time * 3.2) * 0.07)
+
+        if pz is not None and abs(pz - self.pos.z) > 2.2:
+            return "NONE"
 
         dx = px - self.pos.x
         dy = py - self.pos.y
@@ -440,8 +457,10 @@ class TacticalItemDrop:
             self.node.removeNode()
 
 
-def maybe_drop_monster_loot(parent, mx, my, monster, audio_mgr):
+def maybe_drop_monster_loot(parent, mx, my, monster, audio_mgr, mz=None):
     """몬스터 처치 시 확률에 따라 전술 아이템 드랍 생성 (정예 몬스터는 100% 확정 고급 전리품 드랍)"""
+    if mz is None:
+        mz = getattr(getattr(monster, 'pos', None), 'z', None)
     is_elite = getattr(monster, 'is_elite', False)
     m_name = getattr(monster, '__class__', type(monster)).__name__
 
@@ -472,5 +491,5 @@ def maybe_drop_monster_loot(parent, mx, my, monster, audio_mgr):
         weights = [configs[iid]["weight"] for iid in item_ids]
 
     chosen_id = random.choices(item_ids, weights=weights, k=1)[0]
-    return TacticalItemDrop(parent, mx, my, item_id=chosen_id, audio_mgr=audio_mgr)
+    return TacticalItemDrop(parent, mx, my, item_id=chosen_id, audio_mgr=audio_mgr, z=mz)
 
