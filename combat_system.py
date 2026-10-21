@@ -7,7 +7,7 @@ Combat System Module
 import math
 import random
 from panda3d.core import (
-    PointLight, Spotlight, PerspectiveLens, LineSegs, LColor, Vec3, TransparencyAttrib
+    PointLight, Spotlight, PerspectiveLens, LineSegs, LColor, Vec3, TransparencyAttrib, MouseButton
 )
 from constants import (
     CELL_SIZE, CHUNK_CELLS, MAP_MIN_CHUNK, MAP_MAX_CHUNK
@@ -22,44 +22,61 @@ from perks import get_player_perk_stats
 WEAPON_CONFIGS = {
     "PISTOL": {
         "id": "PISTOL",
-        "name": "9mm 택티컬 권총",
-        "max_ammo": 12,
-        "initial_reserve": 36,
-        "damage": 62.0,
+        "name": ".50 매그넘 데저트 이글",
+        "max_ammo": 7,
+        "initial_reserve": 28,
+        "damage": 120.0,
         "headshot_mult": 3.2,
-        "cooldown": 0.36,
-        "combo_cooldown": 0.26,
+        "cooldown": 0.44,
+        "combo_cooldown": 0.32,
         "pellets": 1,
-        "base_spread": 0.010,
+        "base_spread": 0.012,
         "ads_spread": 0.0,
-        "recoil_time": 0.12,
-        "recoil_deg": 14.0,
-        "reload_time": 1.25,
-        "description": "12발 탄창. 저연사 고위력·초정밀 헤드샷 특화 (헤드샷 198 피해 일격필살)."
+        "recoil_time": 0.18,
+        "recoil_deg": 22.0,
+        "reload_time": 1.45,
+        "description": "7발 탄창. .50 Action Express 매그넘탄. 뼈를 부수는 파괴적인 단발 저지력과 관통력."
     },
     "DUAL_PISTOL": {
         "id": "DUAL_PISTOL",
-        "name": "아킴보 쌍권총",
-        "max_ammo": 24,
-        "initial_reserve": 48,
-        "damage": 25.0,
+        "name": "9mm 듀얼 글록 (아킴보)",
+        "max_ammo": 34,
+        "initial_reserve": 68,
+        "damage": 26.0,
         "headshot_mult": 2.0,
-        "cooldown": 0.070,
-        "combo_cooldown": 0.050,
+        "cooldown": 0.065,
+        "combo_cooldown": 0.048,
         "pellets": 1,
-        "base_spread": 0.054,
-        "ads_spread": 0.022,
-        "recoil_time": 0.065,
-        "recoil_deg": 8.0,
-        "reload_time": 2.60,
-        "description": "24발 대용량(양손 12발x2). 0.07초 초고속 난사 특화 (양손 동시 장전 2.6초 지연)."
+        "base_spread": 0.050,
+        "ads_spread": 0.020,
+        "recoil_time": 0.060,
+        "recoil_deg": 7.5,
+        "reload_time": 2.50,
+        "description": "34발 대용량(양손 17발x2). 9mm 파라블럼 탄을 사용하는 듀얼 글록의 압도적인 양손 탄막 사격."
+    },
+    "AR": {
+        "id": "AR",
+        "name": "5.56mm HK416 돌격소총 (AR)",
+        "max_ammo": 30,
+        "initial_reserve": 90,
+        "damage": 38.0,
+        "headshot_mult": 2.4,
+        "cooldown": 0.082,
+        "combo_cooldown": 0.065,
+        "pellets": 1,
+        "base_spread": 0.030,
+        "ads_spread": 0.008,
+        "recoil_time": 0.075,
+        "recoil_deg": 14.0,
+        "reload_time": 2.10,
+        "description": "30발 탄창. 5.56x45mm NATO. 단행정 가스 피스톤 방식을 채용한 독일 H&K사의 하이엔드 돌격소총 HK416. 분당 730발 초고속 연사 화력."
     },
     "SHOTGUN": {
         "id": "SHOTGUN",
-        "name": "12게이지 전술 샷건",
+        "name": "12게이지 펌프 샷건",
         "max_ammo": 8,
         "initial_reserve": 24,
-        "damage": 24.0,
+        "damage": 25.0,
         "headshot_mult": 1.6,
         "cooldown": 0.72,
         "combo_cooldown": 0.58,
@@ -70,13 +87,23 @@ WEAPON_CONFIGS = {
         "recoil_deg": 26.0,
         "reload_time": 1.75,
         "pump_time": 0.44,
-        "description": "8발 튜브 탄창. 1격발당 8발 대구경 벅샷 산탄 (초근접 광역 섬멸, 원거리 산탄 분산 및 위력 감쇄)."
+        "description": "8발 튜브 탄창. 1격발당 8발 대구경 벅샷 산탄과 펌프 액션 (초근접 광역 섬멸, 원거리 산탄 분산 및 위력 감쇄)."
     }
 }
-WEAPON_ORDER = ["PISTOL", "DUAL_PISTOL", "SHOTGUN"]
+WEAPON_ORDER = ["PISTOL", "DUAL_PISTOL", "AR", "SHOTGUN"]
 
 
 class CombatSystem:
+    # 스테이지 전투 통계 기본값 (CombatSystem.__new__ 테스트 호환성 확보)
+    stage_kills = 0
+    stage_headshots = 0
+    stage_shots_fired = 0
+    stage_shots_hit = 0
+    stage_damage_dealt = 0.0
+    stage_damage_taken = 0.0
+    stage_max_combo = 0
+    stage_start_time = 0.0
+
     def __init__(self, base, render, camera, world_root, audio_mgr, ui_mgr):
         self.base = base
         self.render = render
@@ -87,15 +114,16 @@ class CombatSystem:
 
         # 무기 인벤토리 및 장착 상태
         self.current_weapon = "PISTOL"
-        self._reserve_ammo = 36
+        self._reserve_ammo = 28
         self.weapon_states = {
-            "PISTOL": {"ammo": 12, "max_ammo": 12, "reserve_ammo": 36, "slide_locked": False},
-            "DUAL_PISTOL": {"ammo": 24, "max_ammo": 24, "reserve_ammo": 48, "slide_locked": False},
+            "PISTOL": {"ammo": 7, "max_ammo": 7, "reserve_ammo": 28, "slide_locked": False},
+            "DUAL_PISTOL": {"ammo": 34, "max_ammo": 34, "reserve_ammo": 68, "slide_locked": False},
+            "AR": {"ammo": 30, "max_ammo": 30, "reserve_ammo": 90, "slide_locked": False},
             "SHOTGUN": {"ammo": 8, "max_ammo": 8, "reserve_ammo": 24, "slide_locked": False},
         }
 
         # 탄약 및 사격 상태
-        self.max_ammo = 12
+        self.max_ammo = 7
         self.ammo = self.max_ammo
         self.overcharge_rounds = 0  # 오버차지 고폭 플라즈마 소이탄 탄환 수
         self.is_reloading = False
@@ -137,6 +165,16 @@ class CombatSystem:
         self.combo_window = 3.8
         self.bullet_storm_timer = 0.0  # 탄환 폭풍 퍽 활성화 타이머
 
+        # 스테이지 전투 결과 보고서 (After-Action Report) 통계 추적
+        self.stage_kills = 0
+        self.stage_headshots = 0
+        self.stage_shots_fired = 0
+        self.stage_shots_hit = 0
+        self.stage_damage_dealt = 0.0
+        self.stage_damage_taken = 0.0
+        self.stage_max_combo = 0
+        self.stage_start_time = 0.0
+
         # 정밀 조준(ADS: Aim Down Sights) 상태
         self.is_aiming = False
         self.ads_alpha = 0.0
@@ -146,7 +184,9 @@ class CombatSystem:
         self.ads_hip_hpr = Vec3(1.5, 0.8, -0.8)
         self.ads_aim_hpr = Vec3(0.0, 0.0, 0.0)
 
-        # 샷건 및 쌍권총 POV 좌표
+        # AR, 샷건 및 듀얼 글록 POV 좌표
+        self.ads_hip_pos_ar = Vec3(0.18, 0.65, -0.210)
+        self.ads_aim_pos_ar = Vec3(0.00, 0.55, -0.142)
         self.ads_hip_pos_sg = Vec3(0.18, 0.68, -0.215)
         self.ads_aim_pos_sg = Vec3(0.00, 0.58, -0.134)
         self.ads_hip_pos_dual_l = Vec3(-0.17, 0.62, -0.21)
@@ -313,6 +353,12 @@ class CombatSystem:
             else:
                 self.vm_dual.hide()
 
+        if hasattr(self, 'vm_ar') and self.vm_ar:
+            if self.current_weapon == "AR":
+                self.vm_ar.show()
+            else:
+                self.vm_ar.hide()
+
         if hasattr(self, 'vm_shotgun') and self.vm_shotgun:
             if self.current_weapon == "SHOTGUN":
                 self.vm_shotgun.show()
@@ -330,7 +376,7 @@ class CombatSystem:
             self.is_aiming = False
 
     def _setup_viewmodel(self):
-        """1인칭 택티컬 뷰모델: 안정적 통합 전방 조명 및 3종 무기(9mm 권총, 아킴보 쌍권총, 12게이지 샷건) 지오메트리 구축"""
+        """1인칭 택티컬 뷰모델: 안정적 통합 전방 조명 및 4종 무기(데저트 이글, 듀얼 글록, AR, 펌프 샷건) 지오메트리 구축"""
         if hasattr(self, 'vm_root') and self.vm_root:
             self.vm_root.removeNode()
 
@@ -356,90 +402,101 @@ class CombatSystem:
         self.fill_np.setPos(0.08, 0.15, -0.05)
         self.render.setLight(self.fill_np)
 
-        # 3종 무기 3D 지오메트리 개별 구축
+        # 4종 무기 3D 지오메트리 개별 구축
         self._build_pistol_viewmodel()
         self._build_dual_viewmodel()
+        self._build_ar_viewmodel()
         self._build_shotgun_viewmodel()
         self._update_viewmodel_visibility()
 
     def _build_pistol_viewmodel(self):
-        """1. 단일 9mm 택티컬 권총 뷰모델 지오메트리"""
+        """1. .50 매그넘 데저트 이글 (Desert Eagle .50 AE) 핸드캐논 뷰모델 지오메트리"""
         self.vm_pistol = self.vm_root.attachNewNode("vm_pistol")
         self.vm_pistol.setPos(self.ads_hip_pos)
         self.vm_pistol.setHpr(self.ads_hip_hpr)
 
         self.recoil_node = self.vm_pistol.attachNewNode("recoil_node")
 
-        steel_dark = LColor(0.10, 0.10, 0.12, 1.0)
-        steel_slide = LColor(0.22, 0.23, 0.26, 1.0)
-        steel_barrel = LColor(0.16, 0.16, 0.18, 1.0)
-        grip_col = LColor(0.06, 0.06, 0.07, 1.0)
-        tritium_green = LColor(0.35, 1.0, 0.40, 1.0)
+        # 데저트 이글 시그니처 크롬/브러시드 스테인리스 실버 & 블랙 투톤 마감
+        chrome_slide = LColor(0.72, 0.74, 0.78, 1.0)
+        frame_steel = LColor(0.18, 0.19, 0.22, 1.0)
+        barrel_steel = LColor(0.68, 0.70, 0.74, 1.0)
+        grip_polymer = LColor(0.06, 0.06, 0.07, 1.0)
+        medallion_gold = LColor(0.82, 0.68, 0.20, 1.0)
+        sight_orange = LColor(1.0, 0.45, 0.15, 1.0)
 
-        # 하부 프레임 (Frame)
+        # 하부 프레임 (Desert Eagle Frame & Heavy Grip)
         self.frame_node = self.recoil_node.attachNewNode("frame_node")
-        grip = make_cube_to(self.frame_node, 0.058, 0.11, 0.20, grip_col, 0, -0.06, -0.09)
-        grip.setP(16)
-        make_cube_to(self.frame_node, 0.055, 0.20, 0.050, steel_dark, 0, 0.08, 0.005)
-        make_cube_to(self.frame_node, 0.030, 0.08, 0.060, steel_dark, 0, 0.04, -0.04)
-        make_cube_to(self.frame_node, 0.014, 0.02, 0.035, steel_dark, 0, 0.035, -0.025)
-        make_cube_to(self.frame_node, 0.010, 0.035, 0.012, steel_dark, -0.032, 0.02, 0.045)
-        make_cube_to(self.frame_node, 0.012, 0.015, 0.015, steel_dark, -0.032, -0.03, -0.02)
+        grip = make_cube_to(self.frame_node, 0.064, 0.13, 0.22, grip_polymer, 0, -0.07, -0.09)
+        grip.setP(18)
+        # 데저트 이글 메달리온 인서트
+        make_cylinder_to(self.frame_node, 0.016, 0.068, 0.016, medallion_gold, 0, -0.07, -0.08, rot_p=18, axis='x')
+        make_cube_to(self.frame_node, 0.060, 0.22, 0.056, frame_steel, 0, 0.08, 0.005)
+        make_cube_to(self.frame_node, 0.034, 0.09, 0.065, frame_steel, 0, 0.04, -0.04)
+        make_cube_to(self.frame_node, 0.016, 0.024, 0.040, frame_steel, 0, 0.035, -0.025)
+        # 묵직한 트리거 가드 및 안전장치
+        make_cube_to(self.frame_node, 0.014, 0.040, 0.014, frame_steel, -0.034, 0.02, 0.048)
+        make_cube_to(self.frame_node, 0.014, 0.020, 0.018, frame_steel, -0.034, -0.035, -0.02)
 
-        # 권총 하부 언더레일 웨폰라이트 바디
+        # 하부 언더레일 웨폰라이트 바디
         vm_fl = self.frame_node.attachNewNode("vm_fl")
-        vm_fl.setPos(0, 0.13, -0.034)
-        make_cube_to(vm_fl, 0.060, 0.14, 0.020, steel_slide, 0, -0.012, 0.022)
-        make_cylinder_to(vm_fl, 0.052, 0.16, 0.044, steel_dark, 0, 0.0, 0.0, axis='y')
-        make_cylinder_to(vm_fl, 0.056, 0.028, 0.048, steel_slide, 0, 0.092, 0.0, axis='y')
-        lens = make_cylinder_to(vm_fl, 0.046, 0.008, 0.042, LColor(1.0, 0.96, 0.82, 0.95), 0, 0.108, 0.0, axis='y')
+        vm_fl.setPos(0, 0.14, -0.038)
+        make_cube_to(vm_fl, 0.062, 0.15, 0.022, frame_steel, 0, -0.012, 0.022)
+        make_cylinder_to(vm_fl, 0.054, 0.17, 0.046, frame_steel, 0, 0.0, 0.0, axis='y')
+        make_cylinder_to(vm_fl, 0.058, 0.030, 0.050, chrome_slide, 0, 0.096, 0.0, axis='y')
+        lens = make_cylinder_to(vm_fl, 0.048, 0.008, 0.044, LColor(1.0, 0.96, 0.82, 0.95), 0, 0.112, 0.0, axis='y')
         lens.setLightOff()
 
-        # 총열 및 약실
+        # 고정식 대구경 .50 AE 총열 (상단 피카티니 레일 일체형 삼각형 총열)
         self.barrel_node = self.recoil_node.attachNewNode("barrel_node")
-        make_cylinder_to(self.barrel_node, 0.042, 0.16, 0.042, steel_barrel, 0, 0.18, 0.04, axis='y')
-        make_cylinder_to(self.barrel_node, 0.028, 0.015, 0.028, LColor(0.02, 0.02, 0.02, 1.0), 0, 0.265, 0.04, axis='y')
-        make_cube_to(self.barrel_node, 0.048, 0.07, 0.046, steel_dark, 0, 0.04, 0.042)
+        make_cube_to(self.barrel_node, 0.064, 0.22, 0.075, barrel_steel, 0, 0.18, 0.045)
+        make_cube_to(self.barrel_node, 0.038, 0.24, 0.016, frame_steel, 0, 0.18, 0.088) # 상단 스코프 레일
+        # 대구경 .50 AE 총구 내경 (12.7mm 구경의 위압감)
+        make_cylinder_to(self.barrel_node, 0.048, 0.18, 0.048, barrel_steel, 0, 0.19, 0.042, axis='y')
+        make_cylinder_to(self.barrel_node, 0.036, 0.018, 0.036, LColor(0.01, 0.01, 0.01, 1.0), 0, 0.292, 0.042, axis='y')
 
-        # 왕복 슬라이드
+        # 크롬 왕복 슬라이드 (Desert Eagle 후방 슬라이드 & 볼트)
         self.slide_node = self.recoil_node.attachNewNode("slide_node")
-        make_cube_to(self.slide_node, 0.062, 0.30, 0.075, steel_slide, 0, 0.05, 0.045)
-        make_cube_to(self.slide_node, 0.020, 0.07, 0.035, steel_dark, 0.026, 0.04, 0.055)
-        make_cube_to(self.slide_node, 0.064, 0.05, 0.055, steel_dark, 0, -0.05, 0.045)
+        make_cube_to(self.slide_node, 0.068, 0.24, 0.078, chrome_slide, 0, -0.01, 0.045)
+        # 슬라이드 서레이션 (코킹 그루브)
+        make_cube_to(self.slide_node, 0.072, 0.07, 0.045, frame_steel, 0, -0.06, 0.045)
+        make_cube_to(self.slide_node, 0.024, 0.07, 0.040, frame_steel, 0.028, 0.03, 0.055) # 약실 배출창
 
-        front_sight = make_cube_to(self.slide_node, 0.012, 0.02, 0.02, tritium_green, 0, 0.19, 0.09)
+        # 형광 가늠쇠 & 타겟 가늠자
+        front_sight = make_cube_to(self.barrel_node, 0.012, 0.024, 0.022, sight_orange, 0, 0.275, 0.10)
         front_sight.setLightOff()
-        r_sight1 = make_cube_to(self.slide_node, 0.012, 0.015, 0.02, tritium_green, -0.022, -0.09, 0.09)
-        r_sight2 = make_cube_to(self.slide_node, 0.012, 0.015, 0.02, tritium_green, 0.022, -0.09, 0.09)
+        r_sight1 = make_cube_to(self.slide_node, 0.012, 0.018, 0.022, sight_orange, -0.024, -0.11, 0.095)
+        r_sight2 = make_cube_to(self.slide_node, 0.012, 0.018, 0.022, sight_orange, 0.024, -0.11, 0.095)
         r_sight1.setLightOff()
         r_sight2.setLightOff()
 
-        # 해머 (공이치기)
+        # 대형 스퍼 해머 (공이치기)
         self.hammer_node = self.recoil_node.attachNewNode("hammer_node")
-        self.hammer_node.setPos(0, -0.102, 0.038)
+        self.hammer_node.setPos(0, -0.125, 0.042)
         self.hammer_node.setP(-42)
-        make_cube_to(self.hammer_node, 0.016, 0.030, 0.045, steel_dark, 0, -0.012, 0.018)
+        make_cube_to(self.hammer_node, 0.020, 0.035, 0.052, chrome_slide, 0, -0.014, 0.020)
 
-        # 분리형 탄창
+        # .50 AE 7발 대형 탄창
         self.mag_node = self.frame_node.attachNewNode("mag_node")
-        self.mag_node.setPos(0, -0.06, -0.09)
-        self.mag_node.setP(16)
-        make_cube_to(self.mag_node, 0.046, 0.082, 0.18, steel_dark, 0, 0, 0)
-        make_cube_to(self.mag_node, 0.056, 0.096, 0.024, grip_col, 0, -0.005, -0.095)
-        make_cube_to(self.mag_node, 0.024, 0.048, 0.024, LColor(0.85, 0.68, 0.22, 1.0), 0, 0.01, 0.08)
+        self.mag_node.setPos(0, -0.07, -0.09)
+        self.mag_node.setP(18)
+        make_cube_to(self.mag_node, 0.052, 0.095, 0.20, frame_steel, 0, 0, 0)
+        make_cube_to(self.mag_node, 0.062, 0.11, 0.028, grip_polymer, 0, -0.005, -0.105)
+        # .50 매그넘 대구경 황동 탄두 노출
+        make_cylinder_to(self.mag_node, 0.028, 0.050, 0.028, LColor(0.92, 0.76, 0.22, 1.0), 0, 0.01, 0.09, axis='y')
 
-        # 총구 화염 & 섬광 조명
-        self.muzzle_flash_geom = make_sphere_to(self.recoil_node, 0.16, 0.22, 0.16, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.34, 0.04, rot_h=45)
+        # 매그넘 대구경 총구 화염 & 섬광 조명
+        self.muzzle_flash_geom = make_sphere_to(self.recoil_node, 0.24, 0.35, 0.24, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.38, 0.042, rot_h=45)
         self.muzzle_flash_geom.setLightOff()
         self.muzzle_flash_geom.hide()
 
         self.muzzle_light = PointLight('muzzle_light')
-        self.muzzle_light.setColor((2.8, 2.2, 0.9, 1.0))
-        self.muzzle_light.setAttenuation((1.0, 0.08, 0.015))
+        self.muzzle_light.setColor((4.2, 2.8, 1.0, 1.0))
+        self.muzzle_light.setAttenuation((1.0, 0.06, 0.012))
         self.muzzle_light_np = self.recoil_node.attachNewNode(self.muzzle_light)
-        self.muzzle_light_np.setPos(0, 0.35, 0.04)
+        self.muzzle_light_np.setPos(0, 0.40, 0.042)
 
-        # 1인칭 전술 장갑 및 손목 팔 (Tactical Hands & Arms - 권총 투핸드 파지법)
+        # 1인칭 전술 장갑 및 손목 팔 (Tactical Hands & Arms - 데저트 이글 투핸드 파지법)
         glove_dark = LColor(0.12, 0.12, 0.14, 1.0)
         knuckle_col = LColor(0.20, 0.22, 0.25, 1.0)
         sleeve_col = LColor(0.08, 0.09, 0.11, 1.0)
@@ -449,11 +506,11 @@ class CombatSystem:
         r_hand = self.recoil_node.attachNewNode("pistol_r_hand")
         make_cylinder_to(r_hand, 0.075, 0.28, 0.075, sleeve_col, 0.065, -0.26, -0.20, rot_h=-12, rot_p=30, rot_r=-12, axis='y')
         make_cylinder_to(r_hand, 0.068, 0.045, 0.068, strap_col, 0.038, -0.14, -0.13, rot_h=-10, rot_p=24, rot_r=-8, axis='y')
-        make_cube_to(r_hand, 0.064, 0.095, 0.064, glove_dark, 0.020, -0.075, -0.095, rot_p=16)
-        make_cube_to(r_hand, 0.062, 0.040, 0.022, knuckle_col, 0.036, -0.065, -0.082, rot_p=16, rot_r=12)
-        make_cube_to(r_hand, 0.060, 0.036, 0.032, glove_dark, 0.005, -0.015, -0.062, rot_p=16)
-        make_cube_to(r_hand, 0.060, 0.036, 0.032, glove_dark, 0.005, -0.025, -0.098, rot_p=16)
-        make_cube_to(r_hand, 0.060, 0.036, 0.032, glove_dark, 0.005, -0.035, -0.134, rot_p=16)
+        make_cube_to(r_hand, 0.064, 0.095, 0.064, glove_dark, 0.020, -0.075, -0.095, rot_p=18)
+        make_cube_to(r_hand, 0.062, 0.040, 0.022, knuckle_col, 0.036, -0.065, -0.082, rot_p=18, rot_r=12)
+        make_cube_to(r_hand, 0.060, 0.036, 0.032, glove_dark, 0.005, -0.015, -0.062, rot_p=18)
+        make_cube_to(r_hand, 0.060, 0.036, 0.032, glove_dark, 0.005, -0.025, -0.098, rot_p=18)
+        make_cube_to(r_hand, 0.060, 0.036, 0.032, glove_dark, 0.005, -0.035, -0.134, rot_p=18)
         make_cube_to(r_hand, 0.022, 0.068, 0.022, glove_dark, 0.026, 0.012, -0.024, rot_h=-6, rot_p=8)
         make_cube_to(r_hand, 0.025, 0.058, 0.025, glove_dark, -0.026, -0.055, -0.032, rot_h=10, rot_p=-8)
 
@@ -461,48 +518,50 @@ class CombatSystem:
         l_hand = self.recoil_node.attachNewNode("pistol_l_hand")
         make_cylinder_to(l_hand, 0.075, 0.28, 0.075, sleeve_col, -0.082, -0.24, -0.21, rot_h=16, rot_p=30, rot_r=16, axis='y')
         make_cylinder_to(l_hand, 0.068, 0.045, 0.068, strap_col, -0.048, -0.13, -0.14, rot_h=14, rot_p=22, rot_r=10, axis='y')
-        make_cube_to(l_hand, 0.066, 0.088, 0.064, glove_dark, -0.024, -0.070, -0.120, rot_p=16, rot_r=-14)
-        make_cube_to(l_hand, 0.056, 0.062, 0.032, knuckle_col, -0.012, -0.032, -0.128, rot_p=16, rot_h=12)
+        make_cube_to(l_hand, 0.066, 0.088, 0.064, glove_dark, -0.024, -0.070, -0.120, rot_p=18, rot_r=-14)
+        make_cube_to(l_hand, 0.056, 0.062, 0.032, knuckle_col, -0.012, -0.032, -0.128, rot_p=18, rot_h=12)
         make_cube_to(l_hand, 0.022, 0.072, 0.022, glove_dark, -0.032, -0.008, -0.024, rot_p=6)
 
     def _build_dual_viewmodel(self):
-        """2. 아킴보 쌍권총 (Dual Akimbo Pistols) 좌/우 뷰모델 지오메트리"""
+        """2. 9mm 듀얼 글록 아킴보 (Dual 9mm Glocks) 좌/우 뷰모델 지오메트리"""
         self.vm_dual = self.vm_root.attachNewNode("vm_dual")
 
-        steel_dark = LColor(0.10, 0.10, 0.12, 1.0)
-        steel_slide = LColor(0.22, 0.23, 0.26, 1.0)
-        grip_col = LColor(0.06, 0.06, 0.07, 1.0)
-        tritium_cyan = LColor(0.25, 0.95, 1.0, 1.0)
+        glock_polymer = LColor(0.08, 0.08, 0.09, 1.0)
+        glock_slide = LColor(0.18, 0.19, 0.21, 1.0)
+        steel_barrel = LColor(0.13, 0.13, 0.15, 1.0)
+        glock_white = LColor(0.96, 0.96, 0.98, 1.0)
 
-        # (1) 좌측 권총 (Left Hand Pistol)
+        # (1) 좌측 9mm 글록 (Left Hand Glock)
         self.vm_dual_left = self.vm_dual.attachNewNode("vm_dual_left")
         self.vm_dual_left.setPos(self.ads_hip_pos_dual_l)
         self.vm_dual_left.setHpr(Vec3(4.0, 1.0, 10.0))
 
         self.dual_left_recoil = self.vm_dual_left.attachNewNode("dual_left_recoil")
         left_frame = self.dual_left_recoil.attachNewNode("dual_left_frame")
-        lgrip = make_cube_to(left_frame, 0.052, 0.10, 0.18, grip_col, 0, -0.05, -0.08)
-        lgrip.setP(16)
-        make_cube_to(left_frame, 0.050, 0.18, 0.046, steel_dark, 0, 0.07, 0.005)
-        make_cube_to(left_frame, 0.026, 0.07, 0.055, steel_dark, 0, 0.035, -0.035)
+        lgrip = make_cube_to(left_frame, 0.050, 0.10, 0.18, glock_polymer, 0, -0.05, -0.08)
+        lgrip.setP(20)
+        make_cube_to(left_frame, 0.048, 0.18, 0.044, glock_polymer, 0, 0.07, 0.005)
+        make_cube_to(left_frame, 0.024, 0.07, 0.052, glock_polymer, 0, 0.035, -0.035)
 
         self.dual_left_slide = self.dual_left_recoil.attachNewNode("dual_left_slide")
-        make_cylinder_to(self.dual_left_recoil, .034, .10, .034, steel_dark, 0, .20, .035, axis='y')
-        make_cylinder_to(self.dual_left_recoil, .022, .01, .022, LColor(.015, .015, .015, 1), 0, .254, .035, axis='y')
-        make_cube_to(self.dual_left_slide, 0.056, 0.28, 0.068, steel_slide, 0, 0.05, 0.040)
-        make_cube_to(self.dual_left_slide, 0.018, 0.06, 0.030, steel_dark, -0.024, 0.04, 0.050)
-        l_front = make_cube_to(self.dual_left_slide, 0.010, 0.018, 0.018, tritium_cyan, 0, 0.18, 0.08)
+        make_cylinder_to(self.dual_left_recoil, .032, .10, .032, steel_barrel, 0, .20, .035, axis='y')
+        make_cylinder_to(self.dual_left_recoil, .020, .01, .020, LColor(.01, .01, .01, 1), 0, .254, .035, axis='y')
+        # 각진 글록 사각 슬라이드 및 전후방 서레이션
+        make_cube_to(self.dual_left_slide, 0.052, 0.26, 0.064, glock_slide, 0, 0.05, 0.040)
+        make_cube_to(self.dual_left_slide, 0.054, 0.05, 0.062, glock_polymer, 0, -0.04, 0.040)
+        make_cube_to(self.dual_left_slide, 0.018, 0.06, 0.030, glock_polymer, -0.022, 0.04, 0.050)
+        # 글록 시그니처 화이트 도트 가늠쇠
+        l_front = make_cube_to(self.dual_left_slide, 0.010, 0.016, 0.016, glock_white, 0, 0.17, 0.076)
         l_front.setLightOff()
 
         self.dual_left_hammer = self.dual_left_recoil.attachNewNode("dual_left_hammer")
-        self.dual_left_hammer.setPos(0, -0.095, 0.034)
-        self.dual_left_hammer.setP(-42)
-        make_cube_to(self.dual_left_hammer, 0.014, 0.028, 0.040, steel_dark, 0, -0.01, 0.016)
+        self.dual_left_hammer.setPos(0, -0.085, 0.034)
+        make_cube_to(self.dual_left_hammer, 0.014, 0.018, 0.035, glock_slide, 0, -0.005, 0.010)
 
         self.dual_left_mag = left_frame.attachNewNode("dual_left_mag")
         self.dual_left_mag.setPos(0, -0.05, -0.08)
-        self.dual_left_mag.setP(16)
-        make_cube_to(self.dual_left_mag, 0.042, 0.075, 0.16, steel_dark, 0, 0, 0)
+        self.dual_left_mag.setP(20)
+        make_cube_to(self.dual_left_mag, 0.040, 0.075, 0.16, glock_polymer, 0, 0, 0)
 
         self.dual_left_flash_geom = make_sphere_to(self.dual_left_recoil, 0.15, 0.20, 0.15, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.32, 0.035, rot_h=45)
         self.dual_left_flash_geom.setLightOff()
@@ -526,35 +585,35 @@ class CombatSystem:
         make_cube_to(l_hand_dual, 0.022, 0.068, 0.022, LColor(0.12, 0.12, 0.14, 1.0), -0.026, 0.012, -0.024, rot_h=6, rot_p=8)
         make_cube_to(l_hand_dual, 0.025, 0.058, 0.025, LColor(0.12, 0.12, 0.14, 1.0), 0.026, -0.055, -0.032, rot_h=-10, rot_p=-8)
 
-        # (2) 우측 권총 (Right Hand Pistol)
+        # (2) 우측 9mm 글록 (Right Hand Glock)
         self.vm_dual_right = self.vm_dual.attachNewNode("vm_dual_right")
         self.vm_dual_right.setPos(self.ads_hip_pos_dual_r)
         self.vm_dual_right.setHpr(Vec3(-4.0, 1.0, -10.0))
 
         self.dual_right_recoil = self.vm_dual_right.attachNewNode("dual_right_recoil")
         right_frame = self.dual_right_recoil.attachNewNode("dual_right_frame")
-        rgrip = make_cube_to(right_frame, 0.052, 0.10, 0.18, grip_col, 0, -0.05, -0.08)
-        rgrip.setP(16)
-        make_cube_to(right_frame, 0.050, 0.18, 0.046, steel_dark, 0, 0.07, 0.005)
-        make_cube_to(right_frame, 0.026, 0.07, 0.055, steel_dark, 0, 0.035, -0.035)
+        rgrip = make_cube_to(right_frame, 0.050, 0.10, 0.18, glock_polymer, 0, -0.05, -0.08)
+        rgrip.setP(20)
+        make_cube_to(right_frame, 0.048, 0.18, 0.044, glock_polymer, 0, 0.07, 0.005)
+        make_cube_to(right_frame, 0.024, 0.07, 0.052, glock_polymer, 0, 0.035, -0.035)
 
         self.dual_right_slide = self.dual_right_recoil.attachNewNode("dual_right_slide")
-        make_cylinder_to(self.dual_right_recoil, .034, .10, .034, steel_dark, 0, .20, .035, axis='y')
-        make_cylinder_to(self.dual_right_recoil, .022, .01, .022, LColor(.015, .015, .015, 1), 0, .254, .035, axis='y')
-        make_cube_to(self.dual_right_slide, 0.056, 0.28, 0.068, steel_slide, 0, 0.05, 0.040)
-        make_cube_to(self.dual_right_slide, 0.018, 0.06, 0.030, steel_dark, 0.024, 0.04, 0.050)
-        r_front = make_cube_to(self.dual_right_slide, 0.010, 0.018, 0.018, tritium_cyan, 0, 0.18, 0.08)
+        make_cylinder_to(self.dual_right_recoil, .032, .10, .032, steel_barrel, 0, .20, .035, axis='y')
+        make_cylinder_to(self.dual_right_recoil, .020, .01, .020, LColor(.01, .01, .01, 1), 0, .254, .035, axis='y')
+        make_cube_to(self.dual_right_slide, 0.052, 0.26, 0.064, glock_slide, 0, 0.05, 0.040)
+        make_cube_to(self.dual_right_slide, 0.054, 0.05, 0.062, glock_polymer, 0, -0.04, 0.040)
+        make_cube_to(self.dual_right_slide, 0.018, 0.06, 0.030, glock_polymer, 0.022, 0.04, 0.050)
+        r_front = make_cube_to(self.dual_right_slide, 0.010, 0.016, 0.016, glock_white, 0, 0.17, 0.076)
         r_front.setLightOff()
 
         self.dual_right_hammer = self.dual_right_recoil.attachNewNode("dual_right_hammer")
-        self.dual_right_hammer.setPos(0, -0.095, 0.034)
-        self.dual_right_hammer.setP(-42)
-        make_cube_to(self.dual_right_hammer, 0.014, 0.028, 0.040, steel_dark, 0, -0.01, 0.016)
+        self.dual_right_hammer.setPos(0, -0.085, 0.034)
+        make_cube_to(self.dual_right_hammer, 0.014, 0.018, 0.035, glock_slide, 0, -0.005, 0.010)
 
         self.dual_right_mag = right_frame.attachNewNode("dual_right_mag")
         self.dual_right_mag.setPos(0, -0.05, -0.08)
-        self.dual_right_mag.setP(16)
-        make_cube_to(self.dual_right_mag, 0.042, 0.075, 0.16, steel_dark, 0, 0, 0)
+        self.dual_right_mag.setP(20)
+        make_cube_to(self.dual_right_mag, 0.040, 0.075, 0.16, glock_polymer, 0, 0, 0)
 
         self.dual_right_flash_geom = make_sphere_to(self.dual_right_recoil, 0.15, 0.20, 0.15, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.32, 0.035, rot_h=45)
         self.dual_right_flash_geom.setLightOff()
@@ -577,6 +636,236 @@ class CombatSystem:
         make_cube_to(r_hand_dual, 0.060, 0.036, 0.032, LColor(0.12, 0.12, 0.14, 1.0), 0.005, -0.035, -0.134, rot_p=16)
         make_cube_to(r_hand_dual, 0.022, 0.068, 0.022, LColor(0.12, 0.12, 0.14, 1.0), 0.026, 0.012, -0.024, rot_h=-6, rot_p=8)
         make_cube_to(r_hand_dual, 0.025, 0.058, 0.025, LColor(0.12, 0.12, 0.14, 1.0), -0.026, -0.055, -0.032, rot_h=10, rot_p=-8)
+
+    def _build_ar_viewmodel(self):
+        """3. 5.56mm H&K HK416 (hk16) 하이엔드 전술 돌격소총 정밀 뷰모델 지오메트리"""
+        self.vm_ar = self.vm_root.attachNewNode("vm_ar")
+        self.vm_ar.setPos(self.ads_hip_pos_ar)
+        self.vm_ar.setHpr(Vec3(1.2, 0.6, -0.6))
+
+        self.ar_recoil_node = self.vm_ar.attachNewNode("ar_recoil_node")
+
+        # H&K 특유의 하드코트 아노다이징 & 밀스펙 파츠 색상 팔레트
+        hk_black = LColor(0.12, 0.13, 0.15, 1.0)        # 상/하부 리시버 & 쿼드 레일 알루미늄
+        hk_steel = LColor(0.08, 0.08, 0.09, 1.0)        # 총열, 볼트 캐리어, 가스 블록, 소염기
+        hk_furniture = LColor(0.05, 0.05, 0.06, 1.0)    # HK 배틀 그립, E1 개머리판, 수직 손잡이 폴리머
+        hk_accent_metal = LColor(0.24, 0.26, 0.28, 1.0) # 크로스볼트 고정나사, 핀, 셀렉터 레버
+        hk_red = LColor(0.85, 0.15, 0.12, 1.0)          # HK 연발 셀렉터 레드 각인
+        hk_white = LColor(0.90, 0.90, 0.92, 1.0)        # HK 안전 셀렉터 화이트 각인
+        hk_follower = LColor(0.95, 0.40, 0.05, 1.0)     # 고시인성 오렌지색 안티틸트 팔로워
+        sight_glass = LColor(0.10, 0.40, 0.50, 0.60)    # 홀로그래픽 사이트 렌즈 (멀티코팅 반사)
+        sight_reticle = LColor(0.15, 0.95, 1.0, 1.0)    # 시안색 발광 홀로그래픽 레티클
+
+        # -------------------------------------------------------------
+        # 1) HK416 상부 리시버 (Upper Receiver - 피스톤 통과를 위한 시그니처 하이 레일 프로파일)
+        # -------------------------------------------------------------
+        # 상부 리시버 본체 (M4보다 전고가 높은 HK 고유 형상)
+        make_cube_to(self.ar_recoil_node, 0.056, 0.28, 0.088, hk_black, 0, 0.04, 0.024)
+        # 상단 일체형 피카티니 레일 베이스
+        make_cube_to(self.ar_recoil_node, 0.034, 0.28, 0.016, hk_black, 0, 0.04, 0.076)
+        # 피카티니 레일 슬롯 텍스처 (상부 리시버)
+        for ry in (-0.08, -0.04, 0.0, 0.04, 0.08, 0.12, 0.16):
+            make_cube_to(self.ar_recoil_node, 0.036, 0.008, 0.005, hk_steel, 0, ry, 0.082)
+
+        # 탄피 배출구 및 HK 크롬/스틸 볼트 캐리어
+        make_cube_to(self.ar_recoil_node, 0.048, 0.11, 0.032, hk_steel, 0.027, 0.06, 0.038)
+        # HK 폴리머 더스트 커버 (하향 개방)
+        make_cube_to(self.ar_recoil_node, 0.010, 0.11, 0.030, hk_furniture, 0.030, 0.06, 0.018, rot_r=25)
+        # HK 포워드 어시스트 (우측 후방 원통형 하우징 & 플런저)
+        make_cylinder_to(self.ar_recoil_node, 0.020, 0.045, 0.020, hk_black, 0.032, -0.045, 0.046, rot_h=20, rot_p=12, axis='y')
+        make_cylinder_to(self.ar_recoil_node, 0.014, 0.012, 0.014, hk_accent_metal, 0.038, -0.068, 0.050, rot_h=20, rot_p=12, axis='y')
+        # 케이스 디플렉터 (황동 탄피 편향 쐐기 돌기)
+        make_cube_to(self.ar_recoil_node, 0.022, 0.030, 0.028, hk_black, 0.032, -0.015, 0.040, rot_h=-18)
+        # HK 양손잡이용 장전손잡이 (대형 전술 래치 장착)
+        make_cube_to(self.ar_recoil_node, 0.038, 0.035, 0.014, hk_steel, 0, -0.105, 0.066)
+        make_cube_to(self.ar_recoil_node, 0.020, 0.022, 0.016, hk_furniture, -0.025, -0.105, 0.066)
+
+        # -------------------------------------------------------------
+        # 2) HK416 하부 리시버 & 유러피언 스트레이트 탄창 삽입구 (Magwell)
+        # -------------------------------------------------------------
+        # 하부 리시버 본체 (M4의 경사진 형상과 달리 직각에 가까운 HK 고유 스트레이트 탄창 하우징)
+        make_cube_to(self.ar_recoil_node, 0.054, 0.115, 0.098, hk_black, 0, 0.105, -0.030)
+        # 탄창 삽입구 플레어 베벨 립
+        make_cube_to(self.ar_recoil_node, 0.056, 0.118, 0.016, hk_black, 0, 0.105, -0.076)
+        # 탄창 멈치 (우측) & 노리쇠 멈치 패들 (좌측)
+        make_cube_to(self.ar_recoil_node, 0.008, 0.022, 0.022, hk_accent_metal, 0.029, 0.07, -0.010)
+        make_cube_to(self.ar_recoil_node, 0.010, 0.020, 0.034, hk_accent_metal, -0.029, 0.055, 0.018)
+        # 분해 조립 테이크다운 핀 (전방/후방)
+        make_cylinder_to(self.ar_recoil_node, 0.014, 0.060, 0.014, hk_accent_metal, 0, -0.07, -0.008, axis='x')
+        make_cylinder_to(self.ar_recoil_node, 0.014, 0.060, 0.014, hk_accent_metal, 0, 0.155, 0.008, axis='x')
+        # HK 양방향 안전/단발/연발 셀렉터 스위치 및 레드/화이트 픽토그램 각인
+        make_cylinder_to(self.ar_recoil_node, 0.016, 0.062, 0.016, hk_steel, 0, -0.035, -0.012, axis='x')
+        make_cube_to(self.ar_recoil_node, 0.006, 0.026, 0.010, hk_steel, -0.031, -0.022, -0.012, rot_p=-15)
+        make_cube_to(self.ar_recoil_node, 0.004, 0.006, 0.006, hk_white, -0.030, -0.042, -0.004)
+        make_cube_to(self.ar_recoil_node, 0.004, 0.012, 0.006, hk_red, -0.030, -0.024, 0.002)
+        # 확장형 윈터 트리거 가드 (장갑 착용 시에도 넉넉한 하향 곡선)
+        make_cube_to(self.ar_recoil_node, 0.022, 0.082, 0.010, hk_steel, 0, -0.020, -0.072)
+        # 정밀 곡면 매치 트리거 (방아쇠)
+        make_cube_to(self.ar_recoil_node, 0.010, 0.016, 0.042, hk_accent_metal, 0, -0.020, -0.045, rot_p=18)
+
+        # -------------------------------------------------------------
+        # 3) HK 프리플로팅 쿼드 레일 핸드가드 & 아이코닉 크로스볼트 (Cross-Bolt)
+        # -------------------------------------------------------------
+        # 핸드가드 본체 (팔각형 단면 프리플로팅 알루미늄)
+        make_cube_to(self.ar_recoil_node, 0.054, 0.34, 0.072, hk_black, 0, 0.33, 0.025)
+        # 상부 레일 (리시버와 단차 없이 연결되는 연속형 피카티니 레일)
+        make_cube_to(self.ar_recoil_node, 0.034, 0.34, 0.016, hk_black, 0, 0.33, 0.076)
+        for ry in (0.20, 0.24, 0.28, 0.32, 0.36, 0.40, 0.44, 0.48):
+            make_cube_to(self.ar_recoil_node, 0.036, 0.008, 0.005, hk_steel, 0, ry, 0.082)
+        # 하부 레일
+        make_cube_to(self.ar_recoil_node, 0.030, 0.32, 0.014, hk_black, 0, 0.33, -0.018)
+        # 좌우측 측면 피카티니 레일
+        make_cube_to(self.ar_recoil_node, 0.014, 0.32, 0.028, hk_black, -0.028, 0.33, 0.025)
+        make_cube_to(self.ar_recoil_node, 0.014, 0.32, 0.028, hk_black, 0.028, 0.33, 0.025)
+        # ★ HK416의 가장 상징적인 외형 특징: 대형 핸드가드 고정 크로스볼트 (Cross-Bolt Screw)
+        make_cylinder_to(self.ar_recoil_node, 0.024, 0.064, 0.024, hk_accent_metal, 0, 0.185, 0.018, axis='x')
+        make_cube_to(self.ar_recoil_node, 0.008, 0.026, 0.026, hk_steel, 0.032, 0.185, 0.018)
+        # 배럴 너트 연결 링 칼라
+        make_cylinder_to(self.ar_recoil_node, 0.052, 0.035, 0.052, hk_steel, 0, 0.165, 0.025, axis='y')
+        # 핸드가드 통풍 냉각 홀 (내부 피스톤 및 배럴 노출)
+        for vy in (0.24, 0.32, 0.40):
+            make_cube_to(self.ar_recoil_node, 0.056, 0.040, 0.016, hk_steel, 0, vy, 0.025)
+        # 좌측 레일 보호용 고무 래더 커버
+        make_cube_to(self.ar_recoil_node, 0.006, 0.22, 0.024, hk_furniture, -0.033, 0.34, 0.025)
+
+        # -------------------------------------------------------------
+        # 4) 단행정 가스 피스톤 시스템 (Short-Stroke Gas Piston) & 접이식 가늠쇠
+        # -------------------------------------------------------------
+        # 가스 블록 (총열에 핀 고정되는 강철 가스 블록)
+        make_cube_to(self.ar_recoil_node, 0.032, 0.048, 0.068, hk_steel, 0, 0.505, 0.038)
+        # 가스 조절기 노브 (Normal / Suppressed 전방 플러그)
+        make_cylinder_to(self.ar_recoil_node, 0.020, 0.032, 0.020, hk_accent_metal, 0, 0.535, 0.058, axis='y')
+        # 가스 피스톤 작동 로드 (상부 채널 내부 관통)
+        make_cylinder_to(self.ar_recoil_node, 0.016, 0.32, 0.016, hk_accent_metal, 0, 0.34, 0.055, axis='y')
+        # HK 원형 보호링 접이식 프론트 사이트 (Front Sight Post & Protective Ring)
+        make_cylinder_to(self.ar_recoil_node, 0.024, 0.018, 0.038, hk_steel, 0, 0.505, 0.082, axis='y')
+        make_cylinder_to(self.ar_recoil_node, 0.006, 0.006, 0.026, hk_steel, 0, 0.505, 0.082, axis='z')
+
+        # -------------------------------------------------------------
+        # 5) 14.5" 헤비 냉간단조 총열 & HK 버드케이지 소염기 (Birdcage Flash Hider)
+        # -------------------------------------------------------------
+        # 14.5인치 헤비 컨투어 카본 스틸 총열
+        make_cylinder_to(self.ar_recoil_node, 0.028, 0.52, 0.028, hk_steel, 0, 0.46, 0.022, axis='y')
+        # 5방향 가스 분출 포트를 가진 HK 정밀 소염기
+        make_cylinder_to(self.ar_recoil_node, 0.036, 0.065, 0.036, hk_steel, 0, 0.725, 0.022, axis='y')
+        # 총구 보어 및 크라운
+        make_cylinder_to(self.ar_recoil_node, 0.020, 0.010, 0.020, LColor(0.02, 0.02, 0.02, 1.0), 0, 0.758, 0.022, axis='y')
+
+        # -------------------------------------------------------------
+        # 6) EOTech EXPS-3 전술 홀로그래픽 사이트 (QD 마운트 & 발광 레티클)
+        # -------------------------------------------------------------
+        # QD 퀵디태치 7mm 라이저 마운트 베이스
+        make_cube_to(self.ar_recoil_node, 0.046, 0.085, 0.022, hk_steel, 0, 0.05, 0.086)
+        make_cube_to(self.ar_recoil_node, 0.012, 0.045, 0.012, hk_accent_metal, 0.026, 0.05, 0.086)
+        # 알루미늄 보호 후드 (Outer Hood Housing)
+        make_cube_to(self.ar_recoil_node, 0.052, 0.125, 0.058, hk_black, 0, 0.05, 0.115)
+        # 측면 횡방향 CR123A 배터리 컴파트먼트 캡
+        make_cylinder_to(self.ar_recoil_node, 0.024, 0.055, 0.024, hk_steel, 0.024, 0.085, 0.098, axis='y')
+        # 사이트 전후방 렌즈 (멀티코팅 안티글레어 블루/시안 글래스)
+        lens = make_cube_to(self.ar_recoil_node, 0.042, 0.008, 0.042, sight_glass, 0, 0.05, 0.115)
+        lens.setLightOff()
+        lens.setTransparency(TransparencyAttrib.MAlpha)
+        # 홀로그래픽 발광 레티클 (조준선 정렬 정중앙 네온 시안)
+        reticle = make_cube_to(self.ar_recoil_node, 0.006, 0.006, 0.006, sight_reticle, 0, 0.055, 0.115)
+        reticle.setLightOff()
+
+        # -------------------------------------------------------------
+        # 7) HK 고유 인체공학 배틀 그립 (HK Ergonomic Battle Grip)
+        # -------------------------------------------------------------
+        # A2 그립 대비 가파른 18도 경사각과 팜스웰(Palm-Swell), 비버테일
+        make_cube_to(self.ar_recoil_node, 0.046, 0.088, 0.175, hk_furniture, 0, -0.095, -0.098, rot_p=18)
+        # 리시버 후방 지지 비버테일 탕
+        make_cube_to(self.ar_recoil_node, 0.038, 0.055, 0.055, hk_furniture, 0, -0.075, -0.035, rot_p=28)
+        # 그립 좌우 엠보싱 팜스웰
+        make_cube_to(self.ar_recoil_node, 0.052, 0.072, 0.120, hk_furniture, 0, -0.095, -0.100, rot_p=18)
+        # 바닥 스토리지 컴파트먼트 캡 & 잠금 래치
+        make_cube_to(self.ar_recoil_node, 0.048, 0.090, 0.022, hk_steel, 0, -0.122, -0.178, rot_p=18)
+
+        # -------------------------------------------------------------
+        # 8) HK 30발 스틸 해상탄창 (Curved 30-Round Maritime Steel Magazine)
+        # -------------------------------------------------------------
+        self.ar_mag_node = self.ar_recoil_node.attachNewNode("ar_mag_node")
+        self.ar_mag_node.setPos(0, 0.12, -0.06)
+        self.ar_mag_node.setP(12)
+        # 삽입구 직선 진입부
+        make_cube_to(self.ar_mag_node, 0.044, 0.090, 0.090, hk_steel, 0, 0.005, -0.015)
+        # 고시인성 오렌지색 안티틸트 팔로워 (Anti-Tilt Follower)
+        make_cube_to(self.ar_mag_node, 0.036, 0.072, 0.015, hk_follower, 0, 0.010, 0.025)
+        # HK 강철 탄창의 매끄러운 곡면 바나나형 하부 본체
+        make_cube_to(self.ar_mag_node, 0.044, 0.092, 0.160, hk_steel, 0, 0.020, -0.105, rot_p=14)
+        # 탄창 하단 스틸 바닥판 (Floorplate)
+        make_cube_to(self.ar_mag_node, 0.048, 0.096, 0.020, hk_furniture, 0, 0.046, -0.180, rot_p=14)
+
+        # -------------------------------------------------------------
+        # 9) HK E1 텔레스코픽 인체공학 신축식 개머리판 (Retractable Stock)
+        # -------------------------------------------------------------
+        # 밀스펙 버퍼 튜브 (Receiver Extension)
+        make_cylinder_to(self.ar_recoil_node, 0.036, 0.22, 0.036, hk_steel, 0, -0.20, 0.022, axis='y')
+        # 캐슬 너트 (Castle Nut) & 슬링 엔드플레이트
+        make_cylinder_to(self.ar_recoil_node, 0.042, 0.020, 0.042, hk_accent_metal, 0, -0.095, 0.022, axis='y')
+        # HK E1 개머리판 메인 슬리브
+        make_cube_to(self.ar_recoil_node, 0.048, 0.19, 0.052, hk_furniture, 0, -0.25, 0.022)
+        # 좌우 배터리 수납 뺨 받침 플레어 튜브 (Dual Flared Cheek Rests)
+        make_cylinder_to(self.ar_recoil_node, 0.028, 0.16, 0.028, hk_furniture, -0.022, -0.25, 0.028, axis='y')
+        make_cylinder_to(self.ar_recoil_node, 0.028, 0.16, 0.028, hk_furniture, 0.022, -0.25, 0.028, axis='y')
+        # 하단 신축 조절 레버 (Adjustment Latch)
+        make_cube_to(self.ar_recoil_node, 0.022, 0.080, 0.025, hk_furniture, 0, -0.23, -0.015)
+        # 하단 스트럿 및 양방향 슬링 고리
+        make_cube_to(self.ar_recoil_node, 0.040, 0.16, 0.095, hk_furniture, 0, -0.27, -0.045)
+        # ★ HK 특유의 볼록형 두터운 고무 버트패드 (Convex Rubber Buttpad)
+        make_cube_to(self.ar_recoil_node, 0.048, 0.028, 0.145, hk_furniture, 0, -0.345, -0.035)
+
+        # -------------------------------------------------------------
+        # 10) 전술 액세서리: 스타비 포어그립 & AN/PEQ-15 전술 표적지시기
+        # -------------------------------------------------------------
+        # 하부 레일 장착 TangoDown / HK 택티컬 스타비 수직 손잡이
+        make_cylinder_to(self.ar_recoil_node, 0.036, 0.036, 0.125, hk_furniture, 0, 0.32, -0.082, axis='z')
+        make_cube_to(self.ar_recoil_node, 0.040, 0.055, 0.020, hk_steel, 0, 0.32, -0.025)
+        # 우측 레일 장착 AN/PEQ-15 ATPIAL 레이저 모듈 (다크 코요테/블랙 복합 하우징)
+        make_cube_to(self.ar_recoil_node, 0.024, 0.090, 0.032, hk_furniture, 0.032, 0.36, 0.046)
+        make_cylinder_to(self.ar_recoil_node, 0.014, 0.015, 0.014, hk_steel, 0.032, 0.408, 0.048, axis='y')
+        make_cylinder_to(self.ar_recoil_node, 0.016, 0.016, 0.010, hk_accent_metal, 0.032, 0.34, 0.064, axis='z')
+
+        # -------------------------------------------------------------
+        # 11) 5.56mm 총구 화염 및 동적 포인트 라이트
+        # -------------------------------------------------------------
+        self.ar_muzzle_flash_geom = make_sphere_to(self.ar_recoil_node, 0.22, 0.32, 0.22, LColor(1.0, 0.88, 0.30, 1.0), 0, 0.77, 0.022, rot_h=45)
+        self.ar_muzzle_flash_geom.setLightOff()
+        self.ar_muzzle_flash_geom.hide()
+
+        self.ar_muzzle_light = PointLight('ar_muzzle_light')
+        self.ar_muzzle_light.setColor((3.8, 2.5, 0.8, 1.0))
+        self.ar_muzzle_light.setAttenuation((1.0, 0.06, 0.012))
+        self.ar_muzzle_light_np = self.ar_recoil_node.attachNewNode(self.ar_muzzle_light)
+        self.ar_muzzle_light_np.setPos(0, 0.78, 0.022)
+
+        # -------------------------------------------------------------
+        # 12) 1인칭 전술 장갑 및 손/팔 (특수전 대원 파지 모델링)
+        # -------------------------------------------------------------
+        sleeve_col = LColor(0.08, 0.09, 0.11, 1.0)
+        strap_col = LColor(0.05, 0.05, 0.06, 1.0)
+        glove_dark = LColor(0.12, 0.12, 0.14, 1.0)
+        knuckle_col = LColor(0.20, 0.22, 0.25, 1.0)
+
+        # 오른손: HK 배틀 그립 파지 & 검지 방아쇠 위치
+        r_hand = self.ar_recoil_node.attachNewNode("ar_r_hand")
+        make_cylinder_to(r_hand, 0.075, 0.30, 0.075, sleeve_col, 0.065, -0.28, -0.21, rot_h=-12, rot_p=28, rot_r=-10, axis='y')
+        make_cylinder_to(r_hand, 0.068, 0.045, 0.068, strap_col, 0.036, -0.16, -0.13, rot_h=-10, rot_p=24, rot_r=-6, axis='y')
+        make_cube_to(r_hand, 0.064, 0.095, 0.064, glove_dark, 0.020, -0.10, -0.09, rot_p=22)
+        make_cube_to(r_hand, 0.062, 0.040, 0.022, knuckle_col, 0.036, -0.09, -0.08, rot_p=22, rot_r=12)
+        make_cube_to(r_hand, 0.060, 0.036, 0.032, glove_dark, 0.005, -0.045, -0.075, rot_p=22)
+        make_cube_to(r_hand, 0.060, 0.036, 0.032, glove_dark, 0.005, -0.058, -0.105, rot_p=22)
+        make_cube_to(r_hand, 0.060, 0.036, 0.032, glove_dark, 0.005, -0.070, -0.135, rot_p=22)
+        make_cube_to(r_hand, 0.022, 0.068, 0.022, glove_dark, 0.026, -0.015, -0.030, rot_p=10)
+        make_cube_to(r_hand, 0.025, 0.058, 0.025, glove_dark, -0.026, -0.085, -0.035, rot_h=10, rot_p=-10)
+
+        # 왼손: 전방 스타비 수직 손잡이 견착 파지
+        l_hand = self.ar_recoil_node.attachNewNode("ar_l_hand")
+        make_cylinder_to(l_hand, 0.075, 0.32, 0.075, sleeve_col, -0.085, 0.08, -0.22, rot_h=16, rot_p=32, rot_r=16, axis='y')
+        make_cylinder_to(l_hand, 0.068, 0.045, 0.068, strap_col, -0.048, 0.18, -0.14, rot_h=14, rot_p=26, rot_r=10, axis='y')
+        make_cube_to(l_hand, 0.066, 0.095, 0.064, glove_dark, -0.018, 0.28, -0.09, rot_p=8, rot_r=-10)
+        make_cube_to(l_hand, 0.060, 0.050, 0.026, knuckle_col, -0.032, 0.30, -0.09, rot_p=8, rot_r=-10)
+        make_cube_to(l_hand, 0.036, 0.070, 0.070, glove_dark, 0.005, 0.31, -0.075)
 
     def _build_shotgun_viewmodel(self):
         """3. 12게이지 전술 샷건 (Tactical Combat Shotgun) 뷰모델 지오메트리"""
@@ -902,7 +1191,7 @@ class CombatSystem:
                 if hasattr(game_inst, 'trigger_bullet_time'):
                     game_inst.trigger_bullet_time(as_dur)
                 if p_idx == 0:
-                    self.ui_mgr.show_hit_marker(f"⏱ [아드레날린 슬라이드 샷!] 피해 {as_mult:.1f}x & 불릿타임!", (0.35, 1.0, 0.8, 1.0))
+                    self.ui_mgr.show_hit_marker(f">> [아드레날린 슬라이드 샷!] 피해 {as_mult:.1f}x & 불릿타임!", (0.35, 1.0, 0.8, 1.0))
 
             # 샷건 원거리 탄속/운동에너지 감쇄 (7.0m 초과 시 점진적 감쇄, 22.0m 이상에서 최대 40%까지 감소)
             if cfg.get("pellets", 1) > 1 and tracer_dist > 7.0:
@@ -929,6 +1218,12 @@ class CombatSystem:
                 return did_hit, False, False
 
             self.spawn_hit_particles(impact_world, is_blood=True)
+
+            # 전투 통계 누적 및 3D 플로팅 대미지 폰트 투영
+            actual_hit_dmg = min(prev_m_hp, dmg)
+            self.record_combat_hit(actual_hit_dmg, is_headshot=is_headshot)
+            if hasattr(self.ui_mgr, 'spawn_floating_damage'):
+                self.ui_mgr.spawn_floating_damage(dmg, impact_world, is_crit=is_crit, is_headshot=is_headshot)
 
             # 드래곤 브레스 퍽: 지속 화염 피해 상태이상 부여
             if player and hasattr(player, 'has_perk') and player.has_perk("dragons_breath"):
@@ -994,9 +1289,15 @@ class CombatSystem:
                 pierce_candidates.sort(key=lambda item: item[0])
                 hit_count = 0
                 for sec_dist, sec_monster in pierce_candidates[:max_targets]:
+                    sec_prev_hp = getattr(sec_monster, 'hp', 1)
                     sec_dead = sec_monster.take_damage(dmg, apply_knockback=True, hit_dir=ray_dir)
                     sec_impact = pierce_origin + ray_dir * sec_dist
                     self.spawn_hit_particles(sec_impact, is_blood=True)
+                    self.record_combat_hit(min(sec_prev_hp, dmg), is_headshot=False)
+                    if hasattr(self.ui_mgr, 'spawn_floating_damage'):
+                        self.ui_mgr.spawn_floating_damage(dmg, sec_impact, is_crit=False, is_headshot=False)
+                    if self.audio_mgr and hasattr(self.audio_mgr, 'play_flesh_hit'):
+                        self.audio_mgr.play_flesh_hit()
                     if sec_dead:
                         self.register_kill(player=player)
                         if hasattr(sec_monster, 'turn_into_corpse'):
@@ -1005,7 +1306,7 @@ class CombatSystem:
                             player.gain_exp(getattr(sec_monster, 'exp_value', 35))
                     hit_count += 1
                 if hit_count > 0 and p_idx == 0:
-                    self.ui_mgr.show_hit_marker(f"🎯 [장갑 관통탄!] 후방 적 {hit_count}체 관통 타격!", (0.4, 0.85, 1.0, 1.0))
+                    self.ui_mgr.show_hit_marker(f">> [장갑 관통탄!] 후방 적 {hit_count}체 관통 타격!", (0.4, 0.85, 1.0, 1.0))
 
             if player and hasattr(player, 'recover_stamina'):
                 gain = 24.0 if is_crit else 10.0
@@ -1013,12 +1314,18 @@ class CombatSystem:
                     gain += 16.0
                 player.recover_stamina(gain / max(1, cfg["pellets"] if cfg["pellets"] > 1 else 1))
 
-            if is_crit and p_idx == 0:
-                if is_headshot and self.audio_mgr and hasattr(self.audio_mgr, 'play_headshot_crunch'):
-                    self.audio_mgr.play_headshot_crunch()
-                elif self.audio_mgr:
-                    self.audio_mgr.play_crit_hit()
-                if is_headshot and hasattr(closest_monster, 'stun_timer'):
+            if p_idx == 0:
+                if is_crit:
+                    if is_headshot and self.audio_mgr and hasattr(self.audio_mgr, 'play_headshot_crunch'):
+                        self.audio_mgr.play_headshot_crunch()
+                    elif self.audio_mgr and hasattr(self.audio_mgr, 'play_crit_hit'):
+                        self.audio_mgr.play_crit_hit()
+                else:
+                    # 몸통 피격 시 유기물 타격음 (Flesh Impact SFX)
+                    if self.audio_mgr and hasattr(self.audio_mgr, 'play_flesh_hit'):
+                        self.audio_mgr.play_flesh_hit()
+
+                if is_headshot and hasattr(closest_monster, 'stun_timer') and isinstance(getattr(closest_monster, 'stun_timer', None), (int, float)):
                     closest_monster.stun_timer = max(closest_monster.stun_timer, 0.40)
 
             if is_dead:
@@ -1224,6 +1531,8 @@ class CombatSystem:
             self.shoot_cooldown = 0.35
             return
 
+        self.stage_shots_fired += 1
+
         # 오버차지 판정
         is_overcharge = (self.overcharge_rounds > 0)
         if is_overcharge:
@@ -1261,18 +1570,25 @@ class CombatSystem:
 
             if hasattr(self, 'muzzle_flash_geom') and not self.muzzle_flash_geom.isEmpty():
                 self.muzzle_flash_geom.setR(random.uniform(0, 360))
-                self.muzzle_flash_geom.setScale(random.uniform(0.9, 1.3) * (1.35 if is_overcharge else 1.0))
+                self.muzzle_flash_geom.setScale(random.uniform(1.0, 1.4) * (1.35 if is_overcharge else 1.0))
                 self.muzzle_flash_geom.show()
             if is_overcharge:
-                self.muzzle_light.setColor((1.2, 3.8, 5.0, 1.0))
+                self.muzzle_light.setColor((1.4, 4.0, 5.2, 1.0))
             else:
-                self.muzzle_light.setColor((3.5, 2.2, 0.6, 1.0))
+                self.muzzle_light.setColor((4.2, 2.8, 1.0, 1.0))
             self.render.setLight(self.muzzle_light_np)
 
             if self.ammo <= 0:
                 self.slide_locked = True
             if self.audio_mgr:
-                self.audio_mgr.play_gunshot()
+                if hasattr(self.audio_mgr, 'play_magnum_shot'):
+                    self.audio_mgr.play_magnum_shot()
+                else:
+                    self.audio_mgr.play_gunshot()
+
+            if player and hasattr(player, 'pitch'):
+                player.pitch += random.uniform(0.60, 0.90)
+                player.heading += random.uniform(-0.12, 0.12)
 
             if hasattr(self, 'muzzle_flash_geom') and not self.muzzle_flash_geom.isEmpty():
                 muzzle_world = self.muzzle_flash_geom.getPos(self.render)
@@ -1306,6 +1622,39 @@ class CombatSystem:
                 self.slide_locked = True
             if self.audio_mgr:
                 self.audio_mgr.play_gunshot()
+
+        elif self.current_weapon == "AR":
+            self.recoil_timer = cfg["recoil_time"]
+            self._eject_casing(is_left=False, is_shotgun=False)
+            self._spawn_barrel_smoke(offset_y=0.45)
+
+            if hasattr(self, 'ar_muzzle_flash_geom') and not self.ar_muzzle_flash_geom.isEmpty():
+                self.ar_muzzle_flash_geom.setR(random.uniform(0, 360))
+                self.ar_muzzle_flash_geom.setScale(random.uniform(1.1, 1.45) * (1.35 if is_overcharge else 1.0))
+                self.ar_muzzle_flash_geom.show()
+            if is_overcharge:
+                self.ar_muzzle_light.setColor((1.4, 3.8, 5.2, 1.0))
+            else:
+                self.ar_muzzle_light.setColor((3.8, 2.5, 0.8, 1.0))
+            self.render.setLight(self.ar_muzzle_light_np)
+
+            if self.ammo <= 0:
+                self.slide_locked = True
+            if self.audio_mgr:
+                if hasattr(self.audio_mgr, 'play_ar_shot'):
+                    self.audio_mgr.play_ar_shot()
+                else:
+                    self.audio_mgr.play_gunshot()
+
+            if player and hasattr(player, 'pitch'):
+                # AR 연사 시 강력한 상단 총기 반동 및 탄퍼짐 요동
+                player.pitch += random.uniform(0.40, 0.70)
+                player.heading += random.uniform(-0.25, 0.25)
+
+            if hasattr(self, 'ar_muzzle_flash_geom') and not self.ar_muzzle_flash_geom.isEmpty():
+                muzzle_world = self.ar_muzzle_flash_geom.getPos(self.render)
+            else:
+                muzzle_world = cam_pos + cam_fwd * 0.82 + cam_right * (0.18 * (1.0 - self.ads_alpha)) - cam_up * 0.16
 
         elif self.current_weapon == "SHOTGUN":
             self.sg_pump_timer = 0.44
@@ -1349,25 +1698,38 @@ class CombatSystem:
         base_spread = cfg["ads_spread"] if self.ads_alpha >= 0.85 else cfg["base_spread"]
         if self.ads_alpha < 0.85:
             if is_sprinting or is_sliding:
-                base_spread *= 2.0 if self.current_weapon == "PISTOL" else 2.2
+                base_spread *= 2.0 if self.current_weapon in ("PISTOL", "AR") else 2.2
             elif is_moving:
-                base_spread *= 1.2 if self.current_weapon == "PISTOL" else 1.5
+                base_spread *= 1.2 if self.current_weapon in ("PISTOL", "AR") else 1.5
             base_spread += getattr(self, 'hipfire_bloom', 0.0)
 
-            # 무기별 블룸 증가량 차별화 (전술권총은 극도로 안정적, 아킴보는 난사 시 팽창)
+            # 무기별 블룸 증가량 차별화 (데저트 이글 단발 묵직함, AR 급격한 연사 탄퍼짐)
             if self.current_weapon == "PISTOL":
-                bloom_add = 0.005
-                max_bloom = 0.035
+                bloom_add = 0.016
+                max_bloom = 0.065
             elif self.current_weapon == "DUAL_PISTOL":
                 bloom_add = 0.024
                 max_bloom = 0.095
+            elif self.current_weapon == "AR":
+                bloom_add = 0.018
+                max_bloom = 0.085
             else: # SHOTGUN
                 bloom_add = 0.015
                 max_bloom = 0.080
             self.hipfire_bloom = min(max_bloom, getattr(self, 'hipfire_bloom', 0.0) + bloom_add)
 
-        kick_bloom = 1.35 if cfg["pellets"] > 1 else (0.45 if self.current_weapon == "PISTOL" else 0.85)
-        shake_mag = 0.048 if cfg["pellets"] > 1 else (0.018 if self.current_weapon == "PISTOL" else 0.028)
+        if self.current_weapon == "AR":
+            kick_bloom = 1.30
+            shake_mag = 0.055
+        elif self.current_weapon == "PISTOL":
+            kick_bloom = 1.10
+            shake_mag = 0.045
+        elif self.current_weapon == "SHOTGUN":
+            kick_bloom = 1.35
+            shake_mag = 0.048
+        else: # DUAL_PISTOL
+            kick_bloom = 0.85
+            shake_mag = 0.028
         if hasattr(self.ui_mgr, 'trigger_hipfire_kick'):
             self.ui_mgr.trigger_hipfire_kick(kick_bloom=kick_bloom, shake_mag=shake_mag, shake_dur=0.18)
 
@@ -1398,6 +1760,7 @@ class CombatSystem:
                 any_hit = True
 
         if any_hit:
+            self.stage_shots_hit += 1
             self.ui_mgr.trigger_crosshair_hit(is_kill=any_kill, is_crit=any_crit)
 
     def spawn_hit_particles(self, hit_pos, is_blood=True):
@@ -1433,6 +1796,11 @@ class CombatSystem:
             self.weapon_states["SHOTGUN"]["reserve_ammo"] += 16
             self.weapon_states["SHOTGUN"]["ammo"] = self.weapon_states["SHOTGUN"]["max_ammo"]
 
+            if "AR" in self.weapon_states:
+                self.weapon_states["AR"]["max_ammo"] += 10
+                self.weapon_states["AR"]["reserve_ammo"] += 60
+                self.weapon_states["AR"]["ammo"] = self.weapon_states["AR"]["max_ammo"]
+
             cur_st = self.weapon_states[self.current_weapon]
             self.max_ammo = cur_st["max_ammo"]
             self.ammo = cur_st["ammo"]
@@ -1442,7 +1810,7 @@ class CombatSystem:
             self.ui_mgr.show_hit_marker("[특성 강화] 전 무기 최대 탄창 확장 및 전탄 즉시 보급!", (1.0, 0.85, 0.2, 1.0))
 
     def reload(self, game_state="PLAYING"):
-        """R 키 입력 시 현재 무기 전술 재장전 (권총 / 아킴보 쌍권총 / 12게이지 샷건)"""
+        """R 키 입력 시 현재 무기 전술 재장전 (데저트 이글 / 듀얼 글록 / AR / 12게이지 샷건)"""
         if game_state != "PLAYING" or self.is_reloading:
             return
 
@@ -1492,9 +1860,11 @@ class CombatSystem:
         if self.current_weapon == "SHOTGUN":
             status_msg = "12게이지 벅샷 쉘 연속 삽탄 및 펌프 장전 중..."
         elif self.current_weapon == "DUAL_PISTOL":
-            status_msg = "아킴보 양손 탄창 동시 교체 중... (장전 지연 2.6s)"
+            status_msg = "9mm 듀얼 글록 양손 탄창 동시 교체 중... (장전 지연 2.5s)"
+        elif self.current_weapon == "AR":
+            status_msg = "5.56mm 돌격소총 탄창 교체 및 노리쇠 전진 중... (장전 2.1s)"
         else:
-            status_msg = "9mm 택티컬 전술 탄창 교체 중..."
+            status_msg = ".50 매그넘 대구경 탄창 교체 중..."
         self.ui_mgr.show_hit_marker(status_msg, (0.9, 0.9, 0.9, 1.0))
         self.hit_marker_timer = 1.4
 
@@ -1584,7 +1954,10 @@ class CombatSystem:
 
     def register_kill(self, player=None):
         """적 처치 시 킬 콤보 스트릭 등록 및 다이내믹 퍽 활성화"""
+        self.stage_kills += 1
         self.combo_count += 1
+        if self.combo_count > self.stage_max_combo:
+            self.stage_max_combo = self.combo_count
         self.combo_timer = self.combo_window
         game_inst = getattr(self.base, 'game', None) or self.base
 
@@ -1716,6 +2089,18 @@ class CombatSystem:
             self.vm_shotgun.setPos(self.ads_hip_pos_sg)
             self.vm_shotgun.setHpr(Vec3(1.0, 0.5, -0.5))
 
+        # AR 노드 복구
+        if hasattr(self, 'ar_recoil_node') and self.ar_recoil_node and not self.ar_recoil_node.isEmpty():
+            self.ar_recoil_node.setPos(0, 0, 0)
+            self.ar_recoil_node.setP(0)
+            self.ar_recoil_node.setR(0)
+        if hasattr(self, 'ar_mag_node') and self.ar_mag_node and not self.ar_mag_node.isEmpty():
+            self.ar_mag_node.setPos(0, 0.12, -0.06)
+            self.ar_mag_node.setScale(1.0)
+        if hasattr(self, 'vm_ar') and self.vm_ar and not self.vm_ar.isEmpty():
+            self.vm_ar.setPos(self.ads_hip_pos_ar)
+            self.vm_ar.setHpr(Vec3(1.2, 0.6, -0.6))
+
         if hasattr(self, 'vm_root') and self.vm_root and not self.vm_root.isEmpty():
             self.vm_root.setPos(0, 0, 0)
 
@@ -1732,6 +2117,10 @@ class CombatSystem:
             self.dual_right_flash_geom.hide()
             if hasattr(self, 'dual_right_flash_light_np') and self.dual_right_flash_light_np and not self.dual_right_flash_light_np.isEmpty():
                 self.render.clearLight(self.dual_right_flash_light_np)
+        if hasattr(self, 'ar_muzzle_flash_geom') and self.ar_muzzle_flash_geom and not self.ar_muzzle_flash_geom.isEmpty():
+            self.ar_muzzle_flash_geom.hide()
+            if hasattr(self, 'ar_muzzle_light_np') and self.ar_muzzle_light_np and not self.ar_muzzle_light_np.isEmpty():
+                self.render.clearLight(self.ar_muzzle_light_np)
         if hasattr(self, 'sg_muzzle_flash_geom') and self.sg_muzzle_flash_geom and not self.sg_muzzle_flash_geom.isEmpty():
             self.sg_muzzle_flash_geom.hide()
             if hasattr(self, 'sg_muzzle_light_np') and self.sg_muzzle_light_np and not self.sg_muzzle_light_np.isEmpty():
@@ -1759,6 +2148,52 @@ class CombatSystem:
 
         self.setup_ammo_drops(current_stage)
         self.update_ammo_ui()
+
+        # 스테이지 전투 통계 초기화
+        self.stage_kills = 0
+        self.stage_headshots = 0
+        self.stage_shots_fired = 0
+        self.stage_shots_hit = 0
+        self.stage_damage_dealt = 0.0
+        self.stage_damage_taken = 0.0
+        self.stage_max_combo = 0
+        try:
+            from panda3d.core import ClockObject
+            self.stage_start_time = ClockObject.getGlobalClock().getFrameTime()
+        except Exception:
+            self.stage_start_time = time.time()
+
+    def record_combat_hit(self, dmg, is_headshot=False):
+        """탄환 적중 시 피해량 및 헤드샷 카운트 누적"""
+        self.stage_damage_dealt = getattr(self, 'stage_damage_dealt', 0.0) + float(dmg)
+        if is_headshot:
+            self.stage_headshots = getattr(self, 'stage_headshots', 0) + 1
+
+    def get_stage_stats(self):
+        """현재 스테이지 종합 전투 결과 통계 반환 (After-Action Report용)"""
+        try:
+            from panda3d.core import ClockObject
+            now = ClockObject.getGlobalClock().getFrameTime()
+        except Exception:
+            now = time.time()
+        start = getattr(self, 'stage_start_time', 0.0)
+        elapsed = max(1.0, now - start) if start > 0.0 else 0.0
+        shots_f = max(1, self.stage_shots_fired)
+        accuracy = min(100.0, (self.stage_shots_hit / shots_f) * 100.0) if self.stage_shots_fired > 0 else 0.0
+        shots_h = max(1, self.stage_shots_hit)
+        headshot_pct = min(100.0, (self.stage_headshots / shots_h) * 100.0) if self.stage_shots_hit > 0 else 0.0
+        return {
+            "kills": self.stage_kills,
+            "headshots": self.stage_headshots,
+            "shots_fired": self.stage_shots_fired,
+            "shots_hit": self.stage_shots_hit,
+            "accuracy": accuracy,
+            "headshot_ratio": headshot_pct,
+            "damage_dealt": self.stage_damage_dealt,
+            "damage_taken": self.stage_damage_taken,
+            "max_combo": self.stage_max_combo,
+            "clear_time": elapsed,
+        }
 
     def update_ammo_ui(self):
         """탄약 UI 실시간 동기화 (현재 무기 명칭 및 잔탄 표시)"""
@@ -1797,6 +2232,15 @@ class CombatSystem:
         """프레임별 트레이서, 탄피 물리, 화약 연기, 슬라이드 블로우백, 펌프액션, 반동/재장전, 밥빙, 탄약 습득 갱신"""
         self.is_moving = is_moving
         self.is_sprinting = is_sprinting
+
+        # 풀오토 연사 지원 (AR 및 듀얼 글록: 좌클릭 유지 시 연속 격발)
+        if hasattr(self.base, 'mouseWatcherNode') and self.base.mouseWatcherNode and self.base.mouseWatcherNode.isButtonDown(MouseButton.one()):
+            if self.current_weapon in ("AR", "DUAL_PISTOL") and self.shoot_cooldown <= 0.0 and not self.is_reloading:
+                game_inst = getattr(self.base, 'game', None) or self.base
+                monsters = getattr(game_inst, 'monsters', [])
+                player = getattr(game_inst, 'player', None)
+                hazard_barrels = getattr(game_inst, 'hazard_barrels', None)
+                self.shoot(monsters, player=player, game_state="PLAYING", hazard_barrels=hazard_barrels)
 
         if getattr(self, 'bullet_storm_timer', 0.0) > 0.0:
             self.bullet_storm_timer = max(0.0, self.bullet_storm_timer - dt)
@@ -1917,60 +2361,11 @@ class CombatSystem:
                     tr["life"] = 0.0
                 else:
                     fade_alpha = max(0.0, min(1.0, tr["fade_timer"] / tr["fade_duration"]))
-
-                    # 라인 갱신 (부드럽게 투명해짐)
+                    # 지오메트리 파괴 및 재생성 없이 노드 컬러 스케일만 즉시 감쇠 (드로우콜 및 메모리 스파이크 방지)
                     for key in ("core", "glow", "halo"):
                         node = tr.get(key)
                         if node and not node.isEmpty():
-                            node.removeNode()
-
-                    total_d = tr["total_dist"]
-                    t_len = min(14.0, max(4.0, total_d * 0.85))
-                    trail_tail = tr["start"] + tr["dir"] * max(0.0, total_d - t_len)
-                    trail_head = tr["end"]
-
-                    th_c = tr.get("th_core", 4.5) * fade_alpha
-                    th_g = tr.get("th_glow", 9.5) * fade_alpha
-                    th_h = tr.get("th_halo", 18.0) * fade_alpha
-                    col_c_base = tr.get("c_core", (1.0, 1.0, 0.90, 0.98))
-                    col_g_base = tr.get("c_glow", (1.0, 0.75, 0.15, 0.75))
-                    col_h_base = tr.get("c_halo", (1.0, 0.35, 0.05, 0.35))
-
-                    ls_c = LineSegs("tracer_core")
-                    ls_c.setThickness(th_c)
-                    ls_c.setColor(col_c_base[0], col_c_base[1], col_c_base[2], col_c_base[3] * fade_alpha)
-                    ls_c.moveTo(trail_tail)
-                    ls_c.drawTo(trail_head)
-                    tr["core"] = self.world_root.attachNewNode(ls_c.create())
-                    tr["core"].setLightOff()
-                    tr["core"].setTransparency(TransparencyAttrib.MAlpha)
-                    tr["core"].setDepthWrite(False)
-                    tr["core"].setBin("transparent", 102)
-                    tr["np"] = tr["core"]
-
-                    ls_g = LineSegs("tracer_glow")
-                    ls_g.setThickness(th_g)
-                    ls_g.setColor(col_g_base[0], col_g_base[1], col_g_base[2], col_g_base[3] * fade_alpha)
-                    mid_tail = trail_tail + (trail_head - trail_tail) * 0.15
-                    ls_g.moveTo(mid_tail)
-                    ls_g.drawTo(trail_head)
-                    tr["glow"] = self.world_root.attachNewNode(ls_g.create())
-                    tr["glow"].setLightOff()
-                    tr["glow"].setTransparency(TransparencyAttrib.MAlpha)
-                    tr["glow"].setDepthWrite(False)
-                    tr["glow"].setBin("transparent", 101)
-
-                    ls_h = LineSegs("tracer_halo")
-                    ls_h.setThickness(th_h)
-                    ls_h.setColor(col_h_base[0], col_h_base[1], col_h_base[2], col_h_base[3] * fade_alpha)
-                    mid_tail2 = trail_tail + (trail_head - trail_tail) * 0.35
-                    ls_h.moveTo(mid_tail2)
-                    ls_h.drawTo(trail_head)
-                    tr["halo"] = self.world_root.attachNewNode(ls_h.create())
-                    tr["halo"].setLightOff()
-                    tr["halo"].setTransparency(TransparencyAttrib.MAlpha)
-                    tr["halo"].setDepthWrite(False)
-                    tr["halo"].setBin("transparent", 100)
+                            node.setColorScale(1.0, 1.0, 1.0, fade_alpha)
 
             if tr["life"] <= 0.0:
                 for key in ("core", "glow", "halo", "head_node", "flash", "np"):
@@ -2010,6 +2405,9 @@ class CombatSystem:
                 if hasattr(self, 'dual_right_flash_geom') and not self.dual_right_flash_geom.isEmpty():
                     self.dual_right_flash_geom.hide()
                     self.render.clearLight(self.dual_right_flash_light_np)
+                if hasattr(self, 'ar_muzzle_flash_geom') and not self.ar_muzzle_flash_geom.isEmpty():
+                    self.ar_muzzle_flash_geom.hide()
+                    self.render.clearLight(self.ar_muzzle_light_np)
                 if hasattr(self, 'sg_muzzle_flash_geom') and not self.sg_muzzle_flash_geom.isEmpty():
                     self.sg_muzzle_flash_geom.hide()
                     self.render.clearLight(self.sg_muzzle_light_np)
@@ -2169,6 +2567,35 @@ class CombatSystem:
                     self.dual_right_recoil.setP(-16.0 * tilt)
                     self.dual_right_recoil.setPos(0, -0.06 * tilt, -0.04 * tilt)
 
+            elif self.current_weapon == "AR":
+                # 돌격소총: 탄창 분리(하단 낙하) -> 신규 탄창 삽입 -> 상단 노리쇠/장전손잡이 전진
+                if p < 0.35:
+                    sub_p = p / 0.35
+                    if hasattr(self, 'ar_recoil_node') and not self.ar_recoil_node.isEmpty():
+                        self.ar_recoil_node.setR(-14.0 * math.sin(sub_p * math.pi * 0.5))
+                        self.ar_recoil_node.setP(-12.0 * math.sin(sub_p * math.pi * 0.5))
+                    if hasattr(self, 'ar_mag_node') and not self.ar_mag_node.isEmpty():
+                        drop_z = sub_p * 0.35
+                        self.ar_mag_node.setPos(0, 0.12 - drop_z * 0.20, -0.06 - drop_z)
+                        self.ar_mag_node.setScale(max(0.05, 1.0 - sub_p * 0.8))
+                elif p < 0.78:
+                    sub_p = (p - 0.35) / 0.43
+                    if hasattr(self, 'ar_recoil_node') and not self.ar_recoil_node.isEmpty():
+                        self.ar_recoil_node.setR(-14.0 * (1.0 - sub_p * 0.3))
+                        self.ar_recoil_node.setP(-12.0 * (1.0 - sub_p * 0.3))
+                    if hasattr(self, 'ar_mag_node') and not self.ar_mag_node.isEmpty():
+                        rise_z = (1.0 - min(1.0, sub_p * 1.1)) * 0.32
+                        self.ar_mag_node.setScale(1.0)
+                        self.ar_mag_node.setPos(0, 0.12 - rise_z * 0.20, -0.06 - rise_z)
+                else:
+                    sub_p = (p - 0.78) / 0.22
+                    if hasattr(self, 'ar_mag_node') and not self.ar_mag_node.isEmpty():
+                        self.ar_mag_node.setPos(0, 0.12, -0.06)
+                        self.ar_mag_node.setScale(1.0)
+                    if hasattr(self, 'ar_recoil_node') and not self.ar_recoil_node.isEmpty():
+                        self.ar_recoil_node.setR(-14.0 * 0.7 * (1.0 - sub_p))
+                        self.ar_recoil_node.setP(-12.0 * 0.7 * (1.0 - sub_p))
+
             elif self.current_weapon == "SHOTGUN":
                 # 샷건: 리시버를 살짝 들어 올리고 쉘을 아래에서 밀어 넣음
                 lift = math.sin(p * math.pi)
@@ -2199,6 +2626,13 @@ class CombatSystem:
                     self.dual_right_recoil.setPos(0, 0, 0)
                     self.dual_right_recoil.setP(0)
                     self.dual_right_recoil.setR(0)
+                if hasattr(self, 'ar_recoil_node') and not self.ar_recoil_node.isEmpty():
+                    self.ar_recoil_node.setPos(0, 0, 0)
+                    self.ar_recoil_node.setP(0)
+                    self.ar_recoil_node.setR(0)
+                if hasattr(self, 'ar_mag_node') and not self.ar_mag_node.isEmpty():
+                    self.ar_mag_node.setPos(0, 0.12, -0.06)
+                    self.ar_mag_node.setScale(1.0)
                 if hasattr(self, 'sg_recoil_node') and not self.sg_recoil_node.isEmpty():
                     self.sg_recoil_node.setPos(0, 0, 0)
                     self.sg_recoil_node.setP(0)
@@ -2221,18 +2655,18 @@ class CombatSystem:
         elif self.recoil_timer > 0.0:
             self.recoil_timer -= dt
             if self.current_weapon == "PISTOL":
-                t_norm = max(0.0, self.recoil_timer / 0.10)
-                recoil_dist = 0.05 if not self.is_aiming else 0.024
-                recoil_deg = 12.0 if not self.is_aiming else 5.5
+                t_norm = max(0.0, self.recoil_timer / 0.18)
+                recoil_dist = 0.08 if not self.is_aiming else 0.038
+                recoil_deg = 22.0 if not self.is_aiming else 11.0
                 if hasattr(self, 'recoil_node') and not self.recoil_node.isEmpty():
-                    self.recoil_node.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.4) * t_norm)
+                    self.recoil_node.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.45) * t_norm)
                     self.recoil_node.setP(recoil_deg * t_norm)
                     self.recoil_node.setR(0)
 
             elif self.current_weapon == "DUAL_PISTOL":
-                t_norm = max(0.0, self.recoil_timer / 0.08)
+                t_norm = max(0.0, self.recoil_timer / 0.065)
                 recoil_dist = 0.045 if not self.is_aiming else 0.022
-                recoil_deg = 9.0 if not self.is_aiming else 4.5
+                recoil_deg = 7.5 if not self.is_aiming else 3.8
                 # 직전에 격발된 손에 반동 적용
                 if self.dual_hand_toggle == 0:  # 방금 우측 격발
                     if hasattr(self, 'dual_right_recoil') and not self.dual_right_recoil.isEmpty():
@@ -2244,6 +2678,15 @@ class CombatSystem:
                         self.dual_left_recoil.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.35) * t_norm)
                         self.dual_left_recoil.setP(recoil_deg * t_norm)
                         self.dual_left_recoil.setR(3.0 * t_norm)
+
+            elif self.current_weapon == "AR":
+                t_norm = max(0.0, self.recoil_timer / 0.075)
+                recoil_dist = 0.055 if not self.is_aiming else 0.026
+                recoil_deg = 14.0 if not self.is_aiming else 5.8
+                if hasattr(self, 'ar_recoil_node') and not self.ar_recoil_node.isEmpty():
+                    self.ar_recoil_node.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.30) * t_norm)
+                    self.ar_recoil_node.setP(recoil_deg * t_norm)
+                    self.ar_recoil_node.setR(-2.0 * t_norm)
 
             elif self.current_weapon == "SHOTGUN":
                 t_norm = max(0.0, self.recoil_timer / 0.18)
@@ -2266,6 +2709,10 @@ class CombatSystem:
                 self.dual_right_recoil.setPos(0, 0, 0)
                 self.dual_right_recoil.setP(0)
                 self.dual_right_recoil.setR(0)
+            if hasattr(self, 'ar_recoil_node') and not self.ar_recoil_node.isEmpty():
+                self.ar_recoil_node.setPos(0, 0, 0)
+                self.ar_recoil_node.setP(0)
+                self.ar_recoil_node.setR(0)
             if hasattr(self, 'sg_recoil_node') and not self.sg_recoil_node.isEmpty():
                 self.sg_recoil_node.setPos(0, 0, 0)
                 self.sg_recoil_node.setP(0)
@@ -2302,7 +2749,7 @@ class CombatSystem:
         else:
             self.ads_alpha = max(0.0, self.ads_alpha - ads_speed * dt)
 
-        # (1) 9mm 권총 ADS
+        # (1) 데저트 이글 ADS
         if hasattr(self, 'vm_pistol') and self.vm_pistol and not self.vm_pistol.isEmpty():
             cur_pos = self.ads_hip_pos * (1.0 - self.ads_alpha) + self.ads_aim_pos * self.ads_alpha
             cur_hpr = self.ads_hip_hpr * (1.0 - self.ads_alpha) + self.ads_aim_hpr * self.ads_alpha
@@ -2322,7 +2769,14 @@ class CombatSystem:
             self.vm_dual_right.setPos(cur_pos_r)
             self.vm_dual_right.setHpr(cur_hpr_r)
 
-        # (3) 12게이지 샷건 ADS (총열 상단 리브와 빨간 광섬유 가늠쇠 정렬)
+        # (3) 5.56mm AR ADS (홀로그래픽 도트 사이트와 중앙 시안색 레티클 정렬)
+        if hasattr(self, 'vm_ar') and self.vm_ar and not self.vm_ar.isEmpty():
+            cur_pos_ar = self.ads_hip_pos_ar * (1.0 - self.ads_alpha) + self.ads_aim_pos_ar * self.ads_alpha
+            cur_hpr_ar = Vec3(1.2, 0.6, -0.6) * (1.0 - self.ads_alpha)
+            self.vm_ar.setPos(cur_pos_ar)
+            self.vm_ar.setHpr(cur_hpr_ar)
+
+        # (4) 12게이지 샷건 ADS (총열 상단 리브와 빨간 광섬유 가늠쇠 정렬)
         if hasattr(self, 'vm_shotgun') and self.vm_shotgun and not self.vm_shotgun.isEmpty():
             cur_pos_sg = self.ads_hip_pos_sg * (1.0 - self.ads_alpha) + self.ads_aim_pos_sg * self.ads_alpha
             cur_hpr_sg = Vec3(1.0, 0.5, -0.5) * (1.0 - self.ads_alpha)

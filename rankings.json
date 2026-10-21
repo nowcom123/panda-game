@@ -2203,5 +2203,115 @@
     "ammo_left": 2,
     "reserve_ammo": 110,
     "ammo_used": 10
+  },
+  {
+    "timestamp": "2026-10-21 15:14:27",
+    "stage": 1,
+    "result": "사망 (지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 19.6,
+    "time_left": 280.4,
+    "ammo_left": 5,
+    "reserve_ammo": 36,
+    "ammo_used": 7
+  },
+  {
+    "timestamp": "2026-10-21 15:14:40",
+    "stage": 1,
+    "result": "사망 (매혹의 잿더미 마녀)",
+    "success": false,
+    "time_elapsed": 10.2,
+    "time_left": 289.8,
+    "ammo_left": 24,
+    "reserve_ammo": 48,
+    "ammo_used": -12
+  },
+  {
+    "timestamp": "2026-10-21 15:15:02",
+    "stage": 1,
+    "result": "사망 (매혹의 잿더미 마녀)",
+    "success": false,
+    "time_elapsed": 15.7,
+    "time_left": 284.3,
+    "ammo_left": 6,
+    "reserve_ammo": 48,
+    "ammo_used": 6
+  },
+  {
+    "timestamp": "2026-10-21 15:15:16",
+    "stage": 1,
+    "result": "사망 ([지옥의 마견령] 지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 12.1,
+    "time_left": 287.9,
+    "ammo_left": 7,
+    "reserve_ammo": 24,
+    "ammo_used": 5
+  },
+  {
+    "timestamp": "2026-10-21 15:15:25",
+    "stage": 1,
+    "result": "사망 (매혹의 잿더미 마녀)",
+    "success": false,
+    "time_elapsed": 7.4,
+    "time_left": 292.6,
+    "ammo_left": 4,
+    "reserve_ammo": 24,
+    "ammo_used": 8
+  },
+  {
+    "timestamp": "2026-10-21 15:15:41",
+    "stage": 1,
+    "result": "사망 ([흑골 골렘] 장신 해골 괴물)",
+    "success": false,
+    "time_elapsed": 13.2,
+    "time_left": 286.8,
+    "ammo_left": 2,
+    "reserve_ammo": 24,
+    "ammo_used": 10
+  },
+  {
+    "timestamp": "2026-10-21 15:16:00",
+    "stage": 1,
+    "result": "사망 ([심연의 대마녀] 매혹의 잿더미 마녀)",
+    "success": false,
+    "time_elapsed": 10.3,
+    "time_left": 289.7,
+    "ammo_left": 8,
+    "reserve_ammo": 43,
+    "ammo_used": 4
+  },
+  {
+    "timestamp": "2026-10-21 15:16:19",
+    "stage": 1,
+    "result": "사망 (장신 해골 괴물)",
+    "success": false,
+    "time_elapsed": 12.6,
+    "time_left": 287.4,
+    "ammo_left": 6,
+    "reserve_ammo": 24,
+    "ammo_used": 6
+  },
+  {
+    "timestamp": "2026-10-21 15:52:48",
+    "stage": 1,
+    "result": "사망 (끝없는 고통의 켈베스)",
+    "success": false,
+    "time_elapsed": 11.6,
+    "time_left": 288.4,
+    "ammo_left": 10,
+    "reserve_ammo": 36,
+    "ammo_used": 2
+  },
+  {
+    "timestamp": "2026-10-21 16:42:08",
+    "stage": 1,
+    "result": "사망 (지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 7.0,
+    "time_left": 293.0,
+    "ammo_left": 20,
+    "reserve_ammo": 90,
+    "ammo_used": -8
   }
 ]

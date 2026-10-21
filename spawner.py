@@ -28,22 +28,22 @@ def apply_elite_mutation(monster, game):
     monster.attack_damage = int(getattr(monster, 'attack_damage', 30) * 1.25)
 
     if isinstance(monster, AbominableMudOrc):
-        monster.name = f"[핏빛 사령 거수] {monster.name}"
+        monster.name = "되살아난 거산 스룬달"
         aura_color = (2.8, 0.4, 0.4, 1.0)
     elif isinstance(monster, TallSkeletonMonster):
-        monster.name = f"[흑골 골렘] {monster.name}"
+        monster.name = "휩쓰는 공포 스컬"
         aura_color = (0.4, 1.8, 2.8, 1.0)
     elif isinstance(monster, AlluringAshWitch):
-        monster.name = f"[심연의 대마녀] {monster.name}"
+        monster.name = "염마 스칼렛"
         aura_color = (2.5, 0.4, 2.8, 1.0)
     elif isinstance(monster, LongBlackSerpent):
-        monster.name = f"[우로보로스] {monster.name}"
+        monster.name = "백골룡 우르보로스"
         aura_color = (0.4, 2.8, 0.8, 1.0)
     elif isinstance(monster, SkeletalDobermanHellhound):
-        monster.name = f"[지옥의 마견령] {monster.name}"
+        monster.name = "끝없는 고통의 켈베스"
         aura_color = (3.2, 0.8, 0.2, 1.0)
     else:
-        monster.name = f"[정예 변이체] {monster.name}"
+        monster.name = f"[정예] {monster.name}"
         aura_color = (2.8, 1.8, 0.3, 1.0)
 
     elite_pl = PointLight(f"elite_light_{id(monster)}")

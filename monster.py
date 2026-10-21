@@ -1415,7 +1415,7 @@ class AbominableMudOrc(ElementalMonsterMixin):
         self.slam_has_impacted = False
         self.is_corpse = False
 
-        self.name = "혐오스런 진흙 오크"
+        self.name = "뼈박살 오크"
         self.max_hp = 280
         self.hp = self.max_hp
         self.col_radius = 0.45

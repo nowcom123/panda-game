@@ -409,7 +409,7 @@ class MonsterDirector:
                 best_nx, best_ny = resolve_collision(g.chunks, mx, my, ndx * step_dist, ndy * step_dist, radius=col_radius, curr_z=m.pos.z)
                 actual_move = math.hypot(best_nx - mx, best_ny - my)
 
-                # 2차 시도: 벽체/문틀/기둥 모서리 저지 시 광대역 접선 슬라이딩 탐색 (Broad Tangential Sliding)
+                # 2차 시도: 벽체/문틀/기둥 모서리 저지 시 접선 슬라이딩 탐색 (최적화 6방향 및 조기 탈출)
                 if actual_move < 0.35 * step_dist:
                     base_angle = math.atan2(ndy, ndx)
                     best_progress = actual_move
@@ -419,7 +419,8 @@ class MonsterDirector:
                         (ndx * step_dist, 0.0),
                         (0.0, ndy * step_dist),
                     ]
-                    for ang_deg in (30, -30, 60, -60, 90, -90, 120, -120, 145, -145):
+                    # 고효율 6방향 스캔각: ±35도, ±75도, ±115도
+                    for ang_deg in (35, -35, 75, -75, 115, -115):
                         rad = base_angle + math.radians(ang_deg)
                         probes.append((math.cos(rad) * step_dist, math.sin(rad) * step_dist))
 
@@ -433,6 +434,9 @@ class MonsterDirector:
                             if progress > best_progress:
                                 best_progress = progress
                                 best_nx, best_ny = cand_nx, cand_ny
+                                # 완전히 뚫린 궤적(85% 이상 이동 및 목표 접근) 발견 시 즉각 조기 탈출 (CPU 절감)
+                                if c_move >= 0.85 * step_dist and dist_diff >= 0.0:
+                                    break
 
                 # 3차 시도: 미세 끼임 발생 시 반발 벡터 기반 능동 탈출 (Repulsion Unstuck Recovery)
                 final_move = math.hypot(best_nx - mx, best_ny - my)

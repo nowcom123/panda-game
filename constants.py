@@ -7,21 +7,29 @@ loadPrcFileData('', 'fullscreen false')
 loadPrcFileData('', 'undecorated false')
 loadPrcFileData('', 'window-title Liminal Backrooms FPS')
 
-# 60 FPS 프레임 페이싱 고정 (GPU 큐 과부하, 지터링 및 드라이버 스터터링 완벽 차단)
+# 고성능 하드웨어 가속 및 프레임 페이싱 (144 FPS 지원, VSync 스터터링 제거)
 loadPrcFileData('', 'clock-mode limited')
-loadPrcFileData('', 'clock-frame-rate 60')
-loadPrcFileData('', 'sync-video true')
+loadPrcFileData('', 'clock-frame-rate 144')
+loadPrcFileData('', 'sync-video false')
 
-# 텍스처 및 GPU 파이프라인 비동기 I/O
+# CPU 멀티코어 렌더링 파이프라인 (Cull/Draw 분리 스레딩)
+loadPrcFileData('', 'threading-model Cull/Draw')
+
+# 텍스처, 지오메트리 캐시 및 GPU 파이프라인 비동기 I/O
 loadPrcFileData('', 'asynchronous-texture-loading true') # 텍스처 백그라운드 I/O 비동기 로딩
 loadPrcFileData('', 'preload-textures true')            # VRAM 사전 업로드로 렌더링 중 스터터링 제거
-loadPrcFileData('', 'gl-finish false')                  # GPU 파이프라인 지연/블로킹 방지
+loadPrcFileData('', 'gl-finish false')                  # GPU 파이프라인 동기 블로킹 방지
+loadPrcFileData('', 'gl-force-fbo-cull true')
 loadPrcFileData('', 'garbage-collect-states true')      # 렌더 스테이트 캐시 자동 메모리 회수
-loadPrcFileData('', 'gl-check-errors false')             # 드로우콜마다 glGetError 폴링 오버헤드 제거
+loadPrcFileData('', 'gl-check-errors false')             # 드로우콜마다 glGetError 폴링 오버헤드 0%화
 loadPrcFileData('', 'textures-auto-power-2 true')        # GPU 최적 텍스처 정렬
 loadPrcFileData('', 'display-lists 0')                   # 레거시 디스플레이 리스트 대신 VBO 하드웨어 가속
 loadPrcFileData('', 'yield-timeslice true')              # OS 스케줄러 스레드 기아 현상 방지
 loadPrcFileData('', 'bounds-type box')                   # 바운딩 볼륨 O(1) 초고속 AABB 연산
+loadPrcFileData('', 'geom-cache-size 4096')              # 버텍스 변환 캐시 대폭 확장 (500 -> 4096)
+loadPrcFileData('', 'transform-cache true')              # 노드 트랜스폼 캐시 활성화
+loadPrcFileData('', 'state-cache true')                  # 렌더 스테이트 캐시 활성화
+loadPrcFileData('', 'hardware-animated-vertices true')  # GPU 하드웨어 정점 변환 가속
 
 # --- 시스템 상수 설정 ---
 CELL_SIZE = 6.0         # 그리드 셀 크기 (6.0m x 6.0m: 광폭 리미널 복도 및 대형 홀)

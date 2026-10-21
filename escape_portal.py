@@ -177,14 +177,17 @@ class EscapePortalManager:
                 if hasattr(self.game, 'audio_mgr') and self.game.audio_mgr:
                     self.game.audio_mgr.play_door_unlock()
                 self.game.door_hold_timer = 5.0
-                # 던전 크롤러: 스탯 분배 및 상점 모달 팝업 & 다음 스테이지 준비
-                self.game.game_state = "SHOP"
-                self.game.player.lock_mouse(False)
-                self.game.combat.stop_aim()
-                self.game.ui_mgr.show_stage_clear_shop(
-                    self.game.current_stage, self.game.player, self.game.combat,
-                    self.game.on_shop_closed, on_victory_callback=self.game.trigger_victory
-                )
+                # 던전 크롤러: 스테이지 클리어 결과 보고서(AAR) 및 상점 모달 팝업
+                if hasattr(self.game, 'trigger_stage_clear'):
+                    self.game.trigger_stage_clear()
+                else:
+                    self.game.game_state = "SHOP"
+                    self.game.player.lock_mouse(False)
+                    self.game.combat.stop_aim()
+                    self.game.ui_mgr.show_stage_clear_shop(
+                        self.game.current_stage, self.game.player, self.game.combat,
+                        self.game.on_shop_closed, on_victory_callback=self.game.trigger_victory
+                    )
                 return True
             else:
                 msg = f"[ 비상문 개방 중: {progress_sec:.1f}s / 5.0s  [{bar_str}] ]\n[ 경고: 문이 열릴 때까지 쏟아지는 괴물의 접근을 저지하세요! ]"

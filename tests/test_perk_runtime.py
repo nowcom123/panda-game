@@ -75,7 +75,8 @@ class PerkRuntimeTests(unittest.TestCase):
         combat, player = self.setup_combat('headhunter', 2)
         target = Target(headshot=True)
         self.shoot(combat, player, [target])
-        self.assertAlmostEqual(target.hits[0], 62 * 3.2 * 1.9)
+        expected_dmg = WEAPON_CONFIGS['PISTOL']['damage'] * WEAPON_CONFIGS['PISTOL']['headshot_mult'] * 1.9
+        self.assertAlmostEqual(target.hits[0], expected_dmg)
 
     def test_level_two_tesla_hits_three_secondary_targets(self):
         combat, player = self.setup_combat('tesla_arc', 2)
@@ -96,14 +97,14 @@ class PerkRuntimeTests(unittest.TestCase):
 
     def test_level_two_reload_duration_is_used(self):
         combat, player = self.setup_combat('speed_demon', 2)
-        self.assertAlmostEqual(combat.reload_duration, 1.25 * .65**2)
+        self.assertAlmostEqual(combat.reload_duration, WEAPON_CONFIGS['PISTOL']['reload_time'] * .65**2)
 
     def test_level_two_adrenaline_damage_and_time(self):
         combat, player = self.setup_combat('adrenaline_slide', 2)
         player.is_sliding = True
         target = Target()
         self.shoot(combat, player, [target])
-        self.assertAlmostEqual(target.hits[0], 62 * 1.85 * 2)
+        self.assertAlmostEqual(target.hits[0], WEAPON_CONFIGS['PISTOL']['damage'] * 1.85 * 2)
         combat.base.trigger_bullet_time.assert_called_once_with(2.2)
 
     def test_level_two_kill_effects(self):
@@ -129,7 +130,7 @@ class PerkRuntimeTests(unittest.TestCase):
         combat, player = self.setup_combat('ricochet', 2)
         target = Target(x=1, y=6)
         self.shoot(combat, player, [target], wall=5)
-        self.assertAlmostEqual(target.hits[0], 62 * .85)
+        self.assertAlmostEqual(target.hits[0], WEAPON_CONFIGS['PISTOL']['damage'] * .85)
 
     def test_level_two_cluster_adds_five_stronger_sub_blasts(self):
         combat, player = self.setup_combat('cluster_grenade', 2)

@@ -92,6 +92,7 @@ class PlayerController:
         self.stamina = self.max_stamina
         self.is_sprinting = False
         self.stamina_exhausted = False
+        self.stage_damage_taken = 0.0
 
         # 던전 크롤러 RPG 스탯
         self.level = 1
@@ -207,14 +208,16 @@ class PlayerController:
             for wp_evt in ["wheel_up"]:
                 self.base.accept(wp_evt, on_weapon_prev)
 
-        # Z, X, C 직접 무기 선택 단축키 ([Z] 9mm 권총, [X] 아킴보 쌍권총, [C] 12게이지 샷건)
+        # Z, X, C, V 직접 무기 선택 단축키 ([Z] .50 매그넘 데저트 이글, [X] 9mm 듀얼 글록, [C] 5.56mm 전술 돌격소총 AR, [V] 12게이지 펌프 샷건)
         if on_weapon_select:
             for z_evt in ["z", "Z", "shift-z", "shift-Z"]:
                 self.base.accept(z_evt, on_weapon_select, ["PISTOL"])
             for x_evt in ["x", "X", "shift-x", "shift-X"]:
                 self.base.accept(x_evt, on_weapon_select, ["DUAL_PISTOL"])
             for c_evt in ["c", "C", "shift-c", "shift-C"]:
-                self.base.accept(c_evt, on_weapon_select, ["SHOTGUN"])
+                self.base.accept(c_evt, on_weapon_select, ["AR"])
+            for v_evt in ["v", "V", "shift-v", "shift-V"]:
+                self.base.accept(v_evt, on_weapon_select, ["SHOTGUN"])
 
         # TAB / I 키 전술 인벤토리 열기/닫기 토글
         if on_inventory:
@@ -464,6 +467,7 @@ class PlayerController:
             amount *= get_player_perk_stats(self, "titan_armor")['damage_mult']
 
         self.hp = max(0.0, self.hp - amount)
+        self.stage_damage_taken = getattr(self, 'stage_damage_taken', 0.0) + amount
         self.invincible_timer = 0.55  # 0.55초 무적 쿨다운
         self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, pending_perks=self.pending_perk_picks)
 

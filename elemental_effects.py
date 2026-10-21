@@ -343,7 +343,19 @@ class MonsterElementalVisuals:
             self._recalc_all_lightning_arcs()
 
     def _find_nearby_monsters(self, max_dist=7.5):
-        """현재 몬스터 기준 주변에 생존해 있는 다른 몬스터 목록 탐색 (거리순 정렬)"""
+        """현재 몬스터 기준 주변에 생존해 있는 다른 몬스터 목록 탐색 (100ms 캐싱 및 AABB 선별로 CPU 부하 0%화)"""
+        now = None
+        try:
+            from direct.showbase.ShowBaseGlobal import globalClock
+            now = globalClock.getFrameTime()
+        except Exception:
+            pass
+
+        if now is not None:
+            last_t = getattr(self, '_nearby_cache_time', -1.0)
+            if now - last_t < 0.10 and hasattr(self, '_nearby_cache'):
+                return self._nearby_cache
+
         nearby = []
         try:
             import builtins
@@ -366,12 +378,20 @@ class MonsterElementalVisuals:
                 m_pos = getattr(m, 'pos', None)
                 if m_pos is None:
                     continue
-                dist = math.hypot(m_pos.x - my_pos.x, m_pos.y - my_pos.y)
+                dx = m_pos.x - my_pos.x
+                dy = m_pos.y - my_pos.y
+                if abs(dx) > max_dist or abs(dy) > max_dist:
+                    continue
+                dist = math.hypot(dx, dy)
                 if dist <= max_dist:
                     nearby.append((dist, m))
 
             nearby.sort(key=lambda item: item[0])
-            return [item[1] for item in nearby]
+            res = [item[1] for item in nearby]
+            self._nearby_cache = res
+            if now is not None:
+                self._nearby_cache_time = now
+            return res
         except Exception:
             return nearby
 

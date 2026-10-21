@@ -47,14 +47,16 @@ class PerkSelectionTests(unittest.TestCase):
             is_reloading=False,
             reload_timer=0.0
         )
+        from combat_system import WEAPON_CONFIGS
         # Check property getter on class
+        base_dur = WEAPON_CONFIGS["PISTOL"]["reload_time"]
         duration = CombatSystem.reload_duration.fget(combat)
-        self.assertAlmostEqual(duration, 1.25)
+        self.assertAlmostEqual(duration, base_dur)
 
         # After speed_demon perk
         self.player.perks.add("speed_demon")
         duration_with_perk = CombatSystem.reload_duration.fget(combat)
-        self.assertAlmostEqual(duration_with_perk, 1.25 * 0.65)
+        self.assertAlmostEqual(duration_with_perk, base_dur * 0.65)
 
 
 if __name__ == '__main__':

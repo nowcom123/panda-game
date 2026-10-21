@@ -14,9 +14,203 @@ import time
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.OnscreenImage import OnscreenImage
 from direct.gui.DirectGui import DirectButton, DirectFrame, DGG
-from panda3d.core import TextNode, TransparencyAttrib, LineSegs
+from panda3d.core import (
+    TextNode, TransparencyAttrib, LineSegs, Vec3, NodePath,
+    GeomVertexFormat, GeomVertexData, GeomVertexWriter, GeomTriangles, Geom, GeomNode, LColor
+)
 from constants import CURSED_RELICS
 from perks import PERK_CATALOG, draw_random_perks, RARITY_COLORS, RARITY_NAMES, get_perk_level, describe_perk
+
+
+class FloatingDamageItem:
+    """3D 공간상에 투영되는 고가독성 다이내믹 플로팅 대미지 폰트 노드 (오브젝트 풀링)"""
+    def __init__(self, parent, font=None):
+        self.node = parent.attachNewNode("floating_dmg")
+        self.node.setBillboardPointEye()
+        self.node.setBin("fixed", 125)
+        self.node.setDepthWrite(False)
+        self.node.setDepthTest(False)
+        self.node.setLightOff()
+
+        self.text_node = TextNode("dmg_txt")
+        if font:
+            self.text_node.setFont(font)
+        self.text_node.setAlign(TextNode.ACenter)
+        self.text_node.setShadow(0.045, 0.045)
+        self.text_node.setShadowColor(0.0, 0.0, 0.0, 0.95)
+        self.text_np = self.node.attachNewNode(self.text_node)
+
+        self.pos = Vec3(0, 0, 0)
+        self.vel_z = 2.0
+        self.timer = 0.0
+        self.max_timer = 0.85
+        self.base_scale = 0.40
+        self.color = (1.0, 1.0, 1.0)
+        self.is_active = False
+        self.node.hide()
+
+    def activate(self, damage, world_pos, is_crit=False, is_headshot=False, damage_type=None):
+        self.is_active = True
+        self.max_timer = 0.85
+        self.timer = self.max_timer
+        self.vel_z = random.uniform(2.0, 2.7)
+        jx = random.uniform(-0.16, 0.16)
+        jy = random.uniform(-0.16, 0.16)
+
+        wx = getattr(world_pos, 'x', world_pos[0])
+        wy = getattr(world_pos, 'y', world_pos[1])
+        wz = getattr(world_pos, 'z', world_pos[2] if len(world_pos) > 2 else 1.0)
+        self.pos = Vec3(wx + jx, wy + jy, wz + 0.28)
+
+        val = max(1, int(round(damage)))
+        if damage_type == 'fire':
+            self.text_node.setText(f"[FIRE] {val}")
+            self.color = (1.0, 0.45, 0.12)
+            self.base_scale = 0.38
+        elif damage_type == 'electric':
+            self.text_node.setText(f"[SHOCK] {val}")
+            self.color = (0.85, 0.45, 1.0)
+            self.base_scale = 0.42
+        elif damage_type == 'freeze':
+            self.text_node.setText(f"[FROST] {val}")
+            self.color = (0.35, 0.90, 1.0)
+            self.base_scale = 0.38
+        elif is_headshot:
+            self.text_node.setText(f"HEADSHOT {val}!")
+            self.color = (1.0, 0.85, 0.15)
+            self.base_scale = 0.54
+        elif is_crit:
+            self.text_node.setText(f"CRIT {val}!")
+            self.color = (1.0, 0.30, 0.18)
+            self.base_scale = 0.48
+        else:
+            self.text_node.setText(f"{val}")
+            self.color = (1.0, 0.98, 0.78)
+            self.base_scale = 0.36
+
+        self.text_node.setTextColor(self.color[0], self.color[1], self.color[2], 1.0)
+        self.node.setPos(self.pos)
+        self.node.setScale(self.base_scale * 1.35)
+        self.node.show()
+
+    def update(self, dt):
+        if not self.is_active:
+            return False
+        self.timer -= dt
+        if self.timer <= 0.0:
+            self.is_active = False
+            self.node.hide()
+            return False
+
+        self.pos.z += self.vel_z * dt
+        self.vel_z = max(0.3, self.vel_z - 3.2 * dt)
+        self.node.setPos(self.pos)
+
+        progress = 1.0 - (self.timer / self.max_timer)
+        if progress < 0.12:
+            scale_factor = 1.35 - 0.35 * (progress / 0.12)
+        else:
+            scale_factor = 1.0
+        self.node.setScale(self.base_scale * scale_factor)
+
+        if self.timer < 0.28:
+            alpha = max(0.0, self.timer / 0.28)
+        else:
+            alpha = 1.0
+        self.text_node.setTextColor(self.color[0], self.color[1], self.color[2], alpha)
+        return True
+
+
+class FloatingDamageManager:
+    """플로팅 대미지 오브젝트 풀 매니저 (GC 부하 0%)"""
+    def __init__(self, render_root, pool_size=32, font=None):
+        if hasattr(render_root, 'attachNewNode'):
+            self.root = render_root.attachNewNode("floating_damage_root")
+            self.pool = [FloatingDamageItem(self.root, font=font) for _ in range(pool_size)]
+        else:
+            self.root = None
+            self.pool = []
+        self.cursor = 0
+
+    def spawn(self, damage, pos, is_crit=False, is_headshot=False, damage_type=None):
+        if not self.pool or damage <= 0.0:
+            return
+        item = self.pool[self.cursor]
+        self.cursor = (self.cursor + 1) % len(self.pool)
+        item.activate(damage, pos, is_crit=is_crit, is_headshot=is_headshot, damage_type=damage_type)
+
+    def update(self, dt):
+        for item in self.pool:
+            if item.is_active:
+                item.update(dt)
+
+    def clear(self):
+        for item in self.pool:
+            item.is_active = False
+            if hasattr(item, 'node') and item.node:
+                item.node.hide()
+
+
+def create_circle_fan_geom(radius, segments=36, color=(0.02, 0.05, 0.08, 0.78)):
+    """원형 다크 글래스모피즘 메쉬 폴리곤 팬 생성"""
+    format = GeomVertexFormat.getV3c4()
+    vdata = GeomVertexData('circle_fan', format, Geom.UHStatic)
+    vertex = GeomVertexWriter(vdata, 'vertex')
+    col = GeomVertexWriter(vdata, 'color')
+    vertex.addData3(0, 0, 0)
+    col.addData4(*color)
+    for i in range(segments + 1):
+        ang = 2.0 * math.pi * (i / segments)
+        vertex.addData3(math.cos(ang) * radius, 0, math.sin(ang) * radius)
+        col.addData4(*color)
+    triangles = GeomTriangles(Geom.UHStatic)
+    for i in range(1, segments + 1):
+        triangles.addVertex(0)
+        triangles.addVertex(i)
+        triangles.addVertex(i + 1)
+    geom = Geom(vdata)
+    geom.addPrimitive(triangles)
+    gnode = GeomNode('circle_fan_node')
+    gnode.addGeom(geom)
+    return gnode
+
+
+def create_radar_rings_geom(radius):
+    """전술 레이더 동심원 외곽 링 및 십자선 벡터 라인 생성"""
+    ls = LineSegs("radar_rings")
+    ls.setThickness(2.2)
+    # Outer ring
+    ls.setColor(0.18, 0.88, 0.98, 0.85)
+    segments = 48
+    for i in range(segments + 1):
+        ang = 2.0 * math.pi * (i / segments)
+        x = math.cos(ang) * radius
+        z = math.sin(ang) * radius
+        if i == 0:
+            ls.moveTo(x, 0, z)
+        else:
+            ls.drawTo(x, 0, z)
+
+    # 15m middle ring
+    mid_r = radius * 0.45
+    ls.setColor(0.18, 0.88, 0.98, 0.35)
+    ls.setThickness(1.5)
+    for i in range(segments + 1):
+        ang = 2.0 * math.pi * (i / segments)
+        x = math.cos(ang) * mid_r
+        z = math.sin(ang) * mid_r
+        if i == 0:
+            ls.moveTo(x, 0, z)
+        else:
+            ls.drawTo(x, 0, z)
+
+    # Crosshair axes
+    ls.setColor(0.18, 0.88, 0.98, 0.30)
+    ls.moveTo(-radius * 0.95, 0, 0)
+    ls.drawTo(radius * 0.95, 0, 0)
+    ls.moveTo(0, 0, -radius * 0.95)
+    ls.drawTo(0, 0, radius * 0.95)
+    return ls.create()
 
 
 class TacticalCrosshair:
@@ -345,8 +539,15 @@ class UIManager:
         self.on_shop_confirm = None
         self.on_escape_victory = None
 
+        # 플로팅 대미지 오브젝트 풀 매니저 초기화
+        render_root = getattr(self.base, 'render', None)
+        self.floating_damage_mgr = FloatingDamageManager(render_root, font=self.korean_font) if render_root else None
+
         # UI 요소 빌드
         self._setup_hud()
+        self._setup_tactical_radar()
+        self._setup_pause_ui()
+        self._setup_after_action_report_ui()
         self._setup_end_game_ui()
         self._setup_intro_ui()
         self._setup_rank_ui()
@@ -423,53 +624,28 @@ class UIManager:
         self.damage_dir_root.setBin("fixed", 24)
         self.damage_indicators = []
 
-        # 4. 상단 목표/나침반 패널 (1920x1080 와이드 상단 중앙 배치)
-        self.panel_hud_top = OnscreenImage(
-            image="assets/ui/panel_hud_top.png",
-            pos=(0, 0, 0.91),
-            scale=(0.66, 1, 0.075),
-            parent=self.base.aspect2d
-        )
-        self.panel_hud_top.setTransparency(TransparencyAttrib.MAlpha)
-        self.panel_hud_top.setBin("fixed", 4)
-
-        self.icon_radar = OnscreenImage(
-            image="assets/ui/icon_radar.png",
-            pos=(-0.56, 0, 0.91),
-            scale=0.038,
-            parent=self.base.aspect2d
-        )
-        self.icon_radar.setTransparency(TransparencyAttrib.MAlpha)
-        self.icon_radar.setBin("fixed", 5)
-
-        self.hud_text = OnscreenText(
-            text="[ 비상 탈출구 신호 탐색 중... ]",
-            pos=(-0.50, 0.898),
-            scale=0.034,
-            fg=(0.40, 0.92, 1.0, 1.0),
-            shadow=(0, 0, 0, 1.0),
-            align=TextNode.ALeft,
-            mayChange=True,
-            **self.font_kw
-        )
+        # 4. 상단 미션 생존 타이머 위젯 (중앙 상단 길잡이 삭제 및 타이머 중앙 정렬)
+        self.panel_hud_top = None
+        self.icon_radar = None
+        self.hud_text = None
 
         self.timer_text = OnscreenText(
             text="[ 05:00 ]",
-            pos=(0.56, 0.895),
+            pos=(0, 0.925),
             scale=0.042,
             fg=(0.25, 0.95, 0.45, 1.0),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ARight,
+            align=TextNode.ACenter,
             mayChange=True,
             **self.font_kw
         )
 
-        # 5. 좌상단 상태바 (HP, 스테미나, EXP, 유물) - 고가독성 스케일 & 패딩
+        # 5. 우하단 플레이어 상태 HUD (HP, 스테미나, EXP, 유물, 퍽 배지) - 고가독성 스케일 & 통일 정렬
         # 5-1. 체력바
         self.icon_hp = OnscreenImage(
             image="assets/ui/icon_health.png",
-            pos=(-1.68, 0, 0.88),
-            scale=0.038,
+            pos=(1.05, 0, -0.340),
+            scale=0.034,
             parent=self.base.aspect2d
         )
         self.icon_hp.setTransparency(TransparencyAttrib.MAlpha)
@@ -477,8 +653,8 @@ class UIManager:
 
         self.bar_frame_hp = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(-1.34, 0, 0.88),
-            scale=(0.30, 1, 0.028),
+            pos=(1.38, 0, -0.340),
+            scale=(0.28, 1, 0.025),
             parent=self.base.aspect2d
         )
         self.bar_frame_hp.setTransparency(TransparencyAttrib.MAlpha)
@@ -486,8 +662,8 @@ class UIManager:
 
         self.bar_fill_hp = OnscreenImage(
             image="assets/ui/bar_hp_fill.png",
-            pos=(-1.34, 0, 0.88),
-            scale=(0.29, 1, 0.022),
+            pos=(1.38, 0, -0.340),
+            scale=(0.27, 1, 0.019),
             parent=self.base.aspect2d
         )
         self.bar_fill_hp.setTransparency(TransparencyAttrib.MAlpha)
@@ -495,11 +671,11 @@ class UIManager:
 
         self.hp_text = OnscreenText(
             text="HP  100 / 100",
-            pos=(-0.98, 0.866),
-            scale=0.032,
+            pos=(1.66, -0.310),
+            scale=0.030,
             fg=(0.25, 1.0, 0.45, 1.0),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ALeft,
+            align=TextNode.ARight,
             mayChange=True,
             **self.font_kw
         )
@@ -507,8 +683,8 @@ class UIManager:
         # 5-2. 스테미나바
         self.icon_stamina = OnscreenImage(
             image="assets/ui/icon_stamina.png",
-            pos=(-1.68, 0, 0.80),
-            scale=0.038,
+            pos=(1.05, 0, -0.415),
+            scale=0.034,
             parent=self.base.aspect2d
         )
         self.icon_stamina.setTransparency(TransparencyAttrib.MAlpha)
@@ -516,8 +692,8 @@ class UIManager:
 
         self.bar_frame_stamina = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(-1.34, 0, 0.80),
-            scale=(0.30, 1, 0.028),
+            pos=(1.38, 0, -0.415),
+            scale=(0.28, 1, 0.025),
             parent=self.base.aspect2d
         )
         self.bar_frame_stamina.setTransparency(TransparencyAttrib.MAlpha)
@@ -525,8 +701,8 @@ class UIManager:
 
         self.bar_fill_stamina = OnscreenImage(
             image="assets/ui/bar_stamina_fill.png",
-            pos=(-1.34, 0, 0.80),
-            scale=(0.29, 1, 0.022),
+            pos=(1.38, 0, -0.415),
+            scale=(0.27, 1, 0.019),
             parent=self.base.aspect2d
         )
         self.bar_fill_stamina.setTransparency(TransparencyAttrib.MAlpha)
@@ -534,11 +710,11 @@ class UIManager:
 
         self.stamina_text = OnscreenText(
             text="STM  100%",
-            pos=(-0.98, 0.786),
-            scale=0.032,
+            pos=(1.66, -0.385),
+            scale=0.030,
             fg=(0.35, 0.95, 0.5, 0.95),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ALeft,
+            align=TextNode.ARight,
             mayChange=True,
             **self.font_kw
         )
@@ -546,8 +722,8 @@ class UIManager:
         # 5-3. 경험치바
         self.icon_exp = OnscreenImage(
             image="assets/ui/icon_exp.png",
-            pos=(-1.68, 0, 0.72),
-            scale=0.038,
+            pos=(1.05, 0, -0.490),
+            scale=0.034,
             parent=self.base.aspect2d
         )
         self.icon_exp.setTransparency(TransparencyAttrib.MAlpha)
@@ -555,8 +731,8 @@ class UIManager:
 
         self.bar_frame_exp = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(-1.34, 0, 0.72),
-            scale=(0.30, 1, 0.028),
+            pos=(1.38, 0, -0.490),
+            scale=(0.28, 1, 0.025),
             parent=self.base.aspect2d
         )
         self.bar_frame_exp.setTransparency(TransparencyAttrib.MAlpha)
@@ -564,8 +740,8 @@ class UIManager:
 
         self.bar_fill_exp = OnscreenImage(
             image="assets/ui/bar_exp_fill.png",
-            pos=(-1.34, 0, 0.72),
-            scale=(0.29, 1, 0.022),
+            pos=(1.38, 0, -0.490),
+            scale=(0.27, 1, 0.019),
             parent=self.base.aspect2d
         )
         self.bar_fill_exp.setTransparency(TransparencyAttrib.MAlpha)
@@ -573,11 +749,11 @@ class UIManager:
 
         self.exp_text = OnscreenText(
             text="[LV. 1] EXP  0 / 100",
-            pos=(-0.98, 0.706),
-            scale=0.032,
+            pos=(1.66, -0.460),
+            scale=0.030,
             fg=(0.85, 0.70, 1.0, 1.0),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ALeft,
+            align=TextNode.ARight,
             mayChange=True,
             **self.font_kw
         )
@@ -585,8 +761,8 @@ class UIManager:
         # 5-4. 유물 배지
         self.icon_relic = OnscreenImage(
             image="assets/ui/icon_relic.png",
-            pos=(-1.68, 0, 0.64),
-            scale=0.034,
+            pos=(1.05, 0, -0.550),
+            scale=0.032,
             parent=self.base.aspect2d
         )
         self.icon_relic.setTransparency(TransparencyAttrib.MAlpha)
@@ -594,11 +770,11 @@ class UIManager:
 
         self.relic_badge_text = OnscreenText(
             text="[보유 유물] 없음",
-            pos=(-1.63, 0.628),
-            scale=0.030,
+            pos=(1.66, -0.560),
+            scale=0.028,
             fg=(0.95, 0.75, 1.0, 1.0),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ALeft,
+            align=TextNode.ARight,
             mayChange=True,
             **self.font_kw
         )
@@ -606,11 +782,11 @@ class UIManager:
         # 5-5. 로그라이크 전술 퍽 배지 목록
         self.perk_badge_text = OnscreenText(
             text="[장착 퍽] 없음",
-            pos=(-1.63, 0.570),
-            scale=0.027,
+            pos=(1.66, -0.610),
+            scale=0.026,
             fg=(0.35, 0.90, 1.0, 1.0),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ALeft,
+            align=TextNode.ARight,
             mayChange=True,
             **self.font_kw
         )
@@ -618,8 +794,8 @@ class UIManager:
         # 6. 우하단 탄약 HUD 패널 (고대비 및 크기 확장)
         self.panel_hud_ammo = OnscreenImage(
             image="assets/ui/panel_hud_ammo.png",
-            pos=(1.45, 0, -0.84),
-            scale=(0.30, 1, 0.115),
+            pos=(1.38, 0, -0.825),
+            scale=(0.32, 1, 0.105),
             parent=self.base.aspect2d
         )
         self.panel_hud_ammo.setTransparency(TransparencyAttrib.MAlpha)
@@ -627,17 +803,17 @@ class UIManager:
 
         self.icon_ammo = OnscreenImage(
             image="assets/ui/icon_ammo.png",
-            pos=(1.22, 0, -0.84),
-            scale=0.040,
+            pos=(1.10, 0, -0.825),
+            scale=0.038,
             parent=self.base.aspect2d
         )
         self.icon_ammo.setTransparency(TransparencyAttrib.MAlpha)
         self.icon_ammo.setBin("fixed", 5)
 
         self.weapon_name_text = OnscreenText(
-            text="[ 9mm 택티컬 권총 ]",
-            pos=(1.64, -0.795),
-            scale=0.036,
+            text="[ .50 매그넘 데저트 이글 ]",
+            pos=(1.66, -0.780),
+            scale=0.035,
             fg=(0.40, 0.92, 1.0, 1.0),
             shadow=(0, 0, 0, 1.0),
             align=TextNode.ARight,
@@ -646,9 +822,9 @@ class UIManager:
         )
 
         self.ammo_text = OnscreenText(
-            text="탄약  12 / 12  [+36]",
-            pos=(1.64, -0.845),
-            scale=0.042,
+            text="탄약  7 / 7  [+28]",
+            pos=(1.66, -0.828),
+            scale=0.040,
             fg=(1.0, 0.90, 0.35, 1.0),
             shadow=(0, 0, 0, 1.0),
             align=TextNode.ARight,
@@ -657,9 +833,9 @@ class UIManager:
         )
 
         self.weapon_guide_text = OnscreenText(
-            text="[Q / 휠] 무기교체  [Z,X,C] 선택",
-            pos=(1.64, -0.890),
-            scale=0.026,
+            text="[Q / 휠] 무기교체  [Z,X,C,V] 선택",
+            pos=(1.66, -0.875),
+            scale=0.025,
             fg=(0.70, 0.78, 0.88, 0.85),
             shadow=(0, 0, 0, 1.0),
             align=TextNode.ARight,
@@ -863,17 +1039,17 @@ class UIManager:
         self.panel_skills = DirectFrame(
             parent=self.base.aspect2d,
             frameColor=(0.04, 0.06, 0.09, 0.80),
-            frameSize=(-0.38, 0.38, -0.038, 0.038),
+            frameSize=(-0.34, 0.34, -0.030, 0.030),
             relief=DGG.RIDGE,
             borderWidth=(0.003, 0.003),
-            pos=(1.30, 0, -0.72)
+            pos=(1.38, 0, -0.665)
         )
         self.panel_skills.setBin("fixed", 6)
 
         self.skills_status_text = OnscreenText(
             text="[SPACE] 슬라이드: READY   |   [G] 수류탄: READY",
-            pos=(1.30, -0.732),
-            scale=0.032,
+            pos=(1.38, -0.676),
+            scale=0.028,
             fg=(0.35, 1.0, 0.65, 0.95),
             shadow=(0, 0, 0, 1.0),
             align=TextNode.ACenter,
@@ -1177,6 +1353,7 @@ class UIManager:
             getattr(self, 'exp_text', None),
             getattr(self, 'icon_relic', None),
             getattr(self, 'relic_badge_text', None),
+            getattr(self, 'perk_badge_text', None),
             getattr(self, 'panel_hud_ammo', None),
             getattr(self, 'icon_ammo', None),
             getattr(self, 'weapon_name_text', None),
@@ -1186,6 +1363,7 @@ class UIManager:
             getattr(self, 'skills_status_text', None),
             getattr(self, 'panel_quickslot', None),
             getattr(self, 'quickslot_text', None),
+            getattr(self, 'radar_root', None),
         ]
         for n in nodes:
             if n is not None:
@@ -1395,6 +1573,15 @@ class UIManager:
             alpha = 0.55 + 0.45 * math.sin(self.blackout_pulse_timer)
             self.blackout_banner.setFg((1.0, 0.15, 0.15, alpha))
 
+        # 플로팅 대미지 폰트 애니메이션 갱신
+        if hasattr(self, 'floating_damage_mgr') and self.floating_damage_mgr:
+            self.floating_damage_mgr.update(dt)
+
+        # 전술 레이더 스위프 빔 회전 애니메이션
+        if hasattr(self, 'radar_sweep_node') and self.radar_sweep_node and not self.radar_sweep_node.isEmpty():
+            self.radar_sweep_angle = (getattr(self, 'radar_sweep_angle', 0.0) - dt * 200.0) % 360.0
+            self.radar_sweep_node.setR(self.radar_sweep_angle)
+
     def show_style_kill(self, title, bonus_str="", color=(1.0, 0.85, 0.2, 1.0)):
         """스타일 킬 / 콤보 어나운서 팝업 표시"""
         display_text = f"{title}   {bonus_str}" if bonus_str else title
@@ -1495,7 +1682,7 @@ class UIManager:
         self.perk_badge_text.setText(f"[퍽]  {'  '.join(names)}")
         self.perk_badge_text.setFg((0.35, 0.90, 1.0, 1.0))
 
-    def show_boss_hp_bar(self, boss_name="[ ☠ BOSS: 케이블 엔티티 - 심연의 지배자 ☠ ]", hp=None, max_hp=None):
+    def show_boss_hp_bar(self, boss_name="[ ★ BOSS: 케이블 엔티티 - 심연의 지배자 ★ ]", hp=None, max_hp=None):
         """보스 출현 시 상단 전용 체력바 표시"""
         if hasattr(self, 'boss_hud_frame') and self.boss_hud_frame:
             self.boss_name_text.setText(boss_name)
@@ -1630,7 +1817,7 @@ class UIManager:
 
     def update_stamina(self, stamina, max_stamina, is_sprinting=False, is_exhausted=False):
         pct = max(0.0, min(1.0, stamina / max(1.0, max_stamina)))
-        self._set_bar_percentage(self.bar_fill_stamina, pct, -1.34, 0.80, 0.30, 0.028)
+        self._set_bar_percentage(self.bar_fill_stamina, pct, 1.38, -0.415, 0.28, 0.025)
 
         stamina_pct = int(pct * 100)
         if is_exhausted:
@@ -1652,7 +1839,7 @@ class UIManager:
 
     def update_hp_exp(self, hp, max_hp, exp, exp_to_next, level=1, stat_points=0, pending_perks=0):
         pct_hp = max(0.0, min(1.0, hp / max(1.0, max_hp)))
-        self._set_bar_percentage(self.bar_fill_hp, pct_hp, -1.34, 0.88, 0.30, 0.028)
+        self._set_bar_percentage(self.bar_fill_hp, pct_hp, 1.38, -0.340, 0.28, 0.025)
         msg_hp = f"HP  {int(hp)} / {int(max_hp)}"
         if msg_hp != self._cached_hp_str:
             self.hp_text.setText(msg_hp)
@@ -1665,7 +1852,7 @@ class UIManager:
             self._cached_hp_str = msg_hp
 
         pct_exp = max(0.0, min(1.0, exp / max(1.0, exp_to_next)))
-        self._set_bar_percentage(self.bar_fill_exp, pct_exp, -1.34, 0.72, 0.30, 0.028)
+        self._set_bar_percentage(self.bar_fill_exp, pct_exp, 1.38, -0.490, 0.28, 0.025)
         perk_tag = f"  ★ [퍽 선택 가능({pending_perks})] ★" if pending_perks > 0 else ""
         msg_exp = f"[LV.{level}] EXP  {int(exp)} / {int(exp_to_next)}{perk_tag}"
         if msg_exp != self._cached_exp_str:
@@ -1677,47 +1864,8 @@ class UIManager:
             self._cached_exp_str = msg_exp
 
     def update_hud(self, px, py, escape_pos=None, heading=0.0):
-        if escape_pos == "TEST":
-            msg = "[ TEST RANGE : 몬스터 사격/관찰 시험장 ]"
-            col = (0.35, 0.90, 1.0, 1.0)
-        elif escape_pos:
-            dx = escape_pos[0] - px
-            dy = escape_pos[1] - py
-            dist = math.hypot(dx, dy)
-            target_h = math.degrees(math.atan2(-dx, dy))
-            rel_h = (target_h - heading + 180) % 360 - 180
-
-            if abs(rel_h) <= 22.5:
-                dir_str = "▲ 전방"
-            elif 22.5 < rel_h <= 67.5:
-                dir_str = "↗ 전방 우측"
-            elif 67.5 < rel_h <= 112.5:
-                dir_str = "▶ 우측"
-            elif 112.5 < rel_h <= 157.5:
-                dir_str = "↘ 후방 우측"
-            elif abs(rel_h) > 157.5:
-                dir_str = "▼ 후방"
-            elif -67.5 <= rel_h < -22.5:
-                dir_str = "↖ 전방 좌측"
-            elif -112.5 <= rel_h < -67.5:
-                dir_str = "◀ 좌측"
-            else:
-                dir_str = "↙ 후방 좌측"
-
-            if dist <= 25.0:
-                msg = f"[ 비상 탈출구: {dir_str} (근접) ]"
-                col = (0.35, 1.0, 0.45, 1.0)
-            else:
-                msg = f"[ 비상 탈출구: {dir_str} ]"
-                col = (0.45, 0.85, 1.0, 0.95)
-        else:
-            msg = f"위치: X={px:.1f}, Y={py:.1f}"
-            col = (1, 1, 1, 0.9)
-
-        if msg != self._cached_hud_str:
-            self.hud_text.setText(msg)
-            self._cached_hud_str = msg
-            self.hud_text.setFg(col)
+        """중앙 상단 길잡이 삭제 완료 (우측 상단 원형 전술 레이더 위젯으로 통합 대체)"""
+        pass
 
     def update_door_status(self, msg, fg=None, show=True):
         if show:
@@ -2658,3 +2806,859 @@ class UIManager:
         txt = f"[1] 응급키트: {counts[1]}개   |   [2] 아드레날린: {counts[2]}개   |   [3] 탄약팩: {counts[3]}개   |   [4] 수류탄: {counts[4]}개   |   [Tab] 배낭"
         if hasattr(self, 'quickslot_text'):
             self.quickslot_text.setText(txt)
+
+    def spawn_floating_damage(self, damage, pos, is_crit=False, is_headshot=False, damage_type=None):
+        """3D 공간상에 고가독성 플로팅 대미지 숫자 생성"""
+        if hasattr(self, 'floating_damage_mgr') and self.floating_damage_mgr:
+            self.floating_damage_mgr.spawn(damage, pos, is_crit=is_crit, is_headshot=is_headshot, damage_type=damage_type)
+
+    # =========================================================================
+    # 1. 원형 전술 레이더 / 미니맵 HUD 위젯
+    # =========================================================================
+    def _setup_tactical_radar(self):
+        """우상단 원형 전술 레이더 / 미니맵 HUD 위젯 지오메트리 및 블립 초기화"""
+        self.radar_root = self.base.aspect2d.attachNewNode("tactical_radar_root")
+        self.radar_root.setPos(1.38, 0, 0.65)
+        self.radar_root.setBin("fixed", 20)
+        self.radar_root.setDepthTest(False)
+        self.radar_root.setDepthWrite(False)
+        self.radar_radius = 0.20
+        self.radar_max_dist = 35.0  # 35미터 전술 감지 반경
+
+        # 1. 다크 글래스모피즘 원형 배경
+        bg_geom = create_circle_fan_geom(self.radar_radius, color=(0.02, 0.05, 0.08, 0.78))
+        self.radar_bg = self.radar_root.attachNewNode(bg_geom)
+        self.radar_bg.setTransparency(TransparencyAttrib.MAlpha)
+
+        # 2. 전술 동심원 링 및 십자선 지오메트리
+        rings_geom = create_radar_rings_geom(self.radar_radius)
+        self.radar_rings = self.radar_root.attachNewNode(rings_geom)
+
+        # 3. 회전하는 전술 스위프 빔 (Sweep Beam)
+        ls_sweep = LineSegs("radar_sweep_beam")
+        ls_sweep.setColor(0.25, 0.95, 1.0, 0.85)
+        ls_sweep.setThickness(2.0)
+        ls_sweep.moveTo(0, 0, 0)
+        ls_sweep.drawTo(0, 0, self.radar_radius * 0.98)
+        self.radar_sweep_node = self.radar_root.attachNewNode(ls_sweep.create())
+        self.radar_sweep_angle = 0.0
+
+        # 4. 레이더 중앙 플레이어 마커 (상단 지향 녹색 화살표)
+        self.player_blip = OnscreenText(
+            text="▲",
+            parent=self.radar_root,
+            pos=(0, -0.012),
+            scale=0.038,
+            fg=(0.25, 1.0, 0.55, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=False,
+            **self.font_kw
+        )
+
+        # 5. 레이더 하단 거리 라벨
+        self.radar_label = OnscreenText(
+            text="RADAR 35M",
+            parent=self.radar_root,
+            pos=(0, -self.radar_radius - 0.032),
+            scale=0.024,
+            fg=(0.35, 0.85, 0.95, 0.85),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 6. 블립 풀링 (괴물 32체, 탈출 관문 1개, 보급 상자 8개)
+        self.monster_blips = []
+        for _ in range(32):
+            b = OnscreenText(
+                text="●",
+                parent=self.radar_root,
+                pos=(0, 0),
+                scale=0.030,
+                fg=(1.0, 0.22, 0.22, 1.0),
+                shadow=(0, 0, 0, 0.9),
+                align=TextNode.ACenter,
+                mayChange=True,
+                **self.font_kw
+            )
+            b.hide()
+            self.monster_blips.append(b)
+
+        # 탈출구 블립 (녹색 스타)
+        self.portal_blip = OnscreenText(
+            text="★",
+            parent=self.radar_root,
+            pos=(0, 0),
+            scale=0.046,
+            fg=(0.20, 1.0, 0.40, 1.0),
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+        self.portal_blip.hide()
+
+        # 보급 상자 블립 (청록색 사각형)
+        self.crate_blips = []
+        for _ in range(8):
+            cb = OnscreenText(
+                text="■",
+                parent=self.radar_root,
+                pos=(0, 0),
+                scale=0.028,
+                fg=(0.25, 0.85, 1.0, 1.0),
+                shadow=(0, 0, 0, 0.9),
+                align=TextNode.ACenter,
+                mayChange=True,
+                **self.font_kw
+            )
+            cb.hide()
+            self.crate_blips.append(cb)
+
+    def update_tactical_radar(self, player_pos, heading, monsters=None, escape_pos=None, supply_crates=None):
+        """플레이어 위치 및 시선 기준 원형 전술 레이더 실시간 갱신"""
+        if not hasattr(self, 'radar_root') or self.radar_root.isHidden():
+            return
+        if player_pos is None:
+            return
+
+        px, py = player_pos[0], player_pos[1]
+        h_rad = math.radians(heading)
+        fwd_x = -math.sin(h_rad)
+        fwd_y = math.cos(h_rad)
+        rgt_x = math.cos(h_rad)
+        rgt_y = math.sin(h_rad)
+
+        scale = self.radar_radius / self.radar_max_dist
+
+        # 1. 몬스터 블립 갱신
+        for b in self.monster_blips:
+            b.hide()
+
+        b_idx = 0
+        if monsters:
+            for m in monsters:
+                if b_idx >= len(self.monster_blips):
+                    break
+                if getattr(m, 'hp', 0) <= 0 or getattr(m, 'is_corpse', False):
+                    continue
+                m_pos = getattr(m, 'pos', None)
+                if m_pos is None:
+                    continue
+                mx = getattr(m_pos, 'x', m_pos[0])
+                my = getattr(m_pos, 'y', m_pos[1])
+
+                dx = mx - px
+                dy = my - py
+                fwd_d = dx * fwd_x + dy * fwd_y
+                rgt_d = dx * rgt_x + dy * rgt_y
+                dist = math.hypot(fwd_d, rgt_d)
+
+                blip = self.monster_blips[b_idx]
+                is_elite = getattr(m, 'is_elite', False)
+                is_boss = getattr(m, 'is_boss', False)
+
+                if is_boss:
+                    base_color = (1.0, 0.20, 0.35)
+                    blip.setText("X")
+                    blip.setScale(0.046)
+                elif is_elite:
+                    base_color = (1.0, 0.85, 0.20)
+                    blip.setText("◆")
+                    blip.setScale(0.038)
+                else:
+                    base_color = (1.0, 0.24, 0.24)
+                    blip.setText("●")
+                    blip.setScale(0.030)
+
+                alpha = 0.45 if dist > self.radar_max_dist else 1.0
+                if dist > self.radar_max_dist:
+                    factor = self.radar_max_dist / dist
+                    rgt_d *= factor
+                    fwd_d *= factor
+
+                blip.setFg((base_color[0], base_color[1], base_color[2], alpha))
+
+                blip.setPos(rgt_d * scale, fwd_d * scale - 0.01)
+                blip.show()
+                b_idx += 1
+
+        # 2. 탈출 관문 블립 갱신
+        if escape_pos:
+            ex = getattr(escape_pos, 'x', escape_pos[0])
+            ey = getattr(escape_pos, 'y', escape_pos[1])
+            dx = ex - px
+            dy = ey - py
+            fwd_d = dx * fwd_x + dy * fwd_y
+            rgt_d = dx * rgt_x + dy * rgt_y
+            dist = math.hypot(fwd_d, rgt_d)
+            if dist > self.radar_max_dist:
+                factor = self.radar_max_dist / dist
+                rgt_d *= factor
+                fwd_d *= factor
+                self.portal_blip.setFg((0.2, 1.0, 0.4, 0.65))
+            else:
+                self.portal_blip.setFg((0.2, 1.0, 0.4, 1.0))
+            self.portal_blip.setPos(rgt_d * scale, fwd_d * scale - 0.01)
+            self.portal_blip.show()
+        else:
+            self.portal_blip.hide()
+
+        # 3. 보급 상자 블립 갱신
+        for cb in self.crate_blips:
+            cb.hide()
+
+        cb_idx = 0
+        if supply_crates:
+            for c in supply_crates:
+                if cb_idx >= len(self.crate_blips):
+                    break
+                if getattr(c, 'is_opened', False):
+                    continue
+                cx = getattr(c, 'x', 0)
+                cy = getattr(c, 'y', 0)
+                dx = cx - px
+                dy = cy - py
+                fwd_d = dx * fwd_x + dy * fwd_y
+                rgt_d = dx * rgt_x + dy * rgt_y
+                dist = math.hypot(fwd_d, rgt_d)
+                c_blip = self.crate_blips[cb_idx]
+                if dist > self.radar_max_dist:
+                    factor = self.radar_max_dist / dist
+                    rgt_d *= factor
+                    fwd_d *= factor
+                    c_blip.setFg((0.25, 0.85, 1.0, 0.50))
+                else:
+                    c_blip.setFg((0.25, 0.85, 1.0, 0.95))
+                c_blip.setPos(rgt_d * scale, fwd_d * scale - 0.008)
+                c_blip.show()
+                cb_idx += 1
+
+    # =========================================================================
+    # 2. [ESC] 전용 일시정지 & 시스템 설정 메뉴 (Pause / Settings Modal)
+    # =========================================================================
+    def _setup_pause_ui(self):
+        """[ESC] 전용 일시정지 & 시스템 설정 모달 초기화"""
+        self.pause_player = None
+        self.pause_combat = None
+        self.pause_audio_mgr = None
+        self.on_resume_callback = None
+        self.on_restart_callback = None
+        self.on_title_callback = None
+        self.on_exit_callback = None
+
+        self.pause_modal = DirectFrame(
+            image='assets/ui/panel_modal_bg.png',
+            relief=None,
+            frameSize=(-1.10, 1.10, -0.85, 0.85),
+            image_scale=(1.10, 1.0, 0.85),
+            scale=(1.0, 1, 1.0),
+            pos=(0, 0, 0)
+        )
+        self.pause_modal.setTransparency(TransparencyAttrib.MAlpha)
+        self.pause_modal.setBin("fixed", 60)
+        self.pause_modal.hide()
+
+        # 모달 타이틀
+        self.pause_title = OnscreenText(
+            text="[ TACTICAL PAUSE & SYSTEM SETTINGS ]",
+            parent=self.pause_modal,
+            pos=(0, 0.68),
+            scale=0.042,
+            fg=(0.30, 0.92, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=False,
+            **self.font_kw
+        )
+
+        self.pause_sub = OnscreenText(
+            text="작전 현장 통제 및 사용자 환경 설정",
+            parent=self.pause_modal,
+            pos=(0, 0.60),
+            scale=0.026,
+            fg=(0.75, 0.85, 0.92, 0.95),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=False,
+            **self.font_kw
+        )
+
+        btn_step_style = {
+            "image": ('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+            "relief": None,
+            "scale": (0.055, 1, 0.040),
+            "text_scale": ((0.040 / 0.055) * 0.55, 0.55),
+            "text_pos": (0, -0.15),
+            "text_fg": (1, 1, 1, 1),
+            **self.btn_font_kw
+        }
+
+        # 1. 마우스 감도
+        self.lbl_sens = OnscreenText(
+            text="마우스 감도 (Mouse Sensitivity)",
+            parent=self.pause_modal,
+            pos=(-0.55, 0.42),
+            scale=0.030,
+            fg=(0.92, 0.95, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ALeft,
+            **self.font_kw
+        )
+        self.btn_sens_minus = DirectButton(
+            parent=self.pause_modal,
+            text="-",
+            pos=(0.18, 0, 0.43),
+            command=self._adjust_setting,
+            extraArgs=["sens", -0.02],
+            **btn_step_style
+        )
+        self.txt_sens_val = OnscreenText(
+            text="0.15",
+            parent=self.pause_modal,
+            pos=(0.34, 0.42),
+            scale=0.030,
+            fg=(0.35, 1.0, 0.65, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+        self.btn_sens_plus = DirectButton(
+            parent=self.pause_modal,
+            text="+",
+            pos=(0.50, 0, 0.43),
+            command=self._adjust_setting,
+            extraArgs=["sens", +0.02],
+            **btn_step_style
+        )
+
+        # 2. 효과음 볼륨
+        self.lbl_sfx = OnscreenText(
+            text="효과음 음량 (SFX Volume)",
+            parent=self.pause_modal,
+            pos=(-0.55, 0.28),
+            scale=0.030,
+            fg=(0.92, 0.95, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ALeft,
+            **self.font_kw
+        )
+        self.btn_sfx_minus = DirectButton(
+            parent=self.pause_modal,
+            text="-",
+            pos=(0.18, 0, 0.29),
+            command=self._adjust_setting,
+            extraArgs=["sfx", -0.10],
+            **btn_step_style
+        )
+        self.txt_sfx_val = OnscreenText(
+            text="100%",
+            parent=self.pause_modal,
+            pos=(0.34, 0.28),
+            scale=0.030,
+            fg=(0.35, 1.0, 0.65, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+        self.btn_sfx_plus = DirectButton(
+            parent=self.pause_modal,
+            text="+",
+            pos=(0.50, 0, 0.29),
+            command=self._adjust_setting,
+            extraArgs=["sfx", +0.10],
+            **btn_step_style
+        )
+
+        # 3. 배경음 볼륨
+        self.lbl_bgm = OnscreenText(
+            text="배경음 음량 (BGM Volume)",
+            parent=self.pause_modal,
+            pos=(-0.55, 0.14),
+            scale=0.030,
+            fg=(0.92, 0.95, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ALeft,
+            **self.font_kw
+        )
+        self.btn_bgm_minus = DirectButton(
+            parent=self.pause_modal,
+            text="-",
+            pos=(0.18, 0, 0.15),
+            command=self._adjust_setting,
+            extraArgs=["bgm", -0.10],
+            **btn_step_style
+        )
+        self.txt_bgm_val = OnscreenText(
+            text="100%",
+            parent=self.pause_modal,
+            pos=(0.34, 0.14),
+            scale=0.030,
+            fg=(0.35, 1.0, 0.65, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+        self.btn_bgm_plus = DirectButton(
+            parent=self.pause_modal,
+            text="+",
+            pos=(0.50, 0, 0.15),
+            command=self._adjust_setting,
+            extraArgs=["bgm", +0.10],
+            **btn_step_style
+        )
+
+        # 4. 시야각 FOV
+        self.lbl_fov = OnscreenText(
+            text="시야각 (Field of View - FOV)",
+            parent=self.pause_modal,
+            pos=(-0.55, 0.00),
+            scale=0.030,
+            fg=(0.92, 0.95, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ALeft,
+            **self.font_kw
+        )
+        self.btn_fov_minus = DirectButton(
+            parent=self.pause_modal,
+            text="-",
+            pos=(0.18, 0, 0.01),
+            command=self._adjust_setting,
+            extraArgs=["fov", -5.0],
+            **btn_step_style
+        )
+        self.txt_fov_val = OnscreenText(
+            text="96°",
+            parent=self.pause_modal,
+            pos=(0.34, 0.00),
+            scale=0.030,
+            fg=(0.35, 1.0, 0.65, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+        self.btn_fov_plus = DirectButton(
+            parent=self.pause_modal,
+            text="+",
+            pos=(0.50, 0, 0.01),
+            command=self._adjust_setting,
+            extraArgs=["fov", +5.0],
+            **btn_step_style
+        )
+
+        # 하단 조작 버튼들 (계속하기, 재시작, 타이틀, 종료)
+        btn_action_style = {
+            "image": ('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
+            "relief": None,
+            "scale": (0.22, 1, 0.050),
+            "text_scale": ((0.050 / 0.22) * 0.44, 0.44),
+            "text_pos": (0, -0.15),
+            "text_fg": (1, 1, 1, 1),
+            **self.btn_font_kw
+        }
+        btn_normal_style = {
+            "image": ('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+            "relief": None,
+            "scale": (0.22, 1, 0.050),
+            "text_scale": ((0.050 / 0.22) * 0.44, 0.44),
+            "text_pos": (0, -0.15),
+            "text_fg": (1, 1, 1, 1),
+            **self.btn_font_kw
+        }
+        btn_danger_style = {
+            "image": ('assets/ui/btn_danger_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_danger_hover.png', 'assets/ui/btn_disabled.png'),
+            "relief": None,
+            "scale": (0.22, 1, 0.050),
+            "text_scale": ((0.050 / 0.22) * 0.44, 0.44),
+            "text_pos": (0, -0.15),
+            "text_fg": (1, 1, 1, 1),
+            **self.btn_font_kw
+        }
+
+        self.btn_pause_resume = DirectButton(
+            parent=self.pause_modal,
+            text="계속하기 (RESUME)",
+            pos=(-0.72, 0, -0.38),
+            command=self._on_pause_resume_clicked,
+            **btn_action_style
+        )
+
+        self.btn_pause_restart = DirectButton(
+            parent=self.pause_modal,
+            text="스테이지 재시작 (RETRY)",
+            pos=(-0.24, 0, -0.38),
+            command=self._on_pause_restart_clicked,
+            **btn_normal_style
+        )
+
+        self.btn_pause_title = DirectButton(
+            parent=self.pause_modal,
+            text="타이틀 메뉴 (TITLE)",
+            pos=(0.24, 0, -0.38),
+            command=self._on_pause_title_clicked,
+            **btn_normal_style
+        )
+
+        self.btn_pause_exit = DirectButton(
+            parent=self.pause_modal,
+            text="게임 종료 (EXIT)",
+            pos=(0.72, 0, -0.38),
+            command=self._on_pause_exit_clicked,
+            **btn_danger_style
+        )
+
+        self.pause_esc_hint = OnscreenText(
+            text="[ESC] 키를 다시 눌러 게임 현장으로 즉시 복귀할 수 있습니다.",
+            parent=self.pause_modal,
+            pos=(0, -0.56),
+            scale=0.024,
+            fg=(0.60, 0.85, 1.0, 0.85),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+    def show_pause_menu(self, player=None, combat=None, audio_mgr=None, on_resume_callback=None, on_restart_callback=None, on_title_callback=None, on_exit_callback=None):
+        """일시정지 및 설정 모달 표시"""
+        self.pause_player = player
+        self.pause_combat = combat
+        self.pause_audio_mgr = audio_mgr
+        self.on_resume_callback = on_resume_callback
+        self.on_restart_callback = on_restart_callback
+        self.on_title_callback = on_title_callback
+        self.on_exit_callback = on_exit_callback
+
+        if player:
+            sens = getattr(player, 'mouse_sensitivity', 0.15)
+            self.txt_sens_val.setText(f"{sens:.2f}")
+
+        if audio_mgr:
+            sfx_v = getattr(audio_mgr, 'master_sfx_volume', 1.0)
+            bgm_v = getattr(audio_mgr, 'master_bgm_volume', 1.0)
+            self.txt_sfx_val.setText(f"{int(round(sfx_v * 100))}%")
+            self.txt_bgm_val.setText(f"{int(round(bgm_v * 100))}%")
+
+        lens = getattr(self.base, 'camLens', None)
+        if lens and hasattr(lens, 'getFov'):
+            fov = lens.getFov()[0]
+            self.txt_fov_val.setText(f"{int(fov)}°")
+
+        self.pause_modal.show()
+
+    def hide_pause_menu(self):
+        """일시정지 모달 숨김"""
+        if hasattr(self, 'pause_modal') and self.pause_modal:
+            self.pause_modal.hide()
+
+    def is_pause_menu_open(self):
+        """일시정지 모달 오픈 상태 반환"""
+        return hasattr(self, 'pause_modal') and self.pause_modal and not self.pause_modal.isHidden()
+
+    def _adjust_setting(self, setting_type, delta):
+        """마우스 감도, SFX/BGM 볼륨, FOV 실시간 조정"""
+        if setting_type == "sens":
+            cur = getattr(self.pause_player, 'mouse_sensitivity', 0.15) if self.pause_player else 0.15
+            new_val = round(max(0.04, min(0.40, cur + delta)), 2)
+            if self.pause_player:
+                self.pause_player.mouse_sensitivity = new_val
+            self.txt_sens_val.setText(f"{new_val:.2f}")
+        elif setting_type == "sfx":
+            cur = getattr(self.pause_audio_mgr, 'master_sfx_volume', 1.0) if self.pause_audio_mgr else 1.0
+            new_val = round(max(0.0, min(1.0, cur + delta)), 2)
+            if self.pause_audio_mgr and hasattr(self.pause_audio_mgr, 'set_sfx_volume'):
+                self.pause_audio_mgr.set_sfx_volume(new_val)
+            self.txt_sfx_val.setText(f"{int(round(new_val * 100))}%")
+        elif setting_type == "bgm":
+            cur = getattr(self.pause_audio_mgr, 'master_bgm_volume', 1.0) if self.pause_audio_mgr else 1.0
+            new_val = round(max(0.0, min(1.0, cur + delta)), 2)
+            if self.pause_audio_mgr and hasattr(self.pause_audio_mgr, 'set_bgm_volume'):
+                self.pause_audio_mgr.set_bgm_volume(new_val)
+            self.txt_bgm_val.setText(f"{int(round(new_val * 100))}%")
+        elif setting_type == "fov":
+            lens = getattr(self.base, 'camLens', None)
+            cur = lens.getFov()[0] if lens and hasattr(lens, 'getFov') else 96.0
+            new_val = round(max(70.0, min(115.0, cur + delta)), 1)
+            if lens and hasattr(lens, 'setFov'):
+                lens.setFov(new_val)
+            self.txt_fov_val.setText(f"{int(new_val)}°")
+
+    def _on_pause_resume_clicked(self):
+        if self.on_resume_callback:
+            self.on_resume_callback()
+
+    def _on_pause_restart_clicked(self):
+        self.hide_pause_menu()
+        if self.on_restart_callback:
+            self.on_restart_callback()
+
+    def _on_pause_title_clicked(self):
+        self.hide_pause_menu()
+        if self.on_title_callback:
+            self.on_title_callback()
+
+    def _on_pause_exit_clicked(self):
+        self.hide_pause_menu()
+        if self.on_exit_callback:
+            self.on_exit_callback()
+
+    # =========================================================================
+    # 3. 스테이지 클리어 전투 결과 보고서 (After-Action Report)
+    # =========================================================================
+    def _setup_after_action_report_ui(self):
+        """스테이지 클리어 전투 결과 보고서 (After-Action Report) 모달 초기화"""
+        self.on_aar_continue = None
+
+        self.aar_modal = DirectFrame(
+            image='assets/ui/panel_modal_bg.png',
+            relief=None,
+            frameSize=(-1.35, 1.35, -0.88, 0.88),
+            image_scale=(1.35, 1.0, 0.88),
+            scale=(1.0, 1, 1.0),
+            pos=(0, 0, 0)
+        )
+        self.aar_modal.setTransparency(TransparencyAttrib.MAlpha)
+        self.aar_modal.setBin("fixed", 65)
+        self.aar_modal.hide()
+
+        # 헤더
+        self.aar_title = OnscreenText(
+            text="[ ★ AFTER-ACTION REPORT // 작전 전투 결과 보고서 ★ ]",
+            parent=self.aar_modal,
+            pos=(0, 0.72),
+            scale=0.044,
+            fg=(0.20, 1.0, 0.50, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.aar_sub = OnscreenText(
+            text="구역 방어 성공 및 탈출 관문 확보 완료",
+            parent=self.aar_modal,
+            pos=(0, 0.63),
+            scale=0.026,
+            fg=(0.85, 0.90, 0.96, 0.95),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 좌측 전투 분석 지표 (7개 핵심 항목)
+        self.aar_stats_labels = OnscreenText(
+            text=(
+                "▷  클리어 소요 시간\n\n"
+                "▷  처치한 변이 괴물\n\n"
+                "▷  탄환 사격 명중률\n\n"
+                "▷  헤드샷 치명타율\n\n"
+                "▷  누적 가한 총 피해\n\n"
+                "▷  작전 중 피격 피해\n\n"
+                "▷  최대 콤보 스트릭"
+            ),
+            parent=self.aar_modal,
+            pos=(-0.88, 0.45),
+            scale=0.028,
+            fg=(0.75, 0.85, 0.95, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ALeft,
+            **self.font_kw
+        )
+
+        self.aar_stats_values = OnscreenText(
+            text="-\n\n-\n\n-\n\n-\n\n-\n\n-\n\n-",
+            parent=self.aar_modal,
+            pos=(-0.10, 0.45),
+            scale=0.028,
+            fg=(0.35, 1.0, 0.65, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ARight,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 우측 전술 평가 및 등급 패널
+        self.aar_rank_frame = DirectFrame(
+            parent=self.aar_modal,
+            image='assets/ui/card_relic_bg.png',
+            relief=None,
+            frameSize=(-0.52, 0.52, -0.44, 0.44),
+            image_scale=(0.52, 1.0, 0.44),
+            pos=(0.52, 0, 0.12)
+        )
+        self.aar_rank_frame.setTransparency(TransparencyAttrib.MAlpha)
+
+        self.aar_rank_title_hdr = OnscreenText(
+            text="[ 작전 종합 평가 등급 ]",
+            parent=self.aar_rank_frame,
+            pos=(0, 0.32),
+            scale=0.026,
+            fg=(0.85, 0.90, 1.0, 0.95),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+        self.aar_rank_badge = OnscreenText(
+            text="RANK  S+",
+            parent=self.aar_rank_frame,
+            pos=(0, 0.14),
+            scale=0.068,
+            fg=(1.0, 0.85, 0.20, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.aar_rank_title = OnscreenText(
+            text="[ 천재적인 생존자 (APEX SURVIVOR) ]",
+            parent=self.aar_rank_frame,
+            pos=(0, 0.02),
+            scale=0.026,
+            fg=(0.35, 1.0, 0.85, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.aar_rank_comment = OnscreenText(
+            text="완벽한 기동과 치명적인 명중률로\n구역 내 위협을 완전히 소탕했습니다.",
+            parent=self.aar_rank_frame,
+            pos=(0, -0.12),
+            scale=0.022,
+            fg=(0.80, 0.85, 0.90, 0.9),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.aar_reward_text = OnscreenText(
+            text="[ 보급 보너스 ] EXP +500 & 전술 탄약 보충",
+            parent=self.aar_rank_frame,
+            pos=(0, -0.32),
+            scale=0.024,
+            fg=(1.0, 0.85, 0.30, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        # 하단 계속하기 버튼
+        btn_aar_style = {
+            "image": ('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
+            "relief": None,
+            "scale": (0.42, 1, 0.062),
+            "text_scale": ((0.062 / 0.42) * 0.46, 0.46),
+            "text_pos": (0, -0.15),
+            "text_fg": (1, 1, 1, 1),
+            **self.btn_font_kw
+        }
+        self.btn_aar_continue = DirectButton(
+            parent=self.aar_modal,
+            text="특성 강화 및 다음 구역 진입 (PROCEED)",
+            pos=(0, 0, -0.66),
+            command=self._on_aar_continue_clicked,
+            **btn_aar_style
+        )
+
+    def show_after_action_report(self, stage, stats, on_continue_callback=None):
+        """스테이지 클리어 전투 결과 보고서 표시 및 평가 등급 판정"""
+        self.on_aar_continue = on_continue_callback
+
+        self.aar_title.setText(f"[ ★ AFTER-ACTION REPORT // STAGE {stage} 작전 결과 보고서 ★ ]")
+        self.aar_sub.setText(f"구역 방어 성공 및 탈출 관문 확보 - STAGE {stage} CLEAR")
+
+        kills = int(stats.get("kills", 0))
+        headshots = int(stats.get("headshots", 0))
+        shots_fired = int(stats.get("shots_fired", 0))
+        shots_hit = int(stats.get("shots_hit", 0))
+        accuracy = float(stats.get("accuracy", 0.0))
+        headshot_ratio = float(stats.get("headshot_ratio", 0.0))
+        damage_dealt = float(stats.get("damage_dealt", 0.0))
+        damage_taken = float(stats.get("damage_taken", 0.0))
+        max_combo = int(stats.get("max_combo", 0))
+        clear_time = float(stats.get("clear_time", 0.0))
+
+        mins = int(clear_time) // 60
+        secs = int(clear_time) % 60
+
+        val_str = (
+            f"{mins:02d}:{secs:02d}\n\n"
+            f"{kills} 마리\n\n"
+            f"{accuracy:.1f}% ({shots_hit} / {shots_fired})\n\n"
+            f"{headshot_ratio:.1f}% ({headshots} hits)\n\n"
+            f"{int(round(damage_dealt)):,} DMG\n\n"
+            f"{int(round(damage_taken))} HP\n\n"
+            f"{max_combo} COMBO"
+        )
+        self.aar_stats_values.setText(val_str)
+
+        # 전투 점수 및 종합 등급 판정
+        score = 0
+        if accuracy >= 65.0: score += 250
+        elif accuracy >= 45.0: score += 150
+        if headshot_ratio >= 35.0: score += 200
+        elif headshot_ratio >= 20.0: score += 100
+        if damage_taken <= 40.0: score += 250
+        elif damage_taken <= 80.0: score += 120
+        if clear_time <= 150.0: score += 200
+        elif clear_time <= 240.0: score += 100
+        score += min(300, kills * 15)
+        score += min(200, max_combo * 20)
+
+        if score >= 880:
+            rank_str = "RANK  S+"
+            rank_col = (1.0, 0.85, 0.20, 1.0)
+            title_str = "[ 천재적인 생존자 (APEX SURVIVOR) ]"
+            title_col = (0.35, 1.0, 0.85, 1.0)
+            desc_str = "완벽한 전술 기동과 치명적인 화력 집중으로\n구역 내 모든 위협을 압도적으로 섬멸했습니다."
+        elif score >= 640:
+            rank_str = "RANK  S"
+            rank_col = (1.0, 0.75, 0.25, 1.0)
+            title_str = "[ 특수부대 정예 (ELITE OPERATOR) ]"
+            title_col = (1.0, 0.85, 0.35, 1.0)
+            desc_str = "신속한 판단과 날카로운 사격 솜씨로\n탈출 관문을 완벽히 사수하고 돌파했습니다."
+        elif score >= 400:
+            rank_str = "RANK  A"
+            rank_col = (0.35, 0.90, 1.0, 1.0)
+            title_str = "[ 베테랑 요원 (VETERAN AGENT) ]"
+            title_col = (0.45, 0.85, 1.0, 1.0)
+            desc_str = "치열한 교전 속에서도 침착함을 유지하며\n임무 목표를 성공적으로 완수했습니다."
+        else:
+            rank_str = "RANK  B"
+            rank_col = (0.85, 0.88, 0.92, 1.0)
+            title_str = "[ 생존 임무 완수 (SURVIVOR) ]"
+            title_col = (0.80, 0.85, 0.90, 1.0)
+            desc_str = "위기 상황을 극복하고 탈출에 성공했습니다.\n다음 구역에서는 추가 전술 보강이 권장됩니다."
+
+        self.aar_rank_badge.setText(rank_str)
+        self.aar_rank_badge.setFg(rank_col)
+        self.aar_rank_title.setText(title_str)
+        self.aar_rank_title.setFg(title_col)
+        self.aar_rank_comment.setText(desc_str)
+
+        self.aar_modal.show()
+
+    def hide_after_action_report(self):
+        """결과 보고서 모달 숨김"""
+        if hasattr(self, 'aar_modal') and self.aar_modal:
+            self.aar_modal.hide()
+
+    def is_after_action_report_open(self):
+        """결과 보고서 모달 오픈 상태 반환"""
+        return hasattr(self, 'aar_modal') and self.aar_modal and not self.aar_modal.isHidden()
+
+    def _on_aar_continue_clicked(self):
+        self.hide_after_action_report()
+        if self.on_aar_continue:
+            self.on_aar_continue()

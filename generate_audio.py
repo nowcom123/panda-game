@@ -260,6 +260,58 @@ def make_shotgun_blast():
     copy_recorded_firearm("shotgun.wav", "shotgun_blast.wav")
 
 
+def make_magnum_shot():
+    """데저트 이글 .50 AE 매그넘탄 발사음 (초대구경 핸드캐논 폭음 & 묵직한 잔향)"""
+    dur = 0.68
+    t = np.linspace(0, dur, int(SAMPLE_RATE * dur), endpoint=False)
+    sub = np.sin(2 * np.pi * (110.0 * np.exp(-t * 32.0) + 42.0) * t) * np.exp(-t * 12.0) * 1.5
+    np.random.seed(50)
+    blast = np.random.uniform(-1.0, 1.0, len(t)) * np.exp(-t * 22.0)
+    crack = np.sin(2 * np.pi * 2400.0 * t) * np.exp(-t * 90.0) * 0.8
+    reverb = np.random.uniform(-0.5, 0.5, len(t)) * np.exp(-t * 7.5) * np.sin(2 * np.pi * 180.0 * t) * 0.4
+    magnum = np.tanh((sub + blast + crack + reverb) * 1.8)
+    save_wav("magnum_shot.wav", magnum * 0.95)
+
+
+def make_ar_shot():
+    """5.56mm 전술 돌격소총 발사음 (고속 연사에 최적화된 날카롭고 공격적인 크랙)"""
+    dur = 0.30
+    t = np.linspace(0, dur, int(SAMPLE_RATE * dur), endpoint=False)
+    crack = np.sin(2 * np.pi * (3200.0 * np.exp(-t * 40.0) + 600.0) * t) * np.exp(-t * 45.0) * 1.1
+    mech = np.sin(2 * np.pi * 180.0 * t) * np.exp(-t * 30.0) * 0.9
+    np.random.seed(556)
+    noise = np.random.uniform(-1.0, 1.0, len(t)) * np.exp(-t * 35.0)
+    ar = np.tanh((crack + mech + noise * 1.2) * 1.6)
+    save_wav("ar_shot.wav", ar * 0.92)
+
+
+def make_ar_reload():
+    """5.56mm 돌격소총 전술 재장전음 (탄창 분리 찰칵 -> 삽탄 철컥 -> 장전손잡이 왕복)"""
+    dur = 2.10
+    t = np.linspace(0, dur, int(SAMPLE_RATE * dur), endpoint=False)
+    sound = np.zeros_like(t)
+
+    # 1. 0.20s: 탄창 멈치 해제 및 빈 탄창 분리
+    t1 = t[(t >= 0.20) & (t < 0.45)] - 0.20
+    np.random.seed(11)
+    mag_out = (np.sin(2 * np.pi * 1200.0 * t1) + np.random.uniform(-0.5, 0.5, len(t1))) * np.exp(-t1 * 35.0) * 0.6
+    sound[(t >= 0.20) & (t < 0.45)] += mag_out
+
+    # 2. 0.95s: 신규 30발 탄창 결합 찰칵
+    t2 = t[(t >= 0.95) & (t < 1.30)] - 0.95
+    np.random.seed(22)
+    mag_in = (np.sin(2 * np.pi * 650.0 * t2) * 1.2 + np.sin(2 * np.pi * 1650.0 * t2) * 0.8 + np.random.uniform(-0.6, 0.6, len(t2))) * np.exp(-t2 * 28.0) * 0.85
+    sound[(t >= 0.95) & (t < 1.30)] += mag_in
+
+    # 3. 1.65s: 장전 손잡이 후퇴 고정 및 노리쇠 전진
+    t3 = t[(t >= 1.65) & (t < 1.95)] - 1.65
+    np.random.seed(33)
+    bolt = (np.sin(2 * np.pi * 950.0 * t3) + np.sin(2 * np.pi * 2100.0 * t3) * 0.7 + np.random.uniform(-0.7, 0.7, len(t3))) * np.exp(-t3 * 32.0) * 0.95
+    sound[(t >= 1.65) & (t < 1.95)] += bolt
+
+    save_wav("ar_reload.wav", np.tanh(sound * 1.4) * 0.88)
+
+
 def make_tactical_sfx():
     """콤보 킬 효과음 및 보급 상자 오픈 효과음 합성"""
 
@@ -454,17 +506,19 @@ def make_bullet_time_sounds():
     hum *= 0.94 + 0.06 * np.cos(2 * np.pi * 0.5 * t)
     save_wav("bullet_time_hum.wav", hum)
 
+def make_flesh_hit():
+    """flesh_hit.wav (탄환이 몬스터 몸통/근육에 묵직하게 박히는 유기물 타격음)"""
+    dur = 0.22
+    t = np.linspace(0, dur, int(SAMPLE_RATE * dur), endpoint=False)
+    body_thump = np.sin(2 * np.pi * (190.0 * np.exp(-t * 28.0) + 48.0) * t) * np.exp(-t * 18.0) * 0.95
+    flesh_noise = np.random.uniform(-1.0, 1.0, len(t)) * np.exp(-t * 35.0)
+    filter_kernel = np.array([0.2, 0.5, -0.8, 0.6, -0.3, 0.1])
+    flesh_splat = np.convolve(flesh_noise, filter_kernel, mode='same') * 0.85
+    snap = np.sin(2 * np.pi * 1800.0 * t) * np.exp(-t * 90.0) * 0.45
+    hit_sound = np.tanh((body_thump + flesh_splat + snap) * 1.5)
+    save_wav("flesh_hit.wav", hit_sound * 0.92)
+
 if __name__ == "__main__":
     print("=== 백룸 호러 사운드 절차적 합성 시작 ===")
-    make_bgm()
-    make_footsteps()
-    make_serpent_sounds()
-    make_skeleton_sounds()
-    make_orc_sounds()
-    make_witch_sounds()
-    make_gunshot()
-    make_tactical_sfx()
-    make_action_sfx()
-    make_shotgun_and_dual_sfx()
-    make_hound_sounds()
-    print("=== 모든 사운드 생성 완료! ===")
+    make_flesh_hit()
+    print("=== flesh_hit.wav 생성 완료! ===")

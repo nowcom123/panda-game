@@ -3,6 +3,19 @@ import sys
 import math
 import random
 import concurrent.futures
+import gc
+
+# Windows OS 스케줄러 프로세스 우선순위 승격 (High Priority) 및 1ms 고정밀 타이머 활성화
+if sys.platform == 'win32':
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x00000080) # HIGH_PRIORITY_CLASS
+        ctypes.windll.winmm.timeBeginPeriod(1) # 1ms 고정밀 멀티미디어 타이머 (스터터링 방지)
+    except Exception:
+        pass
+
+# 파이썬 가비지 컬렉터 최적화 (전투 중 15~50ms GC 스파이크 방지)
+gc.set_threshold(60000, 20, 20)
 
 # PyInstaller 번들 리소스 경로 및 작업 디렉토리 설정
 if getattr(sys, 'frozen', False):
@@ -96,9 +109,14 @@ class LiminalInfiniteLoop(ShowBase):
         # 3. 텍스처 로드
         self.load_assets()
 
-        # 4. 무한 청크 관리자 설정
+        # 4. 무한 청크 관리자 설정 (PC 멀티코어 자원을 최대로 활용하는 병렬 워커 풀)
+        cpu_cores = os.cpu_count() or 4
+        worker_count = max(4, min(10, cpu_cores - 2))
         self.chunks = {}
-        self.chunk_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ChunkWorker")
+        self.chunk_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="ChunkWorker"
+        )
         self.active_chunk_futures = {}
         self.last_cull_pos = None
         self.world_root = self.render.attachNewNode("world_root")
@@ -348,13 +366,68 @@ class LiminalInfiniteLoop(ShowBase):
             self._on_player_level_up()
 
     def handle_escape(self):
-        """[ESC] 키 입력 처리: 인벤토리 열려있으면 닫기, 테스트 모드면 인트로 복귀, 아니면 마우스 락 토글"""
+        """[ESC] 키 입력 처리: 인벤토리 열려있으면 닫기, 일시정지/설정 메뉴 토글, 테스트 모드면 인트로 복귀"""
         if self.game_state == "INVENTORY":
             self.close_inventory()
+        elif self.game_state == "PAUSED":
+            self.resume_game()
+        elif self.game_state == "PLAYING":
+            self.pause_game()
         elif getattr(self, 'is_test_mode', False):
             self.return_to_intro()
         else:
             self.player.lock_mouse(not self.player.mouse_locked)
+
+    def pause_game(self):
+        """[ESC] 게임 일시정지 및 설정 모달 팝업"""
+        if self.game_state != "PLAYING" or self.game_over or self.game_won:
+            return
+        self.game_state = "PAUSED"
+        self.player.lock_mouse(False)
+        self.combat.stop_aim()
+        if hasattr(self, 'audio_mgr') and self.audio_mgr:
+            self.audio_mgr.play_inventory_toggle(True)
+        self.ui_mgr.show_pause_menu(
+            player=self.player,
+            combat=self.combat,
+            audio_mgr=self.audio_mgr,
+            on_resume_callback=self.resume_game,
+            on_restart_callback=self.restart_game,
+            on_title_callback=self.return_to_intro,
+            on_exit_callback=self.exit_game
+        )
+
+    def resume_game(self):
+        """일시정지 해제 및 게임플레이 현장 복귀"""
+        if self.game_state != "PAUSED":
+            return
+        self.ui_mgr.hide_pause_menu()
+        self.game_state = "PLAYING"
+        self.player.lock_mouse(True)
+        if hasattr(self, 'audio_mgr') and self.audio_mgr:
+            self.audio_mgr.play_inventory_toggle(False)
+
+    def trigger_stage_clear(self):
+        """스테이지 클리어 시 작전 전투 결과 보고서(AAR) 표시 후 특성 퍽 상점으로 전환"""
+        self.game_state = "AAR"
+        self.player.lock_mouse(False)
+        self.combat.stop_aim()
+
+        stats = self.combat.get_stage_stats() if hasattr(self.combat, 'get_stage_stats') else {}
+        stats["damage_taken"] = getattr(self.player, 'stage_damage_taken', 0.0)
+
+        def on_aar_continue():
+            self.game_state = "SHOP"
+            self.ui_mgr.show_stage_clear_shop(
+                self.current_stage, self.player, self.combat,
+                self.on_shop_closed, on_victory_callback=self.trigger_victory
+            )
+
+        self.ui_mgr.show_after_action_report(
+            stage=self.current_stage,
+            stats=stats,
+            on_continue_callback=on_aar_continue
+        )
 
     def _on_inventory_use_item(self, item_id):
         """인벤토리 모달 내 [사용하기] 클릭 콜백"""
@@ -578,6 +651,7 @@ class LiminalInfiniteLoop(ShowBase):
     def restart_game(self):
         """던전 게임 초기화 (체력, 몬스터 군단, 5분 타이머, 탈출구)"""
         self.clear_projectiles()
+        gc.collect(1) # 유휴 타이밍에 메모리 수거로 인게임 프레임 드랍 차단
         self.game_over = False
         self.game_won = False
         self.current_stage = 1
@@ -610,6 +684,7 @@ class LiminalInfiniteLoop(ShowBase):
         if hasattr(self.ui_mgr, 'update_perk_badges'):
             self.ui_mgr.update_perk_badges(self.player.perks)
         self.ui_mgr.update_relic_badges(self.player.relics)
+        self.player.stage_damage_taken = 0.0
 
         # 보스 상태 초기화
         self.boss = None
@@ -666,10 +741,12 @@ class LiminalInfiniteLoop(ShowBase):
     def advance_to_next_stage(self):
         """특성 획득 후 다음 스테이지로 진입"""
         self.clear_projectiles()
+        gc.collect(1) # 스테이지 전환 시 가비지 수거로 전투 중 무스터터링 보장
         prev_stage = self.current_stage
         self.current_stage += 1
         self.time_left = self.time_limit
         self.door_hold_timer = 5.0
+        self.player.stage_damage_taken = 0.0
 
         # 보스 상태 초기화
         self.boss = None
@@ -786,6 +863,7 @@ class LiminalInfiniteLoop(ShowBase):
             self._trigger_level_up_modal()
         else:
             # 모든 퍽 선택 완료: 게임 플레이 복귀
+            gc.collect(1)
             self._is_level_up_modal = False
             self.game_state = "PLAYING"
             self.ui_mgr.start_game_ui()
@@ -1130,8 +1208,9 @@ class LiminalInfiniteLoop(ShowBase):
             self.update_chunks()
             return cont
 
-        # 2. 상점 및 인벤토리 모달 상태 시 업데이트 정지
-        if self.game_state in ("SHOP", "INVENTORY"):
+        # 2. 상점, 인벤토리, 일시정지, 결과보고서 모달 상태 시 월드 엔티티 정지
+        if self.game_state in ("SHOP", "INVENTORY", "PAUSED", "AAR"):
+            self.ui_mgr.update(dt)
             return cont
 
         # 3. 승리 및 게임 오버 상태 처리
@@ -1247,11 +1326,15 @@ class LiminalInfiniteLoop(ShowBase):
             self.ui_mgr.update(dt, player_pos=(px, py), camera_heading=getattr(self.player, 'heading', 0.0), is_moving=is_moving, is_sprinting=is_sprinting)
             self.ui_mgr.update_timer(self.time_left, self.current_stage)
             self.ui_mgr.update_hud(px, py, getattr(self, 'escape_pos', None), getattr(self.player, 'heading', 0.0))
+            if hasattr(self.ui_mgr, 'update_tactical_radar'):
+                self.ui_mgr.update_tactical_radar((px, py), getattr(self.player, 'heading', 0.0), self.monsters, getattr(self, 'escape_pos', None), getattr(self, 'supply_crates', []))
         else:
             # 테스트 모드 HUD
             self.ui_mgr.update(dt, player_pos=(px, py), camera_heading=getattr(self.player, 'heading', 0.0), is_moving=is_moving, is_sprinting=is_sprinting)
             self.ui_mgr.update_timer(9999.0)
             self.ui_mgr.update_hud(px, py, "TEST", getattr(self.player, 'heading', 0.0))
+            if hasattr(self.ui_mgr, 'update_tactical_radar'):
+                self.ui_mgr.update_tactical_radar((px, py), getattr(self.player, 'heading', 0.0), self.monsters, None, getattr(self, 'supply_crates', []))
 
         # 전술 스킬 (슬라이드 / 수류탄) 및 필드 보급 상자 인터랙션 갱신
         if self.grenade_cooldown > 0.0:

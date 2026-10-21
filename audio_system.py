@@ -24,6 +24,9 @@ class AudioManager:
         else:
             self.audio3d = None
 
+        self.master_sfx_volume = 1.0
+        self.master_bgm_volume = 1.0
+
         # 2. BGM 초기화
         bgm_p = self._get_path("bgm_horror.wav")
         if bgm_p:
@@ -48,12 +51,19 @@ class AudioManager:
         self.footstep_sprint_sfx = self.loader.loadSfx(sprint_p) if sprint_p else None
         self.footstep_idx = 0
 
-        # 4. 권총 발사음
+        # 4. 권총, 매그넘, AR 돌격소총 발사음 보이스 풀
         gunshot_p = self._get_path("gunshot.wav")
         self.gunshot_sfx = self.loader.loadSfx(gunshot_p) if gunshot_p else None
-        # Separate voices preserve shot tails even during rapid dual-pistol fire.
         self.gunshot_voices = [self.loader.loadSfx(gunshot_p) for _ in range(24)] if gunshot_p else []
         self.gunshot_voice_index = 0
+
+        magnum_p = self._get_path("magnum_shot.wav")
+        self.magnum_voices = [self.loader.loadSfx(magnum_p) for _ in range(16)] if magnum_p else self.gunshot_voices
+        self.magnum_voice_index = 0
+
+        ar_p = self._get_path("ar_shot.wav")
+        self.ar_voices = [self.loader.loadSfx(ar_p) for _ in range(24)] if ar_p else self.gunshot_voices
+        self.ar_voice_index = 0
 
         # 5. 괴물 사운드 참조
         self.serpent_slither_sfx = None
@@ -75,7 +85,7 @@ class AudioManager:
         reload_p = self._get_path("reload.wav")
         self.reload_sfx = self.loader.loadSfx(reload_p) if reload_p else None
         self.reload_sounds = {"PISTOL": self.reload_sfx}
-        for weapon, filename in (("DUAL_PISTOL", "dual_reload.wav"), ("SHOTGUN", "shotgun_reload.wav")):
+        for weapon, filename in (("DUAL_PISTOL", "dual_reload.wav"), ("AR", "ar_reload.wav"), ("SHOTGUN", "shotgun_reload.wav")):
             path = self._get_path(filename)
             self.reload_sounds[weapon] = self.loader.loadSfx(path) if path else self.reload_sfx
         slide_p = self._get_path("slide_release.wav")
@@ -98,6 +108,8 @@ class AudioManager:
         # 8. 정밀 조준, 치명타, 심장박동, 인벤토리/아이템 효과음
         crit_p = self._get_path("crit_hit.wav")
         self.crit_hit_sfx = self.loader.loadSfx(crit_p) if crit_p else None
+        flesh_p = self._get_path("flesh_hit.wav")
+        self.flesh_hit_sfx = self.loader.loadSfx(flesh_p) if flesh_p else None
         hb_p = self._get_path("heartbeat.wav")
         self.heartbeat_sfx = self.loader.loadSfx(hb_p) if hb_p else None
         inv_open_p = self._get_path("inventory_open.wav")
@@ -275,7 +287,22 @@ class AudioManager:
                 self.skeleton_rattle_sfx.setVolume(0.0)
         elif mode == "PLAYING":
             if self.bgm:
-                self.bgm.setVolume(0.55)
+                self.bgm.setVolume(0.55 * self.master_bgm_volume)
+
+    def set_sfx_volume(self, volume):
+        """효과음 전체 마스터 볼륨 설정 (0.0 ~ 1.0)"""
+        self.master_sfx_volume = max(0.0, min(1.0, float(volume)))
+        if hasattr(self, 'base') and hasattr(self.base, 'sfxManagerList'):
+            for mgr in self.base.sfxManagerList:
+                mgr.setVolume(self.master_sfx_volume)
+
+    def set_bgm_volume(self, volume):
+        """배경음 전체 마스터 볼륨 설정 (0.0 ~ 1.0)"""
+        self.master_bgm_volume = max(0.0, min(1.0, float(volume)))
+        if hasattr(self, 'base') and hasattr(self.base, 'musicManager') and self.base.musicManager:
+            self.base.musicManager.setVolume(self.master_bgm_volume)
+        elif self.bgm:
+            self.bgm.setVolume(0.55 * self.master_bgm_volume)
 
     def play_footstep(self, is_sprinting=False):
         """플레이어 보행 발자국 사운드"""
@@ -289,8 +316,16 @@ class AudioManager:
             snd.play()
 
     def play_gunshot(self):
-        """권총 발사음"""
+        """9mm 권총 및 듀얼 글록 발사음"""
         self._play_firearm_voice("gunshot", 0.72)
+
+    def play_magnum_shot(self):
+        """데저트 이글 .50 매그넘 발사음"""
+        self._play_firearm_voice("magnum", 0.90)
+
+    def play_ar_shot(self):
+        """5.56mm 전술 돌격소총(AR) 고속 연사음"""
+        self._play_firearm_voice("ar", 0.78)
 
     def _play_firearm_voice(self, key, volume):
         voices = getattr(self, key + "_voices")
@@ -402,6 +437,12 @@ class AudioManager:
         if self.crit_hit_sfx:
             self.crit_hit_sfx.setVolume(0.95)
             self.crit_hit_sfx.play()
+
+    def play_flesh_hit(self):
+        """탄환 몸통 적중 시 찰진 유기물 관통 타격음 재생"""
+        if self.flesh_hit_sfx:
+            self.flesh_hit_sfx.setVolume(random.uniform(0.75, 0.95))
+            self.flesh_hit_sfx.play()
 
     def play_heartbeat(self):
         """빈사 위기 저주파 심장박동 사운드"""
