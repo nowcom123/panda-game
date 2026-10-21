@@ -6,6 +6,7 @@ Combat System Module
 
 import math
 import random
+import time
 from panda3d.core import (
     PointLight, Spotlight, PerspectiveLens, LineSegs, LColor, Vec3, TransparencyAttrib, MouseButton
 )

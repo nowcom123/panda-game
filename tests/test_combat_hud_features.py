@@ -245,6 +245,26 @@ class CombatHUDFeaturesTests(unittest.TestCase):
         ui.show_after_action_report(stage=1, stats=stats)
         ui.aar_rank_badge.setText.assert_called_with("RANK  S+")
 
+    def test_after_action_report_fallback_time_when_clock_object_fails(self):
+        """ClockObject 실패 시 time.time() fallback이 NameError 없이 정상 동작하는지 검증"""
+        combat = CombatSystem.__new__(CombatSystem)
+        combat.stage_kills = 5
+        combat.stage_headshots = 2
+        combat.stage_shots_fired = 10
+        combat.stage_shots_hit = 8
+        combat.stage_damage_dealt = 500.0
+        combat.stage_damage_taken = 0.0
+        combat.stage_max_combo = 3
+        combat.stage_start_time = 100.0
+
+        import sys
+        mock_core = MagicMock()
+        mock_core.ClockObject.getGlobalClock.side_effect = RuntimeError("Clock unavailable")
+        with patch.dict(sys.modules, {"panda3d.core": mock_core}):
+            with patch("time.time", return_value=125.0):
+                stats = combat.get_stage_stats()
+                self.assertEqual(stats["clear_time"], 25.0)
+
     # =========================================================================
     # 6. Monster & Elite Monster Names
     # =========================================================================
