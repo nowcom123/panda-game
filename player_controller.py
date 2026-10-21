@@ -12,6 +12,7 @@ from constants import (
 from collision import resolve_collision
 from elevation import get_floor_height
 from perks import PERK_CATALOG, get_perk_level, get_perk_stats, get_player_perk_stats
+from weapon_recoil import RecoilSpring
 
 
 ITEM_CATALOG = {
@@ -85,6 +86,8 @@ class PlayerController:
         # 시선 회전각
         self.heading = 0.0
         self.pitch = 0.0
+        self.recoil_pitch = RecoilSpring(22.0, 2.5)
+        self.recoil_heading = RecoilSpring(26.0, .4)
         self.mouse_locked = False
 
         # 스테미나
@@ -558,6 +561,10 @@ class PlayerController:
         self.shake_timer = duration
         self.shake_intensity = intensity
 
+    def add_weapon_recoil(self, pitch, heading=0.0):
+        self.recoil_pitch.kick(pitch)
+        self.recoil_heading.kick(heading)
+
     def reset_position(self, x, y, z=PLAYER_EYE_HEIGHT, heading=0.0, pitch=0.0):
         """플레이어 위치 및 시선 초기화"""
         self.is_sliding = False
@@ -568,6 +575,8 @@ class PlayerController:
         self.last_move_dir = Vec3(0, 0, 0)
         self.heading = heading
         self.pitch = pitch
+        self.recoil_pitch.reset()
+        self.recoil_heading.reset()
         self.camera.setPos(x, y, z)
         self.camera.setHpr(heading, pitch, 0)
         self.stamina = self.max_stamina
@@ -611,14 +620,23 @@ class PlayerController:
                 self.win.movePointer(0, center_x, center_y)
                 view_changed = True
 
+        # 반동은 마우스로 정한 시선과 별도로 감쇠하므로 복귀 중에도 자유롭게 조준한다.
+        previous_recoil = (self.recoil_pitch.position, self.recoil_heading.position)
+        kick_pitch = self.recoil_pitch.update(dt)
+        kick_heading = self.recoil_heading.update(dt)
+        if previous_recoil != (kick_pitch, kick_heading):
+            view_changed = True
+        camera_heading = self.heading + kick_heading
+        camera_pitch = max(-89.0, min(89.0, self.pitch + kick_pitch))
+
         # 땅울림 카메라 진동 처리
         if self.shake_timer > 0.0:
             self.shake_timer = max(0.0, self.shake_timer - dt)
             shake_p = math.sin(self.shake_timer * 40.0) * self.shake_intensity
             shake_r = math.cos(self.shake_timer * 32.0) * (self.shake_intensity * 0.6)
-            self.camera.setHpr(self.heading, self.pitch + shake_p, shake_r)
+            self.camera.setHpr(camera_heading, max(-89.0, min(89.0, camera_pitch + shake_p)), shake_r)
         elif view_changed:
-            self.camera.setHpr(self.heading, self.pitch, 0)
+            self.camera.setHpr(camera_heading, camera_pitch, 0)
 
         # 땅울림 슬로우(이동 방해) 처리 (철갑의 거인 유물 보유 시 슬로우 완전 면역)
         if "iron_colossus" in self.relics:

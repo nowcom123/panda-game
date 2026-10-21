@@ -2313,5 +2313,38 @@
     "ammo_left": 20,
     "reserve_ammo": 90,
     "ammo_used": -8
+  },
+  {
+    "timestamp": "2026-10-21 22:45:19",
+    "stage": 1,
+    "result": "사망 (끝없는 고통의 켈베스)",
+    "success": false,
+    "time_elapsed": 7.4,
+    "time_left": 292.6,
+    "ammo_left": 0,
+    "reserve_ammo": 90,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-10-21 22:45:41",
+    "stage": 1,
+    "result": "사망 (지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 17.9,
+    "time_left": 282.1,
+    "ammo_left": 19,
+    "reserve_ammo": 90,
+    "ammo_used": -7
+  },
+  {
+    "timestamp": "2026-10-21 23:53:52",
+    "stage": 1,
+    "result": "사망 (지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 68.7,
+    "time_left": 231.3,
+    "ammo_left": 0,
+    "reserve_ammo": 0,
+    "ammo_used": 12
   }
 ]

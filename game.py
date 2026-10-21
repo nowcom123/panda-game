@@ -1383,6 +1383,9 @@ class LiminalInfiniteLoop(ShowBase):
         return cont
 
     def destroy(self):
+        combat = getattr(self, 'combat', None)
+        if combat is not None and hasattr(combat, 'casing_effects'):
+            combat.casing_effects.destroy()
         for fb in getattr(self, 'fireball_pool', []):
             fb.destroy()
         self.fireball_pool = []

@@ -13,10 +13,12 @@ from constants import (
     CELL_SIZE, CHUNK_CELLS, MAP_MIN_CHUNK, MAP_MAX_CHUNK
 )
 from world_gen import cell_has_pillar
-from geometry import make_cube_to, make_sphere_to, make_cylinder_to
+from geometry import make_cube_to, make_sphere_to, make_cylinder_to, make_muzzle_flash_to
 from collision import raycast_walls
 from projectiles import ExplosionVisualEffect
 from perks import get_player_perk_stats
+from weapon_recoil import WeaponRecoil, RECOIL_PROFILES
+from casing_effects import CasingEffects
 
 
 WEAPON_CONFIGS = {
@@ -130,6 +132,7 @@ class CombatSystem:
         self.reload_timer = 0.0
         self.shoot_cooldown = 0.0
         self.recoil_timer = 0.0
+        self.weapon_recoil = WeaponRecoil()
         self.muzzle_timer = 0.0
         self.hit_marker_timer = 0.0
         self.bobbing_time = 0.0
@@ -152,7 +155,6 @@ class CombatSystem:
         self.slide_blowback_duration = 0.08
         self.slide_max_travel = -0.055
         self.hammer_timer = 0.0
-        self.active_casings = []
         self.smoke_particles = []
         self.was_slide_locked_before_reload = False
 
@@ -186,7 +188,7 @@ class CombatSystem:
 
         # AR, 샷건 및 듀얼 글록 POV 좌표
         self.ads_hip_pos_ar = Vec3(0.18, 0.65, -0.210)
-        self.ads_aim_pos_ar = Vec3(0.00, 0.55, -0.142)
+        self.ads_aim_pos_ar = Vec3(0.00, 0.55, -0.125)
         self.ads_hip_pos_sg = Vec3(0.18, 0.68, -0.215)
         self.ads_aim_pos_sg = Vec3(0.00, 0.58, -0.134)
         self.ads_hip_pos_dual_l = Vec3(-0.17, 0.62, -0.21)
@@ -225,24 +227,7 @@ class CombatSystem:
         self.hit_particle_cursor = 0
 
         # 2. 황동 탄피 물리 풀 (24개)
-        self.casing_pool = []
-        brass_col = LColor(0.92, 0.76, 0.24, 1.0)
-        for i in range(24):
-            c_node = self.world_root.attachNewNode(f"pooled_casing_{i}")
-            cube = make_cylinder_to(c_node, 0.016, 0.044, 0.016, brass_col, 0, 0, 0, axis='y')
-            cube.setLightOff()
-            c_node.hide()
-            self.casing_pool.append({
-                "node": c_node,
-                "cube": cube,
-                "pos": Vec3(0, 0, 0),
-                "vel": Vec3(0, 0, 0),
-                "rot": Vec3(0, 0, 0),
-                "spin": Vec3(0, 0, 0),
-                "life": 0.0,
-                "active": False
-            })
-        self.casing_cursor = 0
+        self.casing_effects = CasingEffects(self.world_root, capacity=24)
 
         # 3. 총구 화약 가스 연기 풀 (20개)
         self.smoke_pool = []
@@ -309,6 +294,7 @@ class CombatSystem:
         if self.audio_mgr:
             self.audio_mgr.stop_weapon_actions()
         self.current_weapon = target_weapon
+        self._reset_weapon_recoil()
         st = self.weapon_states[self.current_weapon]
         cfg = WEAPON_CONFIGS[self.current_weapon]
         self.max_ammo = cfg["max_ammo"]
@@ -486,7 +472,7 @@ class CombatSystem:
         make_cylinder_to(self.mag_node, 0.028, 0.050, 0.028, LColor(0.92, 0.76, 0.22, 1.0), 0, 0.01, 0.09, axis='y')
 
         # 매그넘 대구경 총구 화염 & 섬광 조명
-        self.muzzle_flash_geom = make_sphere_to(self.recoil_node, 0.24, 0.35, 0.24, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.38, 0.042, rot_h=45)
+        self.muzzle_flash_geom = make_muzzle_flash_to(self.recoil_node, 0.075, 0.19, 0, 0.38, 0.042)
         self.muzzle_flash_geom.setLightOff()
         self.muzzle_flash_geom.hide()
 
@@ -563,7 +549,7 @@ class CombatSystem:
         self.dual_left_mag.setP(20)
         make_cube_to(self.dual_left_mag, 0.040, 0.075, 0.16, glock_polymer, 0, 0, 0)
 
-        self.dual_left_flash_geom = make_sphere_to(self.dual_left_recoil, 0.15, 0.20, 0.15, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.32, 0.035, rot_h=45)
+        self.dual_left_flash_geom = make_muzzle_flash_to(self.dual_left_recoil, 0.055, 0.14, 0, 0.32, 0.035)
         self.dual_left_flash_geom.setLightOff()
         self.dual_left_flash_geom.hide()
 
@@ -615,7 +601,7 @@ class CombatSystem:
         self.dual_right_mag.setP(20)
         make_cube_to(self.dual_right_mag, 0.040, 0.075, 0.16, glock_polymer, 0, 0, 0)
 
-        self.dual_right_flash_geom = make_sphere_to(self.dual_right_recoil, 0.15, 0.20, 0.15, LColor(1.0, 0.85, 0.25, 1.0), 0, 0.32, 0.035, rot_h=45)
+        self.dual_right_flash_geom = make_muzzle_flash_to(self.dual_right_recoil, 0.055, 0.14, 0, 0.32, 0.035)
         self.dual_right_flash_geom.setLightOff()
         self.dual_right_flash_geom.hide()
 
@@ -653,8 +639,6 @@ class CombatSystem:
         hk_red = LColor(0.85, 0.15, 0.12, 1.0)          # HK 연발 셀렉터 레드 각인
         hk_white = LColor(0.90, 0.90, 0.92, 1.0)        # HK 안전 셀렉터 화이트 각인
         hk_follower = LColor(0.95, 0.40, 0.05, 1.0)     # 고시인성 오렌지색 안티틸트 팔로워
-        sight_glass = LColor(0.10, 0.40, 0.50, 0.60)    # 홀로그래픽 사이트 렌즈 (멀티코팅 반사)
-        sight_reticle = LColor(0.15, 0.95, 1.0, 1.0)    # 시안색 발광 홀로그래픽 레티클
 
         # -------------------------------------------------------------
         # 1) HK416 상부 리시버 (Upper Receiver - 피스톤 통과를 위한 시그니처 하이 레일 프로파일)
@@ -737,9 +721,14 @@ class CombatSystem:
         make_cylinder_to(self.ar_recoil_node, 0.020, 0.032, 0.020, hk_accent_metal, 0, 0.535, 0.058, axis='y')
         # 가스 피스톤 작동 로드 (상부 채널 내부 관통)
         make_cylinder_to(self.ar_recoil_node, 0.016, 0.32, 0.016, hk_accent_metal, 0, 0.34, 0.055, axis='y')
-        # HK 원형 보호링 접이식 프론트 사이트 (Front Sight Post & Protective Ring)
-        make_cylinder_to(self.ar_recoil_node, 0.024, 0.018, 0.038, hk_steel, 0, 0.505, 0.082, axis='y')
-        make_cylinder_to(self.ar_recoil_node, 0.006, 0.006, 0.026, hk_steel, 0, 0.505, 0.082, axis='z')
+        # 개방형 가늠쇠: 얇은 중앙 기둥과 좌우 보호 날개. 기둥 끝은 z=0.125.
+        self.ar_front_sight = self.ar_recoil_node.attachNewNode("ar_front_sight")
+        self.ar_front_sight.setY(0.505)
+        make_cube_to(self.ar_front_sight, 0.036, 0.024, 0.010, hk_steel, 0, 0, 0.087)
+        make_cube_to(self.ar_front_sight, 0.006, 0.009, 0.033, hk_accent_metal, 0, 0, 0.1085)
+        for side in (-1, 1):
+            make_cube_to(self.ar_front_sight, 0.005, 0.014, 0.035, hk_steel,
+                         side * 0.017, 0, 0.109, rot_r=side * 20)
 
         # -------------------------------------------------------------
         # 5) 14.5" 헤비 냉간단조 총열 & HK 버드케이지 소염기 (Birdcage Flash Hider)
@@ -752,22 +741,14 @@ class CombatSystem:
         make_cylinder_to(self.ar_recoil_node, 0.020, 0.010, 0.020, LColor(0.02, 0.02, 0.02, 1.0), 0, 0.758, 0.022, axis='y')
 
         # -------------------------------------------------------------
-        # 6) EOTech EXPS-3 전술 홀로그래픽 사이트 (QD 마운트 & 발광 레티클)
+        # 6) 개방형 가늠자: 중앙 홈으로 전방 가늠쇠를 정렬
         # -------------------------------------------------------------
-        # QD 퀵디태치 7mm 라이저 마운트 베이스
-        make_cube_to(self.ar_recoil_node, 0.046, 0.085, 0.022, hk_steel, 0, 0.05, 0.086)
-        make_cube_to(self.ar_recoil_node, 0.012, 0.045, 0.012, hk_accent_metal, 0.026, 0.05, 0.086)
-        # 알루미늄 보호 후드 (Outer Hood Housing)
-        make_cube_to(self.ar_recoil_node, 0.052, 0.125, 0.058, hk_black, 0, 0.05, 0.115)
-        # 측면 횡방향 CR123A 배터리 컴파트먼트 캡
-        make_cylinder_to(self.ar_recoil_node, 0.024, 0.055, 0.024, hk_steel, 0.024, 0.085, 0.098, axis='y')
-        # 사이트 전후방 렌즈 (멀티코팅 안티글레어 블루/시안 글래스)
-        lens = make_cube_to(self.ar_recoil_node, 0.042, 0.008, 0.042, sight_glass, 0, 0.05, 0.115)
-        lens.setLightOff()
-        lens.setTransparency(TransparencyAttrib.MAlpha)
-        # 홀로그래픽 발광 레티클 (조준선 정렬 정중앙 네온 시안)
-        reticle = make_cube_to(self.ar_recoil_node, 0.006, 0.006, 0.006, sight_reticle, 0, 0.055, 0.115)
-        reticle.setLightOff()
+        self.ar_rear_sight = self.ar_recoil_node.attachNewNode("ar_rear_sight")
+        self.ar_rear_sight.setY(-0.075)
+        make_cube_to(self.ar_rear_sight, 0.040, 0.022, 0.014, hk_steel, 0, 0, 0.091)
+        for side in (-1, 1):
+            make_cube_to(self.ar_rear_sight, 0.011, 0.012, 0.027, hk_steel,
+                         side * 0.0145, 0, 0.1115)
 
         # -------------------------------------------------------------
         # 7) HK 고유 인체공학 배틀 그립 (HK Ergonomic Battle Grip)
@@ -829,7 +810,7 @@ class CombatSystem:
         # -------------------------------------------------------------
         # 11) 5.56mm 총구 화염 및 동적 포인트 라이트
         # -------------------------------------------------------------
-        self.ar_muzzle_flash_geom = make_sphere_to(self.ar_recoil_node, 0.22, 0.32, 0.22, LColor(1.0, 0.88, 0.30, 1.0), 0, 0.77, 0.022, rot_h=45)
+        self.ar_muzzle_flash_geom = make_muzzle_flash_to(self.ar_recoil_node, 0.065, 0.21, 0, 0.77, 0.022)
         self.ar_muzzle_flash_geom.setLightOff()
         self.ar_muzzle_flash_geom.hide()
 
@@ -915,7 +896,7 @@ class CombatSystem:
         make_cube_to(self.sg_recoil_node, 0.038, 0.020, 0.026, steel_dark, 0, -0.12, 0.076)
 
         # 샷건 대구경 총구 화염 및 조명
-        self.sg_muzzle_flash_geom = make_sphere_to(self.sg_recoil_node, 0.28, 0.38, 0.28, LColor(1.0, 0.82, 0.20, 1.0), 0, 0.74, 0.045, rot_h=45)
+        self.sg_muzzle_flash_geom = make_muzzle_flash_to(self.sg_recoil_node, 0.105, 0.26, 0, 0.74, 0.045)
         self.sg_muzzle_flash_geom.setLightOff()
         self.sg_muzzle_flash_geom.hide()
 
@@ -954,45 +935,25 @@ class CombatSystem:
         make_cube_to(l_hand_sg, 0.032, 0.072, 0.028, sg_glove, -0.042, 0.012, 0.018, rot_h=8, rot_p=6)
 
     def _eject_casing(self, is_left=False, is_shotgun=False):
-        """격발 시 좌/우 탄피 배출구에서 3D 황동 탄피 또는 12게이지 샷건 셸이 회전하며 튀어나오는 물리 효과 (오브젝트 풀 재사용)"""
-        cam_quat = self.camera.getQuat()
-        cam_right = cam_quat.getRight()
-        cam_fwd = cam_quat.getForward()
-        cam_up = cam_quat.getUp()
-
-        side_sign = -1.0 if is_left else 1.0
-        eject_pos = self.camera.getPos() + cam_fwd * 0.65 + cam_right * (side_sign * 0.22 * (1.0 - self.ads_alpha) + side_sign * 0.05) - cam_up * 0.16
-
-        v_right = random.uniform(2.4, 3.6) * side_sign
-        v_up = random.uniform(1.8, 2.8)
-        v_fwd = random.uniform(-0.8, -0.3)
-        initial_vel = cam_right * v_right + cam_up * v_up + cam_fwd * v_fwd
-
-        spin = Vec3(
-            random.uniform(600, 1400) * side_sign,
-            random.uniform(400, 1000),
-            random.uniform(300, 800)
-        )
-
-        c = self.casing_pool[self.casing_cursor]
-        self.casing_cursor = (self.casing_cursor + 1) % len(self.casing_pool)
-
-        c["pos"] = Vec3(eject_pos)
-        c["vel"] = initial_vel
-        c["rot"] = Vec3(random.uniform(0, 360), random.uniform(0, 360), 0)
-        c["spin"] = spin
-        c["life"] = 1.4
-        c["active"] = True
-
-        c["node"].setPos(eject_pos)
-        c["node"].setHpr(c["rot"])
-        if is_shotgun:
-            c["node"].setScale(1.4, 1.4, 1.4)
-            c["cube"].setColorScale(0.85, 0.15, 0.15, 1.0)  # Red 12-gauge shotshell
-        else:
-            c["node"].setScale(1.0, 1.0, 1.0)
-            c["cube"].setColorScale(0.92, 0.76, 0.24, 1.0)  # Brass 9mm casing
-        c["node"].show()
+        """Eject from the moving weapon port in world-root coordinates."""
+        weapon = 'SHOTGUN' if is_shotgun else self.current_weapon
+        side = -1 if weapon == 'DUAL_PISTOL' and is_left else 1
+        profiles = {
+            'PISTOL': ('recoil_node', (.040, .040, .055), (2.2, 3.2), (1.2, 2.0), (-.5, -.1)),
+            'DUAL_PISTOL': ('dual_left_recoil' if is_left else 'dual_right_recoil',
+                            (.030 * side, .045, .045), (2.0, 3.0), (1.2, 1.8), (-.4, -.1)),
+            'AR': ('ar_recoil_node', (.042, .050, .038), (2.4, 3.4), (1.4, 2.2), (-.3, .2)),
+            'SHOTGUN': ('sg_recoil_node', (.045, .040, .035), (1.8, 2.6), (1.0, 1.8), (-.6, -.2)),
+        }
+        node_name, port, sideways, upwards, forwards = profiles[weapon]
+        node = getattr(self, node_name)
+        position = self.world_root.getRelativePoint(node, Vec3(*port))
+        right = self.world_root.getRelativeVector(node, Vec3(side, 0, 0)).normalized()
+        up = self.world_root.getRelativeVector(node, Vec3(0, 0, 1)).normalized()
+        forward = self.world_root.getRelativeVector(node, Vec3(0, 1, 0)).normalized()
+        velocity = (right * random.uniform(*sideways) + up * random.uniform(*upwards)
+                    + forward * random.uniform(*forwards))
+        self.casing_effects.emit(weapon, position, velocity, is_left=side < 0)
 
     def _spawn_barrel_smoke(self, offset_x=0.0, offset_y=0.0):
         """격발 직후 총구 및 약실에서 피어오르는 반투명 화약 가스 연기 (오브젝트 풀 재사용)"""
@@ -1507,6 +1468,27 @@ class CombatSystem:
 
         return is_crit, is_dead, did_hit
 
+    def _reset_weapon_recoil(self):
+        self.weapon_recoil.reset()
+        self.recoil_timer = 0.0
+        for name in ('recoil_node', 'dual_left_recoil', 'dual_right_recoil',
+                     'ar_recoil_node', 'sg_recoil_node'):
+            node = getattr(self, name, None)
+            if node is not None and not node.isEmpty():
+                node.setPos(0, 0, 0)
+                node.setHpr(0, 0, 0)
+
+    def _show_muzzle_flash(self, flash, is_overcharge=False):
+        variants = flash.getChildren()
+        chosen = random.randrange(len(variants))
+        for index, variant in enumerate(variants):
+            variant.show() if index == chosen else variant.hide()
+        flash.setR(random.uniform(0, 360))
+        size = random.uniform(.85, 1.1) * (1.1 if is_overcharge else 1.0)
+        size *= 1.0 - .35 * self.ads_alpha
+        flash.setScale(size, size * random.uniform(.85, 1.15), size)
+        flash.show()
+
     def shoot(self, monsters, player=None, game_state="PLAYING", hazard_barrels=None):
         """다양한 총기(권총, 아킴보 쌍권총, 12게이지 샷건) 사격 및 레이캐스트 적중 판정"""
         if game_state != "PLAYING" or self.is_reloading or self.shoot_cooldown > 0.0:
@@ -1551,7 +1533,11 @@ class CombatSystem:
             cd *= bs_stats.get("cooldown_mult", 0.65)  # 탄환 폭풍 퍽 활성화 시 연사 속도 극대화
         self.shoot_cooldown = cd
         self.recoil_timer = cfg["recoil_time"]
-        self.muzzle_timer = 0.05
+        self.weapon_recoil.kick(self.current_weapon, left=self.dual_hand_toggle == 1)
+        if player and hasattr(player, 'add_weapon_recoil'):
+            strength = RECOIL_PROFILES[self.current_weapon][4] * (1.0 - .35 * self.ads_alpha)
+            player.add_weapon_recoil(strength, random.uniform(-.08, .08) * strength)
+        self.muzzle_timer = 0.035 if self.current_weapon == "SHOTGUN" else 0.025
 
         cam_quat = self.camera.getQuat()
         cam_fwd = cam_quat.getForward()
@@ -1569,9 +1555,7 @@ class CombatSystem:
             self._spawn_barrel_smoke()
 
             if hasattr(self, 'muzzle_flash_geom') and not self.muzzle_flash_geom.isEmpty():
-                self.muzzle_flash_geom.setR(random.uniform(0, 360))
-                self.muzzle_flash_geom.setScale(random.uniform(1.0, 1.4) * (1.35 if is_overcharge else 1.0))
-                self.muzzle_flash_geom.show()
+                self._show_muzzle_flash(self.muzzle_flash_geom, is_overcharge)
             if is_overcharge:
                 self.muzzle_light.setColor((1.4, 4.0, 5.2, 1.0))
             else:
@@ -1585,10 +1569,6 @@ class CombatSystem:
                     self.audio_mgr.play_magnum_shot()
                 else:
                     self.audio_mgr.play_gunshot()
-
-            if player and hasattr(player, 'pitch'):
-                player.pitch += random.uniform(0.60, 0.90)
-                player.heading += random.uniform(-0.12, 0.12)
 
             if hasattr(self, 'muzzle_flash_geom') and not self.muzzle_flash_geom.isEmpty():
                 muzzle_world = self.muzzle_flash_geom.getPos(self.render)
@@ -1604,16 +1584,14 @@ class CombatSystem:
                 self.slide_timer_left = self.slide_blowback_duration
                 self._eject_casing(is_left=True, is_shotgun=False)
                 if hasattr(self, 'dual_left_flash_geom') and not self.dual_left_flash_geom.isEmpty():
-                    self.dual_left_flash_geom.setR(random.uniform(0, 360))
-                    self.dual_left_flash_geom.show()
+                    self._show_muzzle_flash(self.dual_left_flash_geom, is_overcharge)
                 self.render.setLight(self.dual_left_flash_light_np)
                 muzzle_world = self.dual_left_flash_geom.getPos(self.render) if (hasattr(self, 'dual_left_flash_geom') and not self.dual_left_flash_geom.isEmpty()) else (cam_pos + cam_fwd * 0.70 - cam_right * 0.16 - cam_up * 0.16)
             else:
                 self.slide_timer_right = self.slide_blowback_duration
                 self._eject_casing(is_left=False, is_shotgun=False)
                 if hasattr(self, 'dual_right_flash_geom') and not self.dual_right_flash_geom.isEmpty():
-                    self.dual_right_flash_geom.setR(random.uniform(0, 360))
-                    self.dual_right_flash_geom.show()
+                    self._show_muzzle_flash(self.dual_right_flash_geom, is_overcharge)
                 self.render.setLight(self.dual_right_flash_light_np)
                 muzzle_world = self.dual_right_flash_geom.getPos(self.render) if (hasattr(self, 'dual_right_flash_geom') and not self.dual_right_flash_geom.isEmpty()) else (cam_pos + cam_fwd * 0.70 + cam_right * 0.16 - cam_up * 0.16)
 
@@ -1629,9 +1607,7 @@ class CombatSystem:
             self._spawn_barrel_smoke(offset_y=0.45)
 
             if hasattr(self, 'ar_muzzle_flash_geom') and not self.ar_muzzle_flash_geom.isEmpty():
-                self.ar_muzzle_flash_geom.setR(random.uniform(0, 360))
-                self.ar_muzzle_flash_geom.setScale(random.uniform(1.1, 1.45) * (1.35 if is_overcharge else 1.0))
-                self.ar_muzzle_flash_geom.show()
+                self._show_muzzle_flash(self.ar_muzzle_flash_geom, is_overcharge)
             if is_overcharge:
                 self.ar_muzzle_light.setColor((1.4, 3.8, 5.2, 1.0))
             else:
@@ -1646,11 +1622,6 @@ class CombatSystem:
                 else:
                     self.audio_mgr.play_gunshot()
 
-            if player and hasattr(player, 'pitch'):
-                # AR 연사 시 강력한 상단 총기 반동 및 탄퍼짐 요동
-                player.pitch += random.uniform(0.40, 0.70)
-                player.heading += random.uniform(-0.25, 0.25)
-
             if hasattr(self, 'ar_muzzle_flash_geom') and not self.ar_muzzle_flash_geom.isEmpty():
                 muzzle_world = self.ar_muzzle_flash_geom.getPos(self.render)
             else:
@@ -1662,9 +1633,7 @@ class CombatSystem:
             self._spawn_barrel_smoke(offset_y=0.45)
 
             if hasattr(self, 'sg_muzzle_flash_geom') and not self.sg_muzzle_flash_geom.isEmpty():
-                self.sg_muzzle_flash_geom.setR(random.uniform(0, 360))
-                self.sg_muzzle_flash_geom.setScale(random.uniform(1.2, 1.6) * (1.35 if is_overcharge else 1.0))
-                self.sg_muzzle_flash_geom.show()
+                self._show_muzzle_flash(self.sg_muzzle_flash_geom, is_overcharge)
             if is_overcharge:
                 self.sg_muzzle_light.setColor((1.5, 4.0, 5.5, 1.0))
             else:
@@ -1842,6 +1811,7 @@ class CombatSystem:
             self.hit_marker_timer = 1.8
             return
 
+        self._reset_weapon_recoil()
         self.is_reloading = True
         base_reload_time = cfg.get("reload_time", 1.30)
         player = getattr(self.base, 'player', None)
@@ -2013,7 +1983,7 @@ class CombatSystem:
         self.is_reloading = False
         self.reload_timer = 0.0
         self.shoot_cooldown = 0.0
-        self.recoil_timer = 0.0
+        self._reset_weapon_recoil()
         self.muzzle_timer = 0.0
         self.hit_marker_timer = 0.0
         self.hipfire_bloom = 0.0
@@ -2139,9 +2109,7 @@ class CombatSystem:
         for p in getattr(self, 'hit_particle_pool', []):
             p["active"] = False
             p["node"].hide()
-        for c in getattr(self, 'casing_pool', []):
-            c["active"] = False
-            c["node"].hide()
+        self.casing_effects.clear()
         for s in getattr(self, 'smoke_pool', []):
             s["active"] = False
             s["node"].hide()
@@ -2413,26 +2381,7 @@ class CombatSystem:
                     self.render.clearLight(self.sg_muzzle_light_np)
 
         # 3. 3D 탄피 물리 풀 갱신 (중력, 궤적, 지면 튕김, 회전)
-        for c in self.casing_pool:
-            if not c["active"]:
-                continue
-            c["life"] -= dt
-            if c["life"] <= 0.0:
-                c["active"] = False
-                c["node"].hide()
-                continue
-            c["vel"].z -= 9.8 * dt
-            c["pos"] += c["vel"] * dt
-            c["rot"] += c["spin"] * dt
-            if c["pos"].z <= 0.03:
-                c["pos"].z = 0.03
-                c["vel"].z = -c["vel"].z * 0.32
-                c["vel"].x *= 0.60
-                c["vel"].y *= 0.60
-                c["spin"] *= 0.65
-
-            c["node"].setPos(c["pos"])
-            c["node"].setHpr(c["rot"])
+        self.casing_effects.update(dt)
 
         # 4. 총구 잔여 가스 연기 풀 갱신 (열상승, 팽창, 페이드아웃)
         for s in self.smoke_pool:
@@ -2652,71 +2601,13 @@ class CombatSystem:
                 self.hit_marker_timer = 1.5
 
         # 7. 사격 반동 애니메이션
-        elif self.recoil_timer > 0.0:
-            self.recoil_timer -= dt
-            if self.current_weapon == "PISTOL":
-                t_norm = max(0.0, self.recoil_timer / 0.18)
-                recoil_dist = 0.08 if not self.is_aiming else 0.038
-                recoil_deg = 22.0 if not self.is_aiming else 11.0
-                if hasattr(self, 'recoil_node') and not self.recoil_node.isEmpty():
-                    self.recoil_node.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.45) * t_norm)
-                    self.recoil_node.setP(recoil_deg * t_norm)
-                    self.recoil_node.setR(0)
-
-            elif self.current_weapon == "DUAL_PISTOL":
-                t_norm = max(0.0, self.recoil_timer / 0.065)
-                recoil_dist = 0.045 if not self.is_aiming else 0.022
-                recoil_deg = 7.5 if not self.is_aiming else 3.8
-                # 직전에 격발된 손에 반동 적용
-                if self.dual_hand_toggle == 0:  # 방금 우측 격발
-                    if hasattr(self, 'dual_right_recoil') and not self.dual_right_recoil.isEmpty():
-                        self.dual_right_recoil.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.35) * t_norm)
-                        self.dual_right_recoil.setP(recoil_deg * t_norm)
-                        self.dual_right_recoil.setR(-3.0 * t_norm)
-                else:  # 방금 좌측 격발
-                    if hasattr(self, 'dual_left_recoil') and not self.dual_left_recoil.isEmpty():
-                        self.dual_left_recoil.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.35) * t_norm)
-                        self.dual_left_recoil.setP(recoil_deg * t_norm)
-                        self.dual_left_recoil.setR(3.0 * t_norm)
-
-            elif self.current_weapon == "AR":
-                t_norm = max(0.0, self.recoil_timer / 0.075)
-                recoil_dist = 0.055 if not self.is_aiming else 0.026
-                recoil_deg = 14.0 if not self.is_aiming else 5.8
-                if hasattr(self, 'ar_recoil_node') and not self.ar_recoil_node.isEmpty():
-                    self.ar_recoil_node.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.30) * t_norm)
-                    self.ar_recoil_node.setP(recoil_deg * t_norm)
-                    self.ar_recoil_node.setR(-2.0 * t_norm)
-
-            elif self.current_weapon == "SHOTGUN":
-                t_norm = max(0.0, self.recoil_timer / 0.18)
-                recoil_dist = 0.10 if not self.is_aiming else 0.048
-                recoil_deg = 20.0 if not self.is_aiming else 9.5
-                if hasattr(self, 'sg_recoil_node') and not self.sg_recoil_node.isEmpty():
-                    self.sg_recoil_node.setPos(0, -recoil_dist * t_norm, (recoil_dist * 0.35) * t_norm)
-                    self.sg_recoil_node.setP(recoil_deg * t_norm)
-                    self.sg_recoil_node.setR(4.0 * t_norm)
         else:
-            if hasattr(self, 'recoil_node') and not self.recoil_node.isEmpty():
-                self.recoil_node.setPos(0, 0, 0)
-                self.recoil_node.setP(0)
-                self.recoil_node.setR(0)
-            if hasattr(self, 'dual_left_recoil') and not self.dual_left_recoil.isEmpty():
-                self.dual_left_recoil.setPos(0, 0, 0)
-                self.dual_left_recoil.setP(0)
-                self.dual_left_recoil.setR(0)
-            if hasattr(self, 'dual_right_recoil') and not self.dual_right_recoil.isEmpty():
-                self.dual_right_recoil.setPos(0, 0, 0)
-                self.dual_right_recoil.setP(0)
-                self.dual_right_recoil.setR(0)
-            if hasattr(self, 'ar_recoil_node') and not self.ar_recoil_node.isEmpty():
-                self.ar_recoil_node.setPos(0, 0, 0)
-                self.ar_recoil_node.setP(0)
-                self.ar_recoil_node.setR(0)
-            if hasattr(self, 'sg_recoil_node') and not self.sg_recoil_node.isEmpty():
-                self.sg_recoil_node.setPos(0, 0, 0)
-                self.sg_recoil_node.setP(0)
-                self.sg_recoil_node.setR(0)
+            self.recoil_timer = max(0.0, self.recoil_timer - dt)
+            for name, (back, lift, pitch, roll) in self.weapon_recoil.update(dt, self.ads_alpha).items():
+                node = getattr(self, name, None)
+                if node is not None and not node.isEmpty():
+                    node.setPos(0, back, lift)
+                    node.setHpr(0, pitch, roll)
 
         # 피격/알림 타이머
         if self.hit_marker_timer > 0.0:
@@ -2769,7 +2660,7 @@ class CombatSystem:
             self.vm_dual_right.setPos(cur_pos_r)
             self.vm_dual_right.setHpr(cur_hpr_r)
 
-        # (3) 5.56mm AR ADS (홀로그래픽 도트 사이트와 중앙 시안색 레티클 정렬)
+        # (3) 5.56mm AR ADS (가늠자 홈과 가늠쇠 끝을 화면 중앙에 정렬)
         if hasattr(self, 'vm_ar') and self.vm_ar and not self.vm_ar.isEmpty():
             cur_pos_ar = self.ads_hip_pos_ar * (1.0 - self.ads_alpha) + self.ads_aim_pos_ar * self.ads_alpha
             cur_hpr_ar = Vec3(1.2, 0.6, -0.6) * (1.0 - self.ads_alpha)

@@ -1,9 +1,56 @@
 import math
+import random
 from panda3d.core import (NodePath, CardMaker, Geom, GeomNode, GeomTriangles,
-                         GeomVertexData, GeomVertexFormat, GeomVertexWriter)
+                         GeomVertexData, GeomVertexFormat, GeomVertexWriter,
+                         TransparencyAttrib)
 
 _UNIT_CUBE = None
 _ROUND_MESHES = {}
+
+
+def make_muzzle_flash_to(parent, width, length, px, py, pz):
+    """Prebuild four sparse, tapered flame variants along the barrel's +Y axis.
+
+    Dimensions live in vertices, so per-shot root scaling cannot replace them
+    with a metre-sized primitive. Transparent edges leave gaps between jets.
+    """
+    root = parent.attachNewNode('muzzle_flame')
+    root.setPos(px, py, pz)
+    root.setLightOff()
+    root.setTwoSided(True)
+    root.setTransparency(TransparencyAttrib.MAlpha)
+    root.setDepthWrite(False)
+    for variant in range(4):
+        rng = random.Random(491 + variant)
+        data = GeomVertexData('flame', GeomVertexFormat.getV3c4(), Geom.UHStatic)
+        vertices = GeomVertexWriter(data, 'vertex')
+        colors = GeomVertexWriter(data, 'color')
+        triangles = GeomTriangles(Geom.UHStatic)
+        for jet in range(5):
+            angle = jet * math.tau / 5 + rng.uniform(-.4, .4)
+            radius = width * rng.uniform(.27, .50)
+            reach = length * rng.uniform(.55, 1.0)
+            # Each flame is a narrow, asymmetric ribbon with a warm core.
+            points = [(radius * .32, reach * .30), (0, 0),
+                      (radius * .55, reach * .12), (radius, reach * .48),
+                      (radius * .60, reach), (radius * .12, reach * .58),
+                      (-radius * .12, reach * .15)]
+            first = vertices.getWriteRow()
+            for index, (radial, forward) in enumerate(points):
+                vertices.addData3(math.cos(angle) * radial, forward,
+                                  math.sin(angle) * radial)
+                colors.addData4(*((1.0, .87, .44, .82) if index == 0
+                                  else (1.0, .29, .035, 0.0)))
+            for edge in range(1, len(points)):
+                triangles.addVertices(first, first + edge,
+                                      first + (edge + 1 if edge < len(points)-1 else 1))
+        geom = Geom(data)
+        geom.addPrimitive(triangles)
+        node = GeomNode(f'flame_variant_{variant}')
+        node.addGeom(geom)
+        root.attachNewNode(node).hide()
+    root.hide()
+    return root
 
 
 def _get_round_mesh(shape, axis='z'):

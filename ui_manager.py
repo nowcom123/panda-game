@@ -640,11 +640,11 @@ class UIManager:
             **self.font_kw
         )
 
-        # 5. 우하단 플레이어 상태 HUD (HP, 스테미나, EXP, 유물, 퍽 배지) - 고가독성 스케일 & 통일 정렬
+        # 5. 좌하단 플레이어 상태 HUD (HP, 스테미나, EXP, 유물, 퍽 배지) - 고가독성 스케일 & 통일 정렬
         # 5-1. 체력바
         self.icon_hp = OnscreenImage(
             image="assets/ui/icon_health.png",
-            pos=(1.05, 0, -0.340),
+            pos=(-1.65, 0, -0.340),
             scale=0.034,
             parent=self.base.aspect2d
         )
@@ -653,7 +653,7 @@ class UIManager:
 
         self.bar_frame_hp = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(1.38, 0, -0.340),
+            pos=(-1.32, 0, -0.340),
             scale=(0.28, 1, 0.025),
             parent=self.base.aspect2d
         )
@@ -662,7 +662,7 @@ class UIManager:
 
         self.bar_fill_hp = OnscreenImage(
             image="assets/ui/bar_hp_fill.png",
-            pos=(1.38, 0, -0.340),
+            pos=(-1.32, 0, -0.340),
             scale=(0.27, 1, 0.019),
             parent=self.base.aspect2d
         )
@@ -671,11 +671,11 @@ class UIManager:
 
         self.hp_text = OnscreenText(
             text="HP  100 / 100",
-            pos=(1.66, -0.310),
+            pos=(-1.60, -0.310),
             scale=0.030,
             fg=(0.25, 1.0, 0.45, 1.0),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ARight,
+            align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
@@ -683,7 +683,7 @@ class UIManager:
         # 5-2. 스테미나바
         self.icon_stamina = OnscreenImage(
             image="assets/ui/icon_stamina.png",
-            pos=(1.05, 0, -0.415),
+            pos=(-1.65, 0, -0.415),
             scale=0.034,
             parent=self.base.aspect2d
         )
@@ -692,7 +692,7 @@ class UIManager:
 
         self.bar_frame_stamina = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(1.38, 0, -0.415),
+            pos=(-1.32, 0, -0.415),
             scale=(0.28, 1, 0.025),
             parent=self.base.aspect2d
         )
@@ -701,7 +701,7 @@ class UIManager:
 
         self.bar_fill_stamina = OnscreenImage(
             image="assets/ui/bar_stamina_fill.png",
-            pos=(1.38, 0, -0.415),
+            pos=(-1.32, 0, -0.415),
             scale=(0.27, 1, 0.019),
             parent=self.base.aspect2d
         )
@@ -710,11 +710,11 @@ class UIManager:
 
         self.stamina_text = OnscreenText(
             text="STM  100%",
-            pos=(1.66, -0.385),
+            pos=(-1.60, -0.385),
             scale=0.030,
             fg=(0.35, 0.95, 0.5, 0.95),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ARight,
+            align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
@@ -722,7 +722,7 @@ class UIManager:
         # 5-3. 경험치바
         self.icon_exp = OnscreenImage(
             image="assets/ui/icon_exp.png",
-            pos=(1.05, 0, -0.490),
+            pos=(-1.65, 0, -0.490),
             scale=0.034,
             parent=self.base.aspect2d
         )
@@ -731,7 +731,7 @@ class UIManager:
 
         self.bar_frame_exp = OnscreenImage(
             image="assets/ui/bar_frame.png",
-            pos=(1.38, 0, -0.490),
+            pos=(-1.32, 0, -0.490),
             scale=(0.28, 1, 0.025),
             parent=self.base.aspect2d
         )
@@ -740,7 +740,7 @@ class UIManager:
 
         self.bar_fill_exp = OnscreenImage(
             image="assets/ui/bar_exp_fill.png",
-            pos=(1.38, 0, -0.490),
+            pos=(-1.32, 0, -0.490),
             scale=(0.27, 1, 0.019),
             parent=self.base.aspect2d
         )
@@ -749,11 +749,11 @@ class UIManager:
 
         self.exp_text = OnscreenText(
             text="[LV. 1] EXP  0 / 100",
-            pos=(1.66, -0.460),
+            pos=(-1.60, -0.460),
             scale=0.030,
             fg=(0.85, 0.70, 1.0, 1.0),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ARight,
+            align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
@@ -761,7 +761,7 @@ class UIManager:
         # 5-4. 유물 배지
         self.icon_relic = OnscreenImage(
             image="assets/ui/icon_relic.png",
-            pos=(1.05, 0, -0.550),
+            pos=(-1.65, 0, -0.550),
             scale=0.032,
             parent=self.base.aspect2d
         )
@@ -770,11 +770,11 @@ class UIManager:
 
         self.relic_badge_text = OnscreenText(
             text="[보유 유물] 없음",
-            pos=(1.66, -0.560),
+            pos=(-1.60, -0.560),
             scale=0.028,
             fg=(0.95, 0.75, 1.0, 1.0),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ARight,
+            align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
@@ -782,11 +782,11 @@ class UIManager:
         # 5-5. 로그라이크 전술 퍽 배지 목록
         self.perk_badge_text = OnscreenText(
             text="[장착 퍽] 없음",
-            pos=(1.66, -0.610),
+            pos=(-1.60, -0.610),
             scale=0.026,
             fg=(0.35, 0.90, 1.0, 1.0),
             shadow=(0, 0, 0, 1.0),
-            align=TextNode.ARight,
+            align=TextNode.ALeft,
             mayChange=True,
             **self.font_kw
         )
@@ -1817,7 +1817,7 @@ class UIManager:
 
     def update_stamina(self, stamina, max_stamina, is_sprinting=False, is_exhausted=False):
         pct = max(0.0, min(1.0, stamina / max(1.0, max_stamina)))
-        self._set_bar_percentage(self.bar_fill_stamina, pct, 1.38, -0.415, 0.28, 0.025)
+        self._set_bar_percentage(self.bar_fill_stamina, pct, -1.32, -0.415, 0.28, 0.025)
 
         stamina_pct = int(pct * 100)
         if is_exhausted:
@@ -1839,7 +1839,7 @@ class UIManager:
 
     def update_hp_exp(self, hp, max_hp, exp, exp_to_next, level=1, stat_points=0, pending_perks=0):
         pct_hp = max(0.0, min(1.0, hp / max(1.0, max_hp)))
-        self._set_bar_percentage(self.bar_fill_hp, pct_hp, 1.38, -0.340, 0.28, 0.025)
+        self._set_bar_percentage(self.bar_fill_hp, pct_hp, -1.32, -0.340, 0.28, 0.025)
         msg_hp = f"HP  {int(hp)} / {int(max_hp)}"
         if msg_hp != self._cached_hp_str:
             self.hp_text.setText(msg_hp)
@@ -1852,7 +1852,7 @@ class UIManager:
             self._cached_hp_str = msg_hp
 
         pct_exp = max(0.0, min(1.0, exp / max(1.0, exp_to_next)))
-        self._set_bar_percentage(self.bar_fill_exp, pct_exp, 1.38, -0.490, 0.28, 0.025)
+        self._set_bar_percentage(self.bar_fill_exp, pct_exp, -1.32, -0.490, 0.28, 0.025)
         perk_tag = f"  ★ [퍽 선택 가능({pending_perks})] ★" if pending_perks > 0 else ""
         msg_exp = f"[LV.{level}] EXP  {int(exp)} / {int(exp_to_next)}{perk_tag}"
         if msg_exp != self._cached_exp_str:

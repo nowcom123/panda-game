@@ -16,6 +16,7 @@ from ui_manager import FloatingDamageItem, FloatingDamageManager, UIManager
 from combat_system import CombatSystem, WEAPON_CONFIGS
 from player_controller import PlayerController
 from audio_system import AudioManager
+from weapon_recoil import WeaponRecoil
 
 
 class CombatHUDFeaturesTests(unittest.TestCase):
@@ -356,6 +357,7 @@ class CombatHUDFeaturesTests(unittest.TestCase):
     def test_weapon_cycling_and_switching(self):
         """무기 순환(Q / 휠) 및 직접 스왑 검증"""
         combat = CombatSystem.__new__(CombatSystem)
+        combat.weapon_recoil = WeaponRecoil()
         combat.current_weapon = "PISTOL"
         combat.max_ammo = 7
         combat.ammo = 7
@@ -406,8 +408,8 @@ class CombatHUDFeaturesTests(unittest.TestCase):
         # Verify panel_hud_top is not an active attribute
         self.assertFalse(hasattr(ui, "panel_hud_top"))
 
-    def test_player_status_ui_in_bottom_right(self):
-        """플레이어 상태 UI (HP, 스테미나, EXP, 유물, 퍽 배지)가 좌상단에서 우하단(x > 0, z < 0)으로 이동되었는지 검증"""
+    def test_player_status_ui_in_bottom_left(self):
+        """플레이어 상태 UI (HP, 스테미나, EXP, 유물, 퍽 배지)가 좌하단(x < 0, z < 0)으로 이동되었는지 검증"""
         ui = UIManager.__new__(UIManager)
         ui.base = SimpleNamespace(aspect2d=NodePath("dummy_aspect2d"))
         ui.font_kw = {}
@@ -418,7 +420,7 @@ class CombatHUDFeaturesTests(unittest.TestCase):
         ui._cached_exp_str = ""
         ui._cached_door_str = ""
 
-        # Test _set_bar_percentage anchor tracking in bottom right
+        # Test _set_bar_percentage anchor tracking in bottom left
         bar_calls = []
         def track_set_bar(fill_img, pct, cx, cz, hw, hh):
             bar_calls.append((cx, cz))
@@ -428,8 +430,8 @@ class CombatHUDFeaturesTests(unittest.TestCase):
         ui.stamina_text = Mock()
         ui.update_stamina(80, 100)
         self.assertEqual(len(bar_calls), 1)
-        self.assertGreater(bar_calls[0][0], 1.0)  # x in right quadrant (cx > 1.0)
-        self.assertLess(bar_calls[0][1], 0.0)     # z in bottom quadrant (cz < 0.0)
+        self.assertLess(bar_calls[0][0], -1.0)  # x in left quadrant (cx < -1.0)
+        self.assertLess(bar_calls[0][1], 0.0)   # z in bottom quadrant (cz < 0.0)
 
         ui.bar_fill_hp = Mock()
         ui.hp_text = Mock()
@@ -437,11 +439,11 @@ class CombatHUDFeaturesTests(unittest.TestCase):
         ui.exp_text = Mock()
         ui.update_hp_exp(100, 100, 50, 100)
         self.assertEqual(len(bar_calls), 3)
-        # HP anchor in bottom-right
-        self.assertGreater(bar_calls[1][0], 1.0)
+        # HP anchor in bottom-left
+        self.assertLess(bar_calls[1][0], -1.0)
         self.assertLess(bar_calls[1][1], 0.0)
-        # EXP anchor in bottom-right
-        self.assertGreater(bar_calls[2][0], 1.0)
+        # EXP anchor in bottom-left
+        self.assertLess(bar_calls[2][0], -1.0)
         self.assertLess(bar_calls[2][1], 0.0)
 
     def test_ar_hk416_configuration(self):
