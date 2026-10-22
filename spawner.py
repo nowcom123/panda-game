@@ -8,9 +8,27 @@ from world_gen import cell_has_pillar
 from monster import (
     AbominableMudOrc, AlluringAshWitch,
     TallSkeletonMonster, LongBlackSerpent,
-    SkeletalDobermanHellhound
+    SkeletalDobermanHellhound, CableOverlordBoss
 )
 from interactive_objects import HazardBarrel, TacticalSupplyCrate
+
+
+MONSTER_BASE_COLLISION_RADII = {
+    TallSkeletonMonster: 0.40,
+    AbominableMudOrc: 0.45,
+    AlluringAshWitch: 0.38,
+    SkeletalDobermanHellhound: 0.35,
+    LongBlackSerpent: 0.38,
+    CableOverlordBoss: 0.55,
+}
+
+
+def get_monster_collision_radius(cls_or_instance, is_elite=False):
+    """생성 전/후 공유하는 몬스터 충돌 반경 조회 (정예 배율 1.25배 반영)"""
+    if hasattr(cls_or_instance, '__mro__'):
+        base_r = getattr(cls_or_instance, 'col_radius', MONSTER_BASE_COLLISION_RADII.get(cls_or_instance, 0.40))
+        return round(base_r * 1.25, 4) if is_elite else base_r
+    return getattr(cls_or_instance, 'col_radius', 0.40)
 
 
 def apply_elite_mutation(monster, game):
@@ -22,6 +40,7 @@ def apply_elite_mutation(monster, game):
     monster.is_elite = True
     if hasattr(monster, 'node') and not monster.node.isEmpty():
         monster.node.setScale(1.25)
+    monster.col_radius = round(getattr(monster, 'col_radius', 0.40) * 1.25, 4)
     monster.max_hp = int(monster.max_hp * 1.85)
     monster.hp = monster.max_hp
     monster.exp_value = getattr(monster, 'exp_value', 45) * 3
@@ -56,11 +75,16 @@ def apply_elite_mutation(monster, game):
     return monster
 
 
-def get_gate_corridor_candidates(escape_pos, min_dist=6.0, max_dist=32.0):
-    """탈출 관문 주변의 복도 셀 후보 좌표 목록 반환"""
+from world_gen import cell_has_pillar, check_line_of_sight
+from collision import get_nearby_colliders
+
+
+def get_gate_corridor_candidates(escape_pos, min_dist=10.0, max_dist=30.0):
+    """탈출 관문 주변 10~30m 복도 셀 후보 좌표 목록 반환"""
     if not escape_pos:
         return []
-    ex, ey = escape_pos
+    ex = getattr(escape_pos, 'x', escape_pos[0])
+    ey = getattr(escape_pos, 'y', escape_pos[1])
     min_cell = MAP_MIN_CHUNK * CHUNK_CELLS + 1
     max_cell = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS - 2
     cands = []
@@ -77,34 +101,200 @@ def get_gate_corridor_candidates(escape_pos, min_dist=6.0, max_dist=32.0):
     return cands
 
 
-def spawn_reinforcement_monster(game, pos=None, near_gate=True):
-    """관문 인근 또는 특정 위치에 증원 몬스터 단일 스폰"""
-    if len(game.monsters) >= 22:
+def is_spawn_position_safe(game, cx, cy, radius, px, py, pz=0.0, cam_h=0.0, hfov=96.0, wave_spawned_positions=None):
+    """관문 증원 출현 위치의 8가지 실시간 안전 조건 검증
+    1. 관문에서 10~30m
+    2. 플레이어에서 최소 12m 이상
+    3. 로드된 청크 안
+    4. 맵 경계 내
+    5. 기둥(Pillar) 셀 배제
+    6. 벽 및 관문 충돌체와 정예 반경을 포함한 몸체 중첩 배제
+    7. 기존 생존 몬스터 및 동일 웨이브 기선정 위치와 몸체 중첩 배제
+    8. 플레이어 수평 시야각(FOV) 안이고 가리지 않은 위치 배제 (벽 뒤 또는 시야각 밖 허용)
+    """
+    # 1. 관문 거리 10~30m
+    escape_pos = getattr(game, 'escape_pos', None)
+    if not escape_pos:
+        return False
+    ex = getattr(escape_pos, 'x', escape_pos[0])
+    ey = getattr(escape_pos, 'y', escape_pos[1])
+    dist_gate = math.hypot(cx - ex, cy - ey)
+    if not (10.0 <= dist_gate <= 30.0):
+        return False
+
+    # 2. 플레이어 거리 최소 12m
+    dist_player = math.hypot(cx - px, cy - py)
+    if dist_player < 12.0:
+        return False
+
+    # 3 & 4. 맵 경계 및 로드된 청크 검사
+    margin = radius + 0.2
+    min_bound = MAP_MIN_CHUNK * CHUNK_CELLS * CELL_SIZE + margin
+    max_bound = (MAP_MAX_CHUNK + 1) * CHUNK_CELLS * CELL_SIZE - margin
+    if not (min_bound <= cx <= max_bound and min_bound <= cy <= max_bound):
+        return False
+
+    cgx = int(math.floor(cx / CELL_SIZE))
+    cgy = int(math.floor(cy / CELL_SIZE))
+    chunk_coord = (cgx // CHUNK_CELLS, cgy // CHUNK_CELLS)
+    chunks = getattr(game, 'chunks', None)
+    if chunks is None or not isinstance(chunks, dict) or len(chunks) == 0:
+        return False
+    if chunk_coord not in chunks:
+        return False
+
+    # 5. 기둥 셀 배제
+    if cell_has_pillar(cgx, cgy):
+        return False
+
+    # 6. 벽 및 관문 충돌체 몸체 중첩 검사
+    nearby_cols = get_nearby_colliders(chunks, cx, cy, search_dist=radius + 0.6, curr_z=0.0)
+
+    for min_x, min_y, max_x, max_y in nearby_cols:
+        qx = max(min_x, min(cx, max_x))
+        qy = max(min_y, min(cy, max_y))
+        if (cx - qx)**2 + (cy - qy)**2 < radius**2:
+            return False
+
+    # 7. 기존 생존 몬스터 및 동일 웨이브 생성 위치 중첩 검사
+    for m in getattr(game, 'monsters', []):
+        if getattr(m, 'hp', 1) <= 0 or getattr(m, 'is_corpse', False):
+            continue
+        m_rad = getattr(m, 'col_radius', 0.40)
+        mx = getattr(m.pos, 'x', m.pos[0] if hasattr(m.pos, '__getitem__') else 0.0)
+        my = getattr(m.pos, 'y', m.pos[1] if hasattr(m.pos, '__getitem__') else 0.0)
+        if (cx - mx)**2 + (cy - my)**2 < (radius + m_rad)**2:
+            return False
+
+    if wave_spawned_positions:
+        for sx, sy, s_rad in wave_spawned_positions:
+            if (cx - sx)**2 + (cy - sy)**2 < (radius + s_rad)**2:
+                return False
+
+    # 8. FOV 및 벽 차폐(Line-of-Sight) 검사
+    rad = math.radians(cam_h)
+    fwd_x = -math.sin(rad)
+    fwd_y = math.cos(rad)
+    dx = cx - px
+    dy = cy - py
+    dist_p = math.hypot(dx, dy)
+    if dist_p < 1e-4:
+        return False
+    dir_x = dx / dist_p
+    dir_y = dy / dist_p
+    dot = max(-1.0, min(1.0, fwd_x * dir_x + fwd_y * dir_y))
+    angle_deg = math.degrees(math.acos(dot))
+    in_fov = (angle_deg <= (hfov * 0.5))
+
+    if in_fov:
+        # 시야각 안이면 반드시 벽 뒤(차폐)여야만 허용
+        # 플레이어-후보 사이 선분이 미로드 청크를 통과하는지 검사
+        steps = max(2, int(math.ceil(dist_p / (CELL_SIZE * 0.5))))
+        for s in range(steps + 1):
+            t = s / steps
+            sx = px + t * dx
+            sy = py + t * dy
+            sgx = int(math.floor(sx / CELL_SIZE))
+            sgy = int(math.floor(sy / CELL_SIZE))
+            sc = (sgx // CHUNK_CELLS, sgy // CHUNK_CELLS)
+            if sc not in chunks:
+                return False
+
+        mid_x = (px + cx) * 0.5
+        mid_y = (py + cy) * 0.5
+        segment_colliders = get_nearby_colliders(chunks, mid_x, mid_y, search_dist=dist_p * 0.5 + 2.0, curr_z=0.0)
+
+        if segment_colliders:
+            has_los = check_line_of_sight(px, py, cx, cy, segment_colliders)
+            if has_los:
+                # 벽에 가려지지 않고 직접 보이는 위치 -> 시야 내 급습 방지를 위해 제외
+                return False
+        else:
+            # 차단 충돌체가 전혀 없는 열린 공간에서 플레이어 시야 정면 -> 제외
+            return False
+
+    return True
+
+
+def spawn_reinforcement_monster(game, pos=None, near_gate=True, wave_spawned_positions=None, candidate_cache=None):
+    """안전 조건(거리·시야·충돌체)을 통과한 증원 몬스터 단일 스폰 (상한 16마리 준수, 임의 좌표 fallback 배제)"""
+    # 1. 생존 몬스터 상한(16마리, 보스 포함, 시체 제외) 검사
+    alive_monsters = [m for m in getattr(game, 'monsters', []) if getattr(m, 'hp', 1) > 0 and not getattr(m, 'is_corpse', False)]
+    if len(alive_monsters) >= 16:
         return None
 
-    if pos is None:
-        if near_gate:
-            cands = get_gate_corridor_candidates(getattr(game, 'escape_pos', None), min_dist=10.0, max_dist=30.0)
-            if cands:
-                pos = random.choice(cands)
-            else:
-                ex, ey = getattr(game, 'escape_pos', (0, 0))
-                pos = (ex + random.choice([-16, 16]), ey + random.choice([-16, 16]))
-        else:
-            px, py = game.camera.getX(), game.camera.getY()
-            pos = (px + random.choice([-22, 22]), py + random.choice([-22, 22]))
+    # 2. 플레이어 시점 및 FOV 정보 조회
+    px, py, pz = 0.0, 0.0, 0.0
+    cam_h = getattr(getattr(game, 'player', None), 'heading', 0.0)
+    hfov = getattr(game, 'base_fov', 96.0)
 
+    if hasattr(game, 'camera') and game.camera:
+        if hasattr(game.camera, 'getX'):
+            px, py, pz = game.camera.getX(), game.camera.getY(), game.camera.getZ()
+        if hasattr(game.camera, 'getH'):
+            try:
+                cam_h = game.camera.getH()
+            except Exception:
+                pass
+    elif hasattr(game, 'player') and hasattr(game.player, 'pos'):
+        px, py = game.player.pos.x, game.player.pos.y
+
+    if hasattr(game, 'camLens') and game.camLens and hasattr(game.camLens, 'getFov'):
+        try:
+            f = game.camLens.getFov()
+            hfov = f[0] if hasattr(f, '__getitem__') else f
+        except Exception:
+            pass
+
+    # 3. 몬스터 종 및 정예 여부 결정 (기존 가중치 28%, 26%, 18%, 8%, 20% 및 정예 20% 유지)
     types = [AbominableMudOrc, AlluringAshWitch, TallSkeletonMonster, LongBlackSerpent, SkeletalDobermanHellhound]
     weights = [0.28, 0.26, 0.18, 0.08, 0.20]
     cls = random.choices(types, weights=weights, k=1)[0]
+    is_elite = (random.random() < 0.20)
+    col_radius = get_monster_collision_radius(cls, is_elite=is_elite)
 
-    monster = cls(game.render, pos[0], pos[1])
-    stage_hp_mult = 1.0 + (game.current_stage - 1) * 0.25
+    # 4. 위치 결정
+    chosen_pos = None
+    if pos is not None:
+        if is_spawn_position_safe(game, pos[0], pos[1], col_radius, px, py, pz, cam_h, hfov, wave_spawned_positions):
+            chosen_pos = pos
+        else:
+            return None
+    else:
+        if near_gate:
+            if candidate_cache is not None:
+                cands = list(candidate_cache)
+            else:
+                cands = get_gate_corridor_candidates(getattr(game, 'escape_pos', None), min_dist=10.0, max_dist=30.0)
+        else:
+            cands = []
+
+        if not cands:
+            return None
+
+        # 후보들을 셔플하여 첫 번째 안전한 후보 선정
+        shuffled = list(cands)
+        random.shuffle(shuffled)
+        for cand in shuffled:
+            if is_spawn_position_safe(game, cand[0], cand[1], col_radius, px, py, pz, cam_h, hfov, wave_spawned_positions):
+                chosen_pos = cand
+                break
+
+    if chosen_pos is None:
+        # 안전한 후보가 없을 시 임의 좌표 강제 출현 없이 None 반환 (정상 실패 처리)
+        return None
+
+    # 5. 안전 위치에 실제 몬스터 모델 생성
+    render_node = getattr(game, 'render', None)
+    monster = cls(render_node, chosen_pos[0], chosen_pos[1])
+    stage = getattr(game, 'current_stage', 1)
+    stage_hp_mult = 1.0 + (stage - 1) * 0.25
     monster.max_hp = int(monster.max_hp * stage_hp_mult)
     monster.hp = monster.max_hp
-    if random.random() < 0.20:
+    if is_elite:
         apply_elite_mutation(monster, game)
-    game.monsters.append(monster)
+    if hasattr(game, 'monsters'):
+        game.monsters.append(monster)
     return monster
 
 

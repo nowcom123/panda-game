@@ -31,6 +31,7 @@ class FloatingDamageItem:
         self.node.setDepthWrite(False)
         self.node.setDepthTest(False)
         self.node.setLightOff()
+        self.node.setTransparency(TransparencyAttrib.MAlpha)
 
         self.text_node = TextNode("dmg_txt")
         if font:
@@ -38,7 +39,9 @@ class FloatingDamageItem:
         self.text_node.setAlign(TextNode.ACenter)
         self.text_node.setShadow(0.045, 0.045)
         self.text_node.setShadowColor(0.0, 0.0, 0.0, 0.95)
+        self.text_node.clearCard()
         self.text_np = self.node.attachNewNode(self.text_node)
+        self.text_np.setTransparency(TransparencyAttrib.MAlpha)
 
         self.pos = Vec3(0, 0, 0)
         self.vel_z = 2.0
@@ -76,9 +79,9 @@ class FloatingDamageItem:
             self.color = (0.35, 0.90, 1.0)
             self.base_scale = 0.38
         elif is_headshot:
-            self.text_node.setText(f"HEADSHOT {val}!")
-            self.color = (1.0, 0.85, 0.15)
-            self.base_scale = 0.54
+            self.text_node.setText(f"{val}")
+            self.color = (1.0, 0.15, 0.15)
+            self.base_scale = 0.52
         elif is_crit:
             self.text_node.setText(f"CRIT {val}!")
             self.color = (1.0, 0.30, 0.18)
@@ -126,6 +129,7 @@ class FloatingDamageManager:
     def __init__(self, render_root, pool_size=32, font=None):
         if hasattr(render_root, 'attachNewNode'):
             self.root = render_root.attachNewNode("floating_damage_root")
+            self.root.setTransparency(TransparencyAttrib.MAlpha)
             self.pool = [FloatingDamageItem(self.root, font=font) for _ in range(pool_size)]
         else:
             self.root = None
@@ -876,6 +880,18 @@ class UIManager:
         )
         self.door_status_text.hide()
 
+        self.gate_wave_status_text = OnscreenText(
+            text="",
+            pos=(0, 0.54),
+            scale=0.030,
+            fg=(1.0, 0.65, 0.2, 1.0),
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ACenter,
+            mayChange=True,
+            **self.font_kw
+        )
+        self.gate_wave_status_text.hide()
+
         # --- [ 거대 보스 전용 HP바 HUD (화면 최상단) ] ---
         self.boss_hud_frame = DirectFrame(
             parent=self.base.aspect2d,
@@ -1378,6 +1394,8 @@ class UIManager:
                 self.bar_fill_defense.hide()
             if hasattr(self, 'door_status_text') and self.door_status_text:
                 self.door_status_text.hide()
+            if hasattr(self, 'gate_wave_status_text') and self.gate_wave_status_text:
+                self.gate_wave_status_text.hide()
             if hasattr(self, 'panel_interact') and self.panel_interact:
                 self.panel_interact.hide()
             if hasattr(self, 'interact_prompt_text') and self.interact_prompt_text:
@@ -1853,7 +1871,7 @@ class UIManager:
 
         pct_exp = max(0.0, min(1.0, exp / max(1.0, exp_to_next)))
         self._set_bar_percentage(self.bar_fill_exp, pct_exp, -1.32, -0.490, 0.28, 0.025)
-        perk_tag = f"  ★ [퍽 선택 가능({pending_perks})] ★" if pending_perks > 0 else ""
+        perk_tag = f"  ★ [Tab/P] 퍽 선택({pending_perks}) ★" if pending_perks > 0 else ""
         msg_exp = f"[LV.{level}] EXP  {int(exp)} / {int(exp_to_next)}{perk_tag}"
         if msg_exp != self._cached_exp_str:
             self.exp_text.setText(msg_exp)
@@ -1896,6 +1914,22 @@ class UIManager:
             self.bar_frame_defense.hide()
             self.bar_fill_defense.hide()
 
+    def update_gate_wave_status(self, msg="", fg=None, show=True):
+        if not hasattr(self, 'gate_wave_status_text') or not self.gate_wave_status_text:
+            return
+        if show and msg:
+            if not self.gate_wave_status_text.isHidden() and msg == getattr(self, '_cached_gate_wave_str', None):
+                return
+            self.gate_wave_status_text.setText(msg)
+            self._cached_gate_wave_str = msg
+            if fg is not None:
+                self.gate_wave_status_text.setFg(fg)
+            self.gate_wave_status_text.show()
+        else:
+            if not self.gate_wave_status_text.isHidden():
+                self.gate_wave_status_text.hide()
+                self._cached_gate_wave_str = ""
+
     # --- 랭킹 입출력 관리 ---
     def load_rankings(self):
         if os.path.exists(self.rank_file):
@@ -1907,6 +1941,10 @@ class UIManager:
         return []
 
     def save_rank_record(self, result_type, success, time_elapsed, time_left, ammo_left, stage=1, reserve_ammo=0, max_ammo=12):
+        base_obj = getattr(self, 'base', None)
+        base_game = getattr(base_obj, 'game', base_obj) if base_obj else None
+        if base_game and getattr(base_game, 'is_test_mode', False):
+            return
         rec = {
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "stage": stage,
@@ -2314,7 +2352,7 @@ class UIManager:
 
         pending_str = f"  (남은 선택 기회: {pending_count}회)" if pending_count > 1 else ""
         self.shop_title.setText(f"[ ★ LEVEL UP : LV.{level} 전술 퍽 획득{pending_str} ★ ]")
-        self.shop_desc.setText("레벨업 달성! 전장에 적용할 전술 강화 퍽을 1장 선택하세요 (키보드 [1], [2], [3] 번호키 또는 마우스 클릭)")
+        self.shop_desc.setText("레벨업 달성! 전장에 적용할 전술 강화 퍽을 1장 선택하세요 (키보드 [1], [2], [3] 선택 / [ESC 또는 Tab] 닫기)")
         self.shop_msg_text.setText("원하는 퍽 카드를 1장 선택하세요 (선택 후 [전투 재개] 클릭 또는 [Enter]/[Space])")
         self.shop_msg_text.setFg((1.0, 0.85, 0.25, 1.0))
         self._refresh_owned_perks_label()
@@ -3344,10 +3382,13 @@ class UIManager:
             self.txt_sfx_val.setText(f"{int(round(sfx_v * 100))}%")
             self.txt_bgm_val.setText(f"{int(round(bgm_v * 100))}%")
 
-        lens = getattr(self.base, 'camLens', None)
-        if lens and hasattr(lens, 'getFov'):
-            fov = lens.getFov()[0]
-            self.txt_fov_val.setText(f"{int(fov)}°")
+        base_obj = getattr(self, 'base', None)
+        base_game = getattr(base_obj, 'game', base_obj) if base_obj else None
+        fov = getattr(base_obj, 'base_fov', getattr(base_game, 'base_fov', None))
+        if fov is None:
+            lens = getattr(self.base, 'camLens', None)
+            fov = lens.getFov()[0] if lens and hasattr(lens, 'getFov') else 96.0
+        self.txt_fov_val.setText(f"{int(round(fov))}°")
 
         self.pause_modal.show()
 
@@ -3381,12 +3422,21 @@ class UIManager:
                 self.pause_audio_mgr.set_bgm_volume(new_val)
             self.txt_bgm_val.setText(f"{int(round(new_val * 100))}%")
         elif setting_type == "fov":
-            lens = getattr(self.base, 'camLens', None)
-            cur = lens.getFov()[0] if lens and hasattr(lens, 'getFov') else 96.0
+            base_obj = getattr(self, 'base', None)
+            base_game = getattr(base_obj, 'game', base_obj) if base_obj else None
+            cur = getattr(base_obj, 'base_fov', getattr(base_game, 'base_fov', None))
+            if cur is None:
+                lens = getattr(self.base, 'camLens', None)
+                cur = lens.getFov()[0] if lens and hasattr(lens, 'getFov') else 96.0
             new_val = round(max(70.0, min(115.0, cur + delta)), 1)
+            if base_obj:
+                base_obj.base_fov = new_val
+            if base_game and base_game is not base_obj:
+                base_game.base_fov = new_val
+            lens = getattr(self.base, 'camLens', None)
             if lens and hasattr(lens, 'setFov'):
                 lens.setFov(new_val)
-            self.txt_fov_val.setText(f"{int(new_val)}°")
+            self.txt_fov_val.setText(f"{int(round(new_val))}°")
 
     def _on_pause_resume_clicked(self):
         if self.on_resume_callback:

@@ -86,8 +86,9 @@ class PlayerController:
         # 시선 회전각
         self.heading = 0.0
         self.pitch = 0.0
-        self.recoil_pitch = RecoilSpring(22.0, 2.5)
-        self.recoil_heading = RecoilSpring(26.0, .4)
+        self.recoil_pitch = RecoilSpring(18.0, 5.0)
+        self.recoil_heading = RecoilSpring(22.0, 1.2)
+        self.ar_recoil_hold_timer = 0.0
         self.mouse_locked = False
 
         # 스테미나
@@ -154,8 +155,8 @@ class PlayerController:
             "shift": 0
         }
 
-    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_inventory=None, on_quick_use=None, on_grenade=None, on_escape=None, on_interact=None, on_weapon_next=None, on_weapon_prev=None, on_weapon_select=None):
-        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 인벤토리, 퀵슬롯, 슬라이드, 수류탄, 상호작용, 무기교체)"""
+    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_inventory=None, on_quick_use=None, on_grenade=None, on_escape=None, on_interact=None, on_weapon_next=None, on_weapon_prev=None, on_weapon_select=None, on_perk_modal=None, on_tab=None):
+        """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 인벤토리, 퀵슬롯, 슬라이드, 수류탄, 상호작용, 무기교체, 퍽 모달)"""
         self.base.disableMouse()
         self.lock_mouse(True)
 
@@ -222,10 +223,20 @@ class PlayerController:
             for v_evt in ["v", "V", "shift-v", "shift-V"]:
                 self.base.accept(v_evt, on_weapon_select, ["SHOTGUN"])
 
-        # TAB / I 키 전술 인벤토리 열기/닫기 토글
+        # I 키 전술 인벤토리 열기/닫기 토글
         if on_inventory:
-            for inv_k in ["tab", "i", "I"]:
+            for inv_k in ["i", "I"]:
                 self.base.accept(inv_k, on_inventory)
+
+        # TAB 키: 전술 퍽(대기 중일 때) 또는 인벤토리 분기 핸들러
+        tab_handler = on_tab if on_tab else on_inventory
+        if tab_handler:
+            self.base.accept("tab", tab_handler)
+
+        # P / [ / ] 키 전술 퍽(Perk) 선택 모달 오픈
+        if on_perk_modal:
+            for p_k in ["p", "P", "[", "]"]:
+                self.base.accept(p_k, on_perk_modal)
 
         # 1, 2, 3, 4 인게임 전술 퀵슬롯 즉시 사용
         if on_quick_use:
@@ -561,9 +572,25 @@ class PlayerController:
         self.shake_timer = duration
         self.shake_intensity = intensity
 
-    def add_weapon_recoil(self, pitch, heading=0.0):
-        self.recoil_pitch.kick(pitch)
-        self.recoil_heading.kick(heading)
+    def add_weapon_recoil(self, pitch, heading=0.0, weapon=None, is_ads=False):
+        if weapon is None and hasattr(self, 'base') and self.base:
+            game = getattr(self.base, 'game', self.base)
+            cs = getattr(game, 'combat_system', None)
+            if cs:
+                weapon = getattr(cs, 'current_weapon', None)
+                if not is_ads:
+                    is_ads = getattr(cs, 'ads_alpha', 0.0) >= 0.5 or getattr(self, 'is_aiming', False)
+
+        if weapon == "AR" and is_ads:
+            # AR 조준사격 시: 플레이어가 마우스로 직접 당겨 제어할 수 있도록 앙각에 누적
+            self.recoil_pitch.position = min(self.recoil_pitch.limit, self.recoil_pitch.position + pitch)
+            self.recoil_pitch.velocity = 0.0
+            self.recoil_heading.position = max(-self.recoil_heading.limit, min(self.recoil_heading.limit, self.recoil_heading.position + heading))
+            self.recoil_heading.velocity = 0.0
+            self.ar_recoil_hold_timer = 0.16
+        else:
+            self.recoil_pitch.kick(pitch)
+            self.recoil_heading.kick(heading)
 
     def reset_position(self, x, y, z=PLAYER_EYE_HEIGHT, heading=0.0, pitch=0.0):
         """플레이어 위치 및 시선 초기화"""
@@ -577,6 +604,7 @@ class PlayerController:
         self.pitch = pitch
         self.recoil_pitch.reset()
         self.recoil_heading.reset()
+        self.ar_recoil_hold_timer = 0.0
         self.camera.setPos(x, y, z)
         self.camera.setHpr(heading, pitch, 0)
         self.stamina = self.max_stamina
@@ -602,7 +630,7 @@ class PlayerController:
 
         view_changed = False
 
-        # 1. 마우스 시선 제어
+        # 1. 마우스 시선 제어 및 반동 직접 제어(수동 상쇄)
         if self.mouse_locked and self.mouse_watcher and self.mouse_watcher.hasMouse():
             md = self.win.getPointer(0)
             center_x, center_y = self.win.getXSize() // 2, self.win.getYSize() // 2
@@ -612,20 +640,54 @@ class PlayerController:
 
             if delta_x != 0 or delta_y != 0:
                 mouse_sens = 0.13
-                self.heading -= delta_x * mouse_sens
-                self.pitch -= delta_y * mouse_sens
+                # 조준 사격(ADS) 시 미세 조준 및 안정적인 반동 제어를 위한 최적화 감도
+                if getattr(self, 'is_aiming', False):
+                    mouse_sens *= 0.88
+
+                # 1) 수직 반동(Pitch) 직접 제어: 마우스를 아래로 당길 때(delta_y > 0) 반동 앙각을 직접 상쇄/흡수
+                pitch_comp = delta_y * mouse_sens
+                if self.recoil_pitch.position > 0.0 and pitch_comp > 0.0:
+                    absorbed = min(self.recoil_pitch.position, pitch_comp)
+                    self.recoil_pitch.position -= absorbed
+                    self.recoil_pitch.velocity = min(0.0, self.recoil_pitch.velocity)
+                    pitch_comp -= absorbed
+                elif self.recoil_pitch.position < 0.0 and pitch_comp < 0.0:
+                    absorbed = min(abs(self.recoil_pitch.position), abs(pitch_comp))
+                    self.recoil_pitch.position += absorbed
+                    self.recoil_pitch.velocity = max(0.0, self.recoil_pitch.velocity)
+                    pitch_comp += absorbed
+                self.pitch -= pitch_comp
                 self.pitch = max(-89.0, min(89.0, self.pitch))
 
-                self.camera.setHpr(self.heading, self.pitch, 0)
+                # 2) 수평 반동(Heading) 직접 제어: 마우스 좌우 이동 시 좌우 킥 반동 상쇄/흡수
+                yaw_comp = delta_x * mouse_sens
+                if self.recoil_heading.position > 0.0 and yaw_comp > 0.0:
+                    absorbed_h = min(self.recoil_heading.position, yaw_comp)
+                    self.recoil_heading.position -= absorbed_h
+                    self.recoil_heading.velocity = min(0.0, self.recoil_heading.velocity)
+                    yaw_comp -= absorbed_h
+                elif self.recoil_heading.position < 0.0 and yaw_comp < 0.0:
+                    absorbed_h = min(abs(self.recoil_heading.position), abs(yaw_comp))
+                    self.recoil_heading.position += absorbed_h
+                    self.recoil_heading.velocity = max(0.0, self.recoil_heading.velocity)
+                    yaw_comp += absorbed_h
+                self.heading -= yaw_comp
+
                 self.win.movePointer(0, center_x, center_y)
                 view_changed = True
 
-        # 반동은 마우스로 정한 시선과 별도로 감쇠하므로 복귀 중에도 자유롭게 조준한다.
-        previous_recoil = (self.recoil_pitch.position, self.recoil_heading.position)
-        kick_pitch = self.recoil_pitch.update(dt)
-        kick_heading = self.recoil_heading.update(dt)
-        if previous_recoil != (kick_pitch, kick_heading):
+        # AR 조준사격 중일 때는 연사 중 반동이 유지되어 마우스로 직접 당겨 제어할 수 있음
+        if getattr(self, 'ar_recoil_hold_timer', 0.0) > 0.0:
+            self.ar_recoil_hold_timer = max(0.0, self.ar_recoil_hold_timer - dt)
+            kick_pitch = self.recoil_pitch.position
+            kick_heading = self.recoil_heading.position
             view_changed = True
+        else:
+            previous_recoil = (self.recoil_pitch.position, self.recoil_heading.position)
+            kick_pitch = self.recoil_pitch.update(dt)
+            kick_heading = self.recoil_heading.update(dt)
+            if previous_recoil != (kick_pitch, kick_heading):
+                view_changed = True
         camera_heading = self.heading + kick_heading
         camera_pitch = max(-89.0, min(89.0, self.pitch + kick_pitch))
 

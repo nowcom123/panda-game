@@ -89,10 +89,11 @@ class LiminalInfiniteLoop(ShowBase):
                 enable_fog=True
             )
 
-        # 1. 카메라 가시거리 및 안개 설정 (FOV 96도 쾌적한 와이드 시야각, 안개 투과 한계 65m로 절두체 최적화)
+        # 1. 카메라 가시거리 및 안개 설정 (기본 FOV 96도 쾌적한 와이드 시야각, 안개 투과 한계 65m로 절두체 최적화)
+        self.base_fov = 96.0
         if hasattr(self, 'camLens') and self.camLens is not None:
             self.camLens.setNearFar(0.15, 65.0)
-            self.camLens.setFov(96.0)
+            self.camLens.setFov(self.base_fov)
         self.rendered_chunk_count = 0
         self.total_chunk_count = 0
         self.light_cull_timer = 0.0
@@ -181,7 +182,9 @@ class LiminalInfiniteLoop(ShowBase):
             on_interact=self.handle_interaction,
             on_weapon_next=self.combat.next_weapon,
             on_weapon_prev=self.combat.prev_weapon,
-            on_weapon_select=self.combat.switch_weapon
+            on_weapon_select=self.combat.switch_weapon,
+            on_perk_modal=self.open_perk_modal,
+            on_tab=self.on_tab_pressed
         )
 
         # 7. 게임 상태 및 5분(300초) 타이머 설정
@@ -194,9 +197,6 @@ class LiminalInfiniteLoop(ShowBase):
         self.time_left = self.time_limit
         self.door_hold_timer = 5.0
         self.stage_banner_timer = 0.0
-        self.gate_alarm_level = 0
-        self.gate_reinforce_timer = 0.0
-        self.door_defense_spawn_timer = 0.0
         self.bullet_time_timer = 0.0
 
         # 보스 [케이블 엔티티: 심연의 지배자] 상태 관리
@@ -331,12 +331,55 @@ class LiminalInfiniteLoop(ShowBase):
     def reload_pistol(self):
         self.combat.reload(self.game_state)
 
+    def on_tab_pressed(self):
+        """[Tab] 키: 대기 퍽이 있으면 퍽 선택 모달, 없으면 전술 인벤토리 토글"""
+        if self.game_state == "PLAYING":
+            if getattr(self.player, 'pending_perk_picks', 0) > 0:
+                self.open_perk_modal()
+            else:
+                self.open_inventory()
+        elif self.game_state == "INVENTORY":
+            self.close_inventory()
+        elif self.game_state == "SHOP" and getattr(self, '_is_level_up_modal', False):
+            self.close_level_up_modal()
+
+    def open_perk_modal(self):
+        """[Tab], [P], 또는 [[] 키로 대기 중인 레벨업 전술 퍽 선택 모달 오픈"""
+        if self.game_state == "SHOP" and getattr(self, '_is_level_up_modal', False):
+            self.close_level_up_modal()
+            return
+        if self.game_state != "PLAYING":
+            return
+        if getattr(self.player, 'pending_perk_picks', 0) <= 0:
+            if hasattr(self.ui_mgr, 'show_hit_marker'):
+                self.ui_mgr.show_hit_marker("[ 퍽 선택 포인트가 없습니다 ]", (0.8, 0.8, 0.8, 1.0))
+            return
+        self._trigger_level_up_modal()
+
+    def close_level_up_modal(self):
+        """레벨업 퍽 선택 창 닫기 및 전투 복귀 (선택하지 않은 퍽 포인트는 보존)"""
+        if self.game_state != "SHOP" or not getattr(self, '_is_level_up_modal', False):
+            return
+        self._is_level_up_modal = False
+        self.game_state = "PLAYING"
+        self.ui_mgr.hide_stage_clear_shop()
+        self.ui_mgr.start_game_ui()
+        self.player.lock_mouse(True)
+        self.ui_mgr.update_hp_exp(
+            self.player.hp, self.player.max_hp, self.player.exp, self.player.exp_to_next,
+            level=self.player.level, pending_perks=self.player.pending_perk_picks
+        )
+        if hasattr(self, 'monster_director') and hasattr(self.monster_director, 'gate_wave_mgr'):
+            self.monster_director.gate_wave_mgr.refresh_hud()
+
     def toggle_inventory(self):
-        """[Tab] 또는 [I] 키로 전술 인벤토리 배낭 창 토글"""
+        """[I] 키로 전술 인벤토리 배낭 창 직접 토글"""
         if self.game_state == "PLAYING":
             self.open_inventory()
         elif self.game_state == "INVENTORY":
             self.close_inventory()
+        elif self.game_state == "SHOP" and getattr(self, '_is_level_up_modal', False):
+            self.close_level_up_modal()
 
     def open_inventory(self):
         """전술 인벤토리 오픈 및 마우스 잠금 해제, 게임 루프 일시정지"""
@@ -345,6 +388,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.game_state = "INVENTORY"
         self.player.lock_mouse(False)
         self.combat.stop_aim()
+        if hasattr(self, 'ui_mgr') and self.ui_mgr and hasattr(self.ui_mgr, 'update_gate_wave_status'):
+            self.ui_mgr.update_gate_wave_status(show=False)
         self.audio_mgr.play_inventory_toggle(True)
         self.ui_mgr.show_inventory(
             player=self.player,
@@ -362,13 +407,17 @@ class LiminalInfiniteLoop(ShowBase):
         self.player.lock_mouse(True)
         self.audio_mgr.play_inventory_toggle(False)
         self._update_quickslot_hud()
+        if hasattr(self, 'monster_director') and hasattr(self.monster_director, 'gate_wave_mgr'):
+            self.monster_director.gate_wave_mgr.refresh_hud()
         if getattr(self.player, 'pending_perk_picks', 0) > 0:
             self._on_player_level_up()
 
     def handle_escape(self):
-        """[ESC] 키 입력 처리: 인벤토리 열려있으면 닫기, 일시정지/설정 메뉴 토글, 테스트 모드면 인트로 복귀"""
+        """[ESC] 키 입력 처리: 인벤토리/퍽 모달 열려있으면 닫기, 일시정지/설정 메뉴 토글, 테스트 모드면 인트로 복귀"""
         if self.game_state == "INVENTORY":
             self.close_inventory()
+        elif self.game_state == "SHOP" and getattr(self, '_is_level_up_modal', False):
+            self.close_level_up_modal()
         elif self.game_state == "PAUSED":
             self.resume_game()
         elif self.game_state == "PLAYING":
@@ -385,6 +434,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.game_state = "PAUSED"
         self.player.lock_mouse(False)
         self.combat.stop_aim()
+        if hasattr(self, 'ui_mgr') and self.ui_mgr and hasattr(self.ui_mgr, 'update_gate_wave_status'):
+            self.ui_mgr.update_gate_wave_status(show=False)
         if hasattr(self, 'audio_mgr') and self.audio_mgr:
             self.audio_mgr.play_inventory_toggle(True)
         self.ui_mgr.show_pause_menu(
@@ -406,6 +457,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.player.lock_mouse(True)
         if hasattr(self, 'audio_mgr') and self.audio_mgr:
             self.audio_mgr.play_inventory_toggle(False)
+        if hasattr(self, 'monster_director') and hasattr(self.monster_director, 'gate_wave_mgr'):
+            self.monster_director.gate_wave_mgr.refresh_hud()
 
     def trigger_stage_clear(self):
         """스테이지 클리어 시 작전 전투 결과 보고서(AAR) 표시 후 특성 퍽 상점으로 전환"""
@@ -497,6 +550,11 @@ class LiminalInfiniteLoop(ShowBase):
         if hasattr(self.ui_mgr, 'set_bullet_time_hud'):
             self.ui_mgr.set_bullet_time_hud(False)
 
+        if hasattr(self, 'monster_director') and hasattr(self.monster_director, 'gate_wave_mgr'):
+            self.monster_director.gate_wave_mgr.reset()
+        if hasattr(self, 'ui_mgr') and self.ui_mgr and hasattr(self.ui_mgr, 'update_gate_wave_status'):
+            self.ui_mgr.update_gate_wave_status(show=False)
+
         # 테스트 모드 활성 상태 정리
         if getattr(self, 'is_test_mode', False):
             self.test_range.cleanup_test_room()
@@ -534,6 +592,10 @@ class LiminalInfiniteLoop(ShowBase):
 
     def start_test_mode(self):
         """테스트 모드: 넓은 대형 시험장 룸, 5종 전 몬스터가 정지 상태로 대기 (자유 관찰 및 사격 테스트)"""
+        if hasattr(self, 'monster_director') and hasattr(self.monster_director, 'gate_wave_mgr'):
+            self.monster_director.gate_wave_mgr.reset()
+        if hasattr(self, 'ui_mgr') and self.ui_mgr and hasattr(self.ui_mgr, 'update_gate_wave_status'):
+            self.ui_mgr.update_gate_wave_status(show=False)
         self.test_range.start_test_mode()
 
     def _build_test_room(self):
@@ -546,10 +608,13 @@ class LiminalInfiniteLoop(ShowBase):
 
     def _on_f5_pressed(self):
         """[F5] 키 입력 시 테스트 모드 몬스터 즉시 재소환"""
-        self.test_range.on_f5_pressed()
+        if getattr(self, 'is_test_mode', False):
+            self.test_range.on_f5_pressed()
 
     def _on_f6_spawn_boss(self):
         """[F6] 단축키: 보스 [케이블 엔티티: 심연의 지배자] 즉시 소환 (테스트 및 개발용)"""
+        if not getattr(self, 'is_test_mode', False):
+            return
         px, py = self.camera.getX(), self.camera.getY()
         h_rad = math.radians(getattr(self.player, 'heading', 0.0))
         bx = px - math.sin(h_rad) * 9.0
@@ -650,6 +715,10 @@ class LiminalInfiniteLoop(ShowBase):
 
     def restart_game(self):
         """던전 게임 초기화 (체력, 몬스터 군단, 5분 타이머, 탈출구)"""
+        if getattr(self, 'is_test_mode', False):
+            if hasattr(self, 'test_range') and self.test_range:
+                self.test_range.cleanup_test_room()
+            self.is_test_mode = False
         self.clear_projectiles()
         gc.collect(1) # 유휴 타이밍에 메모리 수거로 인게임 프레임 드랍 차단
         self.game_over = False
@@ -718,9 +787,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.setup_escape_portal()
 
         # 관문 접근 경보 및 증원 상태 리셋
-        self.gate_alarm_level = 0
-        self.gate_reinforce_timer = 0.0
-        self.door_defense_spawn_timer = 0.0
+        if hasattr(self, 'monster_director') and hasattr(self.monster_director, 'gate_wave_mgr'):
+            self.monster_director.gate_wave_mgr.reset()
 
         # 다중 몬스터 군단 스폰 (관문 주변 수호 몬스터 집중 배치)
         self.spawn_monsters(self.current_stage)
@@ -778,9 +846,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.setup_escape_portal()
 
         # 관문 접근 경보 및 증원 상태 리셋
-        self.gate_alarm_level = 0
-        self.gate_reinforce_timer = 0.0
-        self.door_defense_spawn_timer = 0.0
+        if hasattr(self, 'monster_director') and hasattr(self.monster_director, 'gate_wave_mgr'):
+            self.monster_director.gate_wave_mgr.reset()
 
         # 다중 몬스터 군단 재배치 (관문 주변 수호 몬스터 집중 배치)
         self.spawn_monsters(self.current_stage)
@@ -808,27 +875,25 @@ class LiminalInfiniteLoop(ShowBase):
         self.stage_banner_timer = 3.0
 
     def on_shop_closed(self):
-        """스탯 분배 및 상점 완료 후 다음 스테이지 진입"""
+        """스탯 분배 및 상점 완료 후 다음 스테이지 진입 (대기 중인 퍽이 있으면 선택 모달 제시)"""
         self.advance_to_next_stage()
         self.game_state = "PLAYING"
         self.ui_mgr.start_game_ui()
         self.player.lock_mouse(True)
         if getattr(self.player, 'pending_perk_picks', 0) > 0:
-            self._on_player_level_up()
+            self._trigger_level_up_modal()
 
     def _on_player_level_up(self):
-        """플레이어 레벨업 시 전술 퍽(Perk) 3-Card 선택 모달 호출"""
+        """플레이어 레벨업 시 알림 메시지 표시 (전투 중 강제 팝업 방지, 대기 포인트 누적)"""
         if self.game_over or self.game_won:
             return
-        if self.game_state == "INVENTORY":
-            # 인벤토리 열려있을 때는 닫힌 후 처리
-            return
-        if self.game_state == "SHOP" or getattr(self, '_is_level_up_modal', False):
-            return
-        if self.game_state != "PLAYING":
-            return
-
-        self._trigger_level_up_modal()
+        lvl = getattr(self.player, 'level', 1)
+        cnt = getattr(self.player, 'pending_perk_picks', 1)
+        if hasattr(self.ui_mgr, 'show_hit_marker'):
+            self.ui_mgr.show_hit_marker(
+                f"★ [ LEVEL UP : LV.{lvl} ] 퍽 포인트 +1 획득! [Tab] 또는 [P] 키로 퍽 선택 ★",
+                (1.0, 0.90, 0.25, 1.0)
+            )
 
     def _trigger_level_up_modal(self):
         """레벨업 퍽 선택 창 활성화 및 게임 일시정지"""
@@ -877,17 +942,27 @@ class LiminalInfiniteLoop(ShowBase):
 
     def _on_f7_grant_exp(self):
         """[F7] 단축키: 즉시 100 EXP 획득 (레벨업 및 전술 퍽 선택 테스트용)"""
-        if getattr(self, 'is_test_mode', False) or self.game_state == "PLAYING":
+        if getattr(self, 'is_test_mode', False):
             self.player.gain_exp(100)
             if hasattr(self.ui_mgr, 'show_hit_marker'):
-                self.ui_mgr.show_hit_marker("[ F7: +100 EXP 획득! ]", (0.35, 1.0, 0.65, 1.0))
+                self.ui_mgr.show_hit_marker("[ F7: +100 EXP 획득! [Tab/P] 키로 퍽 선택 ]", (0.35, 1.0, 0.65, 1.0))
 
     def _on_f8_test_elemental(self):
         """[F8] 단축키: 원소 피해 효과(화염 지속 피해 & 전기 감전 아크) 테스트 및 특성 즉시 부여"""
-        if not hasattr(self.player, 'acquired_perks') or self.player.acquired_perks is None:
-            self.player.acquired_perks = set()
-        self.player.acquired_perks.add("dragons_breath")
-        self.player.acquired_perks.add("tesla_arc")
+        if not getattr(self, 'is_test_mode', False):
+            return
+        if hasattr(self, 'player') and self.player:
+            for perk_id in ("dragons_breath", "tesla_arc"):
+                has_it = False
+                if hasattr(self.player, 'has_perk'):
+                    has_it = self.player.has_perk(perk_id)
+                elif hasattr(self.player, 'perks'):
+                    has_it = perk_id in self.player.perks
+                if not has_it:
+                    if hasattr(self.player, 'add_perk'):
+                        self.player.add_perk(perk_id, combat_system=getattr(self, 'combat', None))
+                    elif hasattr(self.player, 'perks'):
+                        self.player.perks.add(perk_id)
 
         target_m = None
         min_d = 999.0
@@ -946,7 +1021,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.ui_mgr.show_victory(f"비상 탈출구를 열고 악몽의 미궁을 탈출했습니다!\n[소요 시간: {elapsed:.1f}초  |  남은 탄약: {self.combat.ammo}/12발]")
         self.player.lock_mouse(False)
 
-        self.ui_mgr.save_rank_record("탈출 성공", True, elapsed, remaining, self.combat.ammo, self.current_stage, self.combat.reserve_ammo)
+        if not getattr(self, 'is_test_mode', False):
+            self.ui_mgr.save_rank_record("탈출 성공", True, elapsed, remaining, self.combat.ammo, self.current_stage, self.combat.reserve_ammo)
 
     def trigger_game_over(self, killer=None, reason="killed"):
         """사망 또는 시간 초과 시 게임 오버"""
@@ -996,7 +1072,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.ui_mgr.show_game_over(desc)
         self.player.lock_mouse(False)
 
-        self.ui_mgr.save_rank_record(res_desc, False, elapsed, remaining, self.combat.ammo, self.current_stage, self.combat.reserve_ammo)
+        if not getattr(self, 'is_test_mode', False):
+            self.ui_mgr.save_rank_record(res_desc, False, elapsed, remaining, self.combat.ammo, self.current_stage, self.combat.reserve_ammo)
 
     # --- 탈출구 및 스폰 계산 ---
     def regenerate_map(self):
@@ -1104,9 +1181,9 @@ class LiminalInfiniteLoop(ShowBase):
         return chunk_created
 
     # --- 몬스터 AI 제어 (MonsterDirector 위임) ---
-    def _update_monsters(self, dt, px, py):
+    def _update_monsters(self, dt, px, py, raw_dt=None):
         """몬스터 집단 AI, 스킬, 충돌, 사운드, 시체 파편 갱신 (MonsterDirector 위임)"""
-        return self.monster_director.update_monsters(dt, px, py)
+        return self.monster_director.update_monsters(dt, px, py, raw_dt=raw_dt)
 
     def _update_projectiles(self, dt, px, py, pz):
         """파이어볼 비행/벽체 및 플레이어 피격 충돌, 땅울림 분진 갱신"""
@@ -1172,6 +1249,7 @@ class LiminalInfiniteLoop(ShowBase):
 
         return False
 
+
     def _update_door_defense(self, dt, px, py):
         """탈출 관문 앞 3.8m 방어 판정 (EscapePortalManager 위임)"""
         return self.portal_mgr.update_door_defense(dt, px, py)
@@ -1180,6 +1258,25 @@ class LiminalInfiniteLoop(ShowBase):
     def update(self, task):
         raw_dt = min(0.1, globalClock.getDt())
         cont = task.cont if task is not None else 1
+
+        dt = raw_dt
+
+        # 1. 인트로 시네마틱 카메라 회전
+        if self.game_state == "INTRO":
+            t = globalClock.getFrameTime()
+            cam_x = 45.0 + math.sin(t * 0.12) * 38.0
+            cam_y = 45.0 + math.cos(t * 0.12) * 38.0
+            self.camera.setPos(cam_x, cam_y, 11.5)
+            self.camera.lookAt(45.0, 45.0, 1.5)
+            self.update_chunks()
+            return cont
+
+        # 2. 상점, 인벤토리, 일시정지, 결과보고서 모달 상태 시 월드 엔티티 정지 (불릿타임 잔여시간 보존)
+        if self.game_state in ("SHOP", "INVENTORY", "PAUSED", "AAR"):
+            if hasattr(self, 'ui_mgr') and self.ui_mgr and hasattr(self.ui_mgr, 'update_gate_wave_status'):
+                self.ui_mgr.update_gate_wave_status(show=False)
+            self.ui_mgr.update(dt)
+            return cont
 
         # 0. 불릿 타임 (시간 감속) 연산: 몬스터 및 월드 발사체 속도를 0.35x로 감속 (플레이어는 실시간 유지)
         if self.bullet_time_timer > 0.0:
@@ -1196,28 +1293,15 @@ class LiminalInfiniteLoop(ShowBase):
         if self.audio_mgr:
             self.audio_mgr.update_bullet_time(raw_dt)
 
-        dt = raw_dt
-
-        # 1. 인트로 시네마틱 카메라 회전
-        if self.game_state == "INTRO":
-            t = globalClock.getFrameTime()
-            cam_x = 45.0 + math.sin(t * 0.12) * 38.0
-            cam_y = 45.0 + math.cos(t * 0.12) * 38.0
-            self.camera.setPos(cam_x, cam_y, 11.5)
-            self.camera.lookAt(45.0, 45.0, 1.5)
-            self.update_chunks()
-            return cont
-
-        # 2. 상점, 인벤토리, 일시정지, 결과보고서 모달 상태 시 월드 엔티티 정지
-        if self.game_state in ("SHOP", "INVENTORY", "PAUSED", "AAR"):
-            self.ui_mgr.update(dt)
-            return cont
-
         # 3. 승리 및 게임 오버 상태 처리
         if self.game_won or self.game_state == "VICTORY":
+            if hasattr(self, 'ui_mgr') and self.ui_mgr and hasattr(self.ui_mgr, 'update_gate_wave_status'):
+                self.ui_mgr.update_gate_wave_status(show=False)
             return cont
 
         if self.game_over or self.game_state == "GAME_OVER":
+            if hasattr(self, 'ui_mgr') and self.ui_mgr and hasattr(self.ui_mgr, 'update_gate_wave_status'):
+                self.ui_mgr.update_gate_wave_status(show=False)
             self.ui_mgr.update(dt, player_pos=(self.camera.getX(), self.camera.getY()), camera_heading=getattr(self.player, 'heading', 0.0))
             if self.killer_monster is not None:
                 killer = self.killer_monster
@@ -1240,7 +1324,7 @@ class LiminalInfiniteLoop(ShowBase):
         # 6. 괴물 군단 AI 및 공격 판정 (불릿 타임 시 0.35x world_dt 적용)
         px, py = self.camera.getX(), self.camera.getY()
         pz = self.camera.getZ()
-        game_ended, closest_dist = self._update_monsters(world_dt, px, py)
+        game_ended, closest_dist = self._update_monsters(world_dt, px, py, raw_dt=raw_dt)
         if game_ended:
             return cont
 

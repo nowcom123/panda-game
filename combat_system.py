@@ -55,7 +55,7 @@ WEAPON_CONFIGS = {
         "recoil_time": 0.060,
         "recoil_deg": 7.5,
         "reload_time": 2.50,
-        "description": "34발 대용량(양손 17발x2). 9mm 파라블럼 탄을 사용하는 듀얼 글록의 압도적인 양손 탄막 사격."
+        "description": "34발 대용량(양손 17발x2). 9mm 파라블럼 탄을 사용하는 듀얼 글록. 빠른 단발 클릭으로 뿜어져 나오는 양손 속사 화력."
     },
     "AR": {
         "id": "AR",
@@ -71,8 +71,8 @@ WEAPON_CONFIGS = {
         "ads_spread": 0.008,
         "recoil_time": 0.075,
         "recoil_deg": 14.0,
-        "reload_time": 2.10,
-        "description": "30발 탄창. 5.56x45mm NATO. 단행정 가스 피스톤 방식을 채용한 독일 H&K사의 하이엔드 돌격소총 HK416. 분당 730발 초고속 연사 화력."
+        "reload_time": 3.20,
+        "description": "30발 탄창. 5.56x45mm NATO. 단행정 가스 피스톤 방식을 채용한 독일 H&K사의 하이엔드 돌격소총 HK416. 분당 730발 초고속 연사 화력(재장전 지연 3.2s)."
     },
     "SHOTGUN": {
         "id": "SHOTGUN",
@@ -1080,11 +1080,11 @@ class CombatSystem:
         """단일 펠릿/탄환에 대한 레이캐스트, 적중 판정, 트레이서 생성 및 대미지 처리"""
         ray_origin = self.camera.getPos()
         chunks = getattr(self.base, 'chunks', {})
-        wall_dist, wall_hit_pos = raycast_walls(chunks, ray_origin, ray_dir, max_dist=55.0)
+        wall_dist, wall_hit_pos = raycast_walls(chunks, ray_origin, ray_dir, max_dist=65.0)
 
         closest_monster = None
         closest_barrel = None
-        min_hit_dist = wall_dist
+        min_hit_dist = wall_dist if wall_hit_pos is not None else 65.0
 
         if hazard_barrels:
             for b in hazard_barrels:
@@ -1423,7 +1423,7 @@ class CombatSystem:
                     if p_idx == 0:
                         self.ui_mgr.show_hit_marker("[◆ 도탄 사격 적중!] RICOCHET!", (0.3, 0.9, 1.0, 1.0))
         else:
-            tracer_dist = 55.0
+            tracer_dist = 65.0
             impact_world = ray_origin + ray_dir * tracer_dist
 
         # 오버차지 고폭 플라즈마 소이탄 착탄 시 폭발
@@ -1536,8 +1536,17 @@ class CombatSystem:
         self.recoil_timer = cfg["recoil_time"]
         self.weapon_recoil.kick(self.current_weapon, left=self.dual_hand_toggle == 1)
         if player and hasattr(player, 'add_weapon_recoil'):
-            strength = RECOIL_PROFILES[self.current_weapon][4] * (1.0 - .35 * self.ads_alpha)
-            player.add_weapon_recoil(strength, random.uniform(-.08, .08) * strength)
+            if self.current_weapon == "AR":
+                # AR 조준사격 시 반동 소폭 강화 (안정적이고 쾌적한 수동 제어)
+                strength = RECOIL_PROFILES["AR"][4] * (1.0 + 0.65 * self.ads_alpha)
+                yaw_kick = random.uniform(-0.14, 0.14) * strength
+            else:
+                strength = RECOIL_PROFILES[self.current_weapon][4] * (1.0 - .35 * self.ads_alpha)
+                yaw_kick = random.uniform(-.08, .08) * strength
+            try:
+                player.add_weapon_recoil(strength, yaw_kick, weapon=self.current_weapon, is_ads=(self.ads_alpha >= 0.5))
+            except TypeError:
+                player.add_weapon_recoil(strength, yaw_kick)
         self.muzzle_timer = 0.035 if self.current_weapon == "SHOTGUN" else 0.025
 
         cam_quat = self.camera.getQuat()
@@ -1689,8 +1698,8 @@ class CombatSystem:
             self.hipfire_bloom = min(max_bloom, getattr(self, 'hipfire_bloom', 0.0) + bloom_add)
 
         if self.current_weapon == "AR":
-            kick_bloom = 1.30
-            shake_mag = 0.055
+            kick_bloom = 1.10 * (1.0 + 0.25 * self.ads_alpha)
+            shake_mag = 0.036 * (1.0 + 0.35 * self.ads_alpha)
         elif self.current_weapon == "PISTOL":
             kick_bloom = 1.10
             shake_mag = 0.045
@@ -1833,7 +1842,7 @@ class CombatSystem:
         elif self.current_weapon == "DUAL_PISTOL":
             status_msg = "9mm 듀얼 글록 양손 탄창 동시 교체 중... (장전 지연 2.5s)"
         elif self.current_weapon == "AR":
-            status_msg = "5.56mm 돌격소총 탄창 교체 및 노리쇠 전진 중... (장전 2.1s)"
+            status_msg = f"5.56mm HK416 탄창 교체 및 노리쇠 전진 중... (장전 {base_reload_time:.1f}s)"
         else:
             status_msg = ".50 매그넘 대구경 탄창 교체 중..."
         self.ui_mgr.show_hit_marker(status_msg, (0.9, 0.9, 0.9, 1.0))
@@ -2202,9 +2211,9 @@ class CombatSystem:
         self.is_moving = is_moving
         self.is_sprinting = is_sprinting
 
-        # 풀오토 연사 지원 (AR 및 듀얼 글록: 좌클릭 유지 시 연속 격발)
+        # 풀오토 연사 지원 (AR 전용: 좌클릭 유지 시 연속 격발 / 권총 및 아킴보는 단발 클릭 격발)
         if hasattr(self.base, 'mouseWatcherNode') and self.base.mouseWatcherNode and self.base.mouseWatcherNode.isButtonDown(MouseButton.one()):
-            if self.current_weapon in ("AR", "DUAL_PISTOL") and self.shoot_cooldown <= 0.0 and not self.is_reloading:
+            if self.current_weapon == "AR" and self.shoot_cooldown <= 0.0 and not self.is_reloading:
                 game_inst = getattr(self.base, 'game', None) or self.base
                 monsters = getattr(game_inst, 'monsters', [])
                 player = getattr(game_inst, 'player', None)
@@ -2675,10 +2684,12 @@ class CombatSystem:
             self.vm_shotgun.setPos(cur_pos_sg)
             self.vm_shotgun.setHpr(cur_hpr_sg)
 
-        # 카메라 FOV 줌 (기본 96도 쾌적한 와이드 시야각 -> 정밀조준 시 80도로 자연스럽게 확대) + 불릿타임 시 광각 시간왜곡 워프 (+6.5도)
+        # 카메라 FOV 줌 (사용자 기본 FOV -> 정밀조준 시 기본 FOV * (80 / 96)로 자연스럽게 확대) + 불릿타임 시 광각 시간왜곡 워프 (+6.5도)
         if hasattr(self.base, 'camLens') and self.base.camLens:
-            cur_fov = 96.0 * (1.0 - self.ads_alpha) + 80.0 * self.ads_alpha
             game_inst = getattr(self.base, 'game', None) or self.base
+            base_fov = getattr(self.base, 'base_fov', getattr(game_inst, 'base_fov', 96.0))
+            ads_fov = base_fov * (80.0 / 96.0)
+            cur_fov = base_fov * (1.0 - self.ads_alpha) + ads_fov * self.ads_alpha
             if getattr(game_inst, 'bullet_time_timer', 0.0) > 0.0:
                 cur_fov += 6.5
             self.base.camLens.setFov(cur_fov)

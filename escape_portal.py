@@ -17,7 +17,6 @@ class EscapePortalManager:
     def __init__(self, game):
         self.game = game
         self.door_lamps = []
-        self.door_defense_spawn_timer = 0.0
 
     def setup_escape_portal(self):
         """4방향 완전 대칭형 비상탈출문 벙커 챔버 생성 (동서남북 4개 사분면 균등 확률 무작위 스폰)"""
@@ -60,6 +59,8 @@ class EscapePortalManager:
             escape_pos = (spawn_x + math.cos(rnd_ang) * rnd_d, spawn_y + math.sin(rnd_ang) * rnd_d)
 
         self.game.escape_pos = escape_pos
+        if hasattr(self.game, 'monster_director') and hasattr(self.game.monster_director, 'gate_wave_mgr'):
+            self.game.monster_director.gate_wave_mgr.on_gate_changed()
 
         if hasattr(self.game, 'escape_portal_np') and self.game.escape_portal_np:
             self.game.escape_portal_np.removeNode()
@@ -154,13 +155,6 @@ class EscapePortalManager:
             if int(progress_sec) != int(5.0 - max(0.0, old_timer)):
                 if hasattr(self.game, 'audio_mgr') and self.game.audio_mgr:
                     self.game.audio_mgr.play_door_alarm()
-
-            # 관문 개방 시도 중 괴물 긴급 유입 (2.0초마다 추가 괴물 증원)
-            self.door_defense_spawn_timer += dt
-            if self.door_defense_spawn_timer >= 2.0:
-                self.door_defense_spawn_timer = 0.0
-                if len(self.game.monsters) < 18:
-                    self.game.spawn_reinforcement_monster(near_gate=True)
 
             pct = max(0.0, min(1.0, progress_sec / 5.0))
             bars = int(pct * 16)

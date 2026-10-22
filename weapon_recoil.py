@@ -37,7 +37,7 @@ class RecoilSpring:
 RECOIL_PROFILES = {
     'PISTOL': (9.0, .048, .6, 26.0, .80),
     'DUAL_PISTOL': (5.0, .026, 1.2, 38.0, .22),
-    'AR': (4.5, .030, .45, 32.0, .45),
+    'AR': (3.4, .022, .32, 30.0, .32),
     'SHOTGUN': (10.0, .062, 1.0, 24.0, 1.0),
 }
 
@@ -57,7 +57,12 @@ class WeaponRecoil:
     def update(self, dt, ads_alpha):
         poses = {}
         for node, (spring, weapon, left) in self.channels.items():
-            amount = spring.update(dt) * (1.0 - .55 * max(0, min(1, ads_alpha)))
+            if weapon == 'AR':
+                # AR 조준사격 시 반동 소폭 강화 (부드럽고 쾌적한 뷰모델 제어)
+                ads_factor = 1.0 + 0.35 * max(0.0, min(1.0, ads_alpha))
+            else:
+                ads_factor = 1.0 - .55 * max(0.0, min(1.0, ads_alpha))
+            amount = spring.update(dt) * ads_factor
             pitch, travel, roll, _, _ = RECOIL_PROFILES[weapon]
             poses[node] = (-travel * amount, travel * .25 * amount,
                            pitch * amount, roll * amount * (1 if left else -1))

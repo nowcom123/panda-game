@@ -21,6 +21,7 @@ from monster import (
     AbominableMudOrc, AlluringAshWitch,
     SkeletalDobermanHellhound, CableOverlordBoss
 )
+from gate_wave import GateWaveManager, GateWaveConfig
 
 
 class MonsterDirector:
@@ -28,8 +29,9 @@ class MonsterDirector:
 
     def __init__(self, game):
         self.game = game
+        self.gate_wave_mgr = GateWaveManager(game)
 
-    def update_monsters(self, dt: float, px: float, py: float):
+    def update_monsters(self, dt: float, px: float, py: float, raw_dt: float = None):
         """매 프레임 몬스터들의 AI, 스킬, 충돌, 사운드, 시체 파편 갱신 (반환: is_game_over, closest_dist)"""
         g = self.game
         pz = getattr(g.camera, 'getZ', lambda: PLAYER_EYE_HEIGHT)()
@@ -107,7 +109,7 @@ class MonsterDirector:
         closest_dist = 999.0
         g.frame_count = getattr(g, 'frame_count', 0) + 1
         stage_mult = 1.0 + (g.current_stage - 1) * 0.15
-        if g.blackout_active:
+        if getattr(g, 'blackout_active', False):
             stage_mult *= 1.25  # 정전 프로토콜: 몬스터 이동속도 25% 가속 (폭주 상태)
 
         # 관문 거리 계산 및 관문 접근 시 몬스터 가속 / 긴급 증원 트리거
@@ -119,35 +121,13 @@ class MonsterDirector:
             prox_factor = max(0.0, min(1.0, (50.0 - dist_gate) / 50.0))
             stage_mult *= (1.0 + prox_factor * 0.45)
 
-        # [관문 접근 1단계 경보 (45m 이내)] 몬스터 집결 및 2마리 즉시 증원
-        if dist_gate <= 45.0 and getattr(g, 'gate_alarm_level', 0) < 1:
-            g.gate_alarm_level = 1
-            g.audio_mgr.play_door_alarm()
-            g.ui_mgr.show_stage_banner("[ ! 경고: 탈출 관문 구역 접근 감지 ! ]\n주변 괴물들이 탈출구를 봉쇄하기 위해 몰려옵니다!", color=(1.0, 0.65, 0.1, 1.0))
-            g.stage_banner_timer = 3.0
-            for _ in range(2):
-                g.spawn_reinforcement_monster(near_gate=True)
-
-        # [관문 접근 2단계 경보 (25m 이내)] 대규모 긴급 증원 (3마리 추가 급습)
-        if dist_gate <= 25.0 and getattr(g, 'gate_alarm_level', 0) < 2:
-            g.gate_alarm_level = 2
-            g.audio_mgr.play_door_alarm()
-            g.ui_mgr.show_stage_banner("[ ! 비상: 관문 수호 방어선 진입 ! ]\n대규모 괴물 무리가 총공격을 시작합니다!", color=(1.0, 0.2, 0.2, 1.0))
-            g.stage_banner_timer = 3.5
-            for _ in range(3):
-                g.spawn_reinforcement_monster(near_gate=True)
-
-        # [관문 주변 지속 유입] 관문 32m 이내에 머무는 동안 4초마다 괴물 지속 보충
-        if dist_gate <= 32.0:
-            g.gate_reinforce_timer = getattr(g, 'gate_reinforce_timer', 0.0) + dt
-            if g.gate_reinforce_timer >= 4.0:
-                g.gate_reinforce_timer = 0.0
-                if len(g.monsters) < 16:
-                    g.spawn_reinforcement_monster(near_gate=True)
-
         # [Stage 3: 심연의 지배자 보스 출현] 3스테이지 이상에서 관문 38m 접근 시 보스 각성
         if g.current_stage >= 3 and not g.boss_spawned and dist_gate <= 38.0:
             g.spawn_boss()
+
+        # [단일 관문 증원 웨이브 제어] 45m 이내 단일 웨이브 관리자 갱신 (raw_dt 유지)
+        wave_dt = raw_dt if raw_dt is not None else dt
+        self.gate_wave_mgr.update(wave_dt, px, py)
 
         for m in g.monsters[:]:
             if getattr(m, 'hp', 1) <= 0:
@@ -181,10 +161,6 @@ class MonsterDirector:
                             g.item_drops.append(drop)
                 g.monsters.remove(m)
                 g.corpses.append(m)
-                # 관문 근처에서 처치 시 후방에서 빠르게 추가 증원
-                if dist_gate <= 35.0 and len(g.monsters) < 14 and not isinstance(m, CableOverlordBoss):
-                    if random.random() < 0.65:
-                        g.spawn_reinforcement_monster(near_gate=True)
                 continue
 
             mx, my = m.pos.x, m.pos.y
@@ -203,7 +179,7 @@ class MonsterDirector:
                 dist <= 14.0 or isinstance(m, CableOverlordBoss) or
                 getattr(m, 'is_casting', False) or getattr(m, 'is_slamming', False) or
                 getattr(m, 'is_striking', False) or getattr(m, 'is_lashing', False) or
-                m.stun_timer > 0.0 or getattr(m, 'burn_timer', 0.0) > 0.0 or getattr(m, 'shock_timer', 0.0) > 0.0
+                getattr(m, 'stun_timer', 0.0) > 0.0 or getattr(m, 'burn_timer', 0.0) > 0.0 or getattr(m, 'shock_timer', 0.0) > 0.0
             )
             if not is_critical:
                 skip_frame = False
@@ -238,7 +214,7 @@ class MonsterDirector:
                     continue
 
             # 2. 스턴 상태 처리
-            if m.stun_timer > 0.0:
+            if getattr(m, 'stun_timer', 0.0) > 0.0:
                 m.update_pos(mx, my, eff_dt, 0, 0)
                 continue
 
@@ -333,7 +309,10 @@ class MonsterDirector:
                     if dist <= 11.0:
                         player_floor, _ = get_floor_height(px, py, pz - PLAYER_EYE_HEIGHT)
                         if player_floor < 1.2:
-                            g.player.take_damage(20, source_pos=(mx, my))
+                            is_dead = g.player.take_damage(20, source_pos=(mx, my))
+                            if is_dead:
+                                g.trigger_game_over(killer=m, reason="killed")
+                                return True, closest_dist
                             g.player.apply_slow(duration=2.5, factor=0.45)
                             g.ui_mgr.show_hit_marker("보스 지진 충격파 피격! (이동속도 저하)", (1.0, 0.45, 0.1, 1.0))
 

@@ -235,6 +235,7 @@ def update_monster_debris_list(debris_list, dt):
 
 
 class LongBlackSerpent(ElementalMonsterMixin):
+    col_radius = 0.38
     """
     몸통이 긴 칠흑의 대사(뱀) 괴물 엔티티
     - 14개의 마디형 세그먼트가 부드럽게 S자 파동(Sinusoidal Undulation)을 그리며 슬리더링
@@ -621,20 +622,21 @@ class LongBlackSerpent(ElementalMonsterMixin):
         self.last_hit_was_head = False
         h_rad = math.radians(self.node.getH())
         cos_h, sin_h = math.cos(h_rad), math.sin(h_rad)
+        s = self.node.getScale()[0] if hasattr(self, 'node') and self.node and not self.node.isEmpty() else (1.25 if getattr(self, 'is_elite', False) else 1.0)
 
         head_z = self.head.getZ() if hasattr(self, 'head') and not self.head.isEmpty() else 0.0
         head_y = self.head.getY() if hasattr(self, 'head') and not self.head.isEmpty() else 0.40
-        head_wx = self.pos.x + (-sin_h * head_y)
-        head_wy = self.pos.y + (cos_h * head_y)
-        targets = [(head_wx, head_wy, self.pos.z + head_z + 0.35, 1.15, True)]
+        head_wx = self.pos.x + (-sin_h * (head_y * s))
+        head_wy = self.pos.y + (cos_h * (head_y * s))
+        targets = [(head_wx, head_wy, self.pos.z + (head_z + 0.35) * s, 1.15 * s, True)]
 
         for i in range(0, 14, 2):
             seg = self.segments[i]
             by = seg['pivot'].getY() if (hasattr(seg['pivot'], 'getY')) else seg['base_y']
             bz = seg['pivot'].getZ() if (hasattr(seg['pivot'], 'getZ')) else 0.0
-            wx = self.pos.x + (-sin_h * by)
-            wy = self.pos.y + (cos_h * by)
-            targets.append((wx, wy, self.pos.z + bz, 0.95, False))
+            wx = self.pos.x + (-sin_h * (by * s))
+            wy = self.pos.y + (cos_h * (by * s))
+            targets.append((wx, wy, self.pos.z + bz * s, 0.95 * s, False))
 
         for tx, ty, tz, r, is_head in targets:
             vx = tx - ray_o.x
@@ -875,6 +877,7 @@ class LongBlackSerpent(ElementalMonsterMixin):
 
 
 class TallSkeletonMonster(ElementalMonsterMixin):
+    col_radius = 0.40
     """
     비정상적으로 긴 두 팔로 바닥을 기어 다니며 턱이 쩍 벌어진 기괴한 해골 보행 괴물 엔티티
     - 두 다리를 뒤로 꺾어 치켜든 채, 2.7m에 달하는 거대한 두 팔로 바닥을 짚고 성큼성큼 기어 다니는 암 워커(Arm-Crawler) 형태
@@ -1254,24 +1257,37 @@ class TallSkeletonMonster(ElementalMonsterMixin):
         if hasattr(self, 'node') and not self.node.isEmpty():
             self.node.removeNode()
 
-    def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
+    def is_hit_by_ray(self, ray_o, ray_d, max_dist=65.0):
         """플레이어 사격 레이캐스트와 3.2m 장신 암 워커 해골 괴물 충돌 판정"""
         self.last_hit_was_head = False
         h_rad = math.radians(self.node.getH())
         sin_h, cos_h = math.sin(h_rad), math.cos(h_rad)
+        s = self.node.getScale()[0] if hasattr(self, 'node') and self.node and not self.node.isEmpty() else (1.25 if getattr(self, 'is_elite', False) else 1.0)
 
-        # 3.2m 높이의 위압적인 장신 실루엣에 맞춘 히트박스 좌표
+        # 실제 노드 좌표(skull_pivot)를 동적으로 참조하여 3.2m 상체 피치/애니메이션 및 회전/스케일과 100% 일치
+        if hasattr(self, 'skull_pivot') and self.skull_pivot and not self.skull_pivot.isEmpty():
+            head_y = self.skull_pivot.getY(self.node)
+            head_z = self.skull_pivot.getZ(self.node)
+        else:
+            head_y = -1.607
+            head_z = 3.179
+
+        head_wx = self.pos.x - sin_h * (head_y * s)
+        head_wy = self.pos.y + cos_h * (head_y * s)
+        head_wz = self.pos.z + (head_z + 0.12) * s
+
+        # 3.2m 높이의 위압적인 장신 실루엣에 맞춘 히트박스 좌표 (실제 몸체 피치 각도 반영)
         targets = [
-            # 쩍 벌어진 두개골 (헤드샷! - 고도 3.20m)
-            (self.pos.x - sin_h * 0.20, self.pos.y + cos_h * 0.20, self.pos.z + 3.20, 0.75, True),
-            # 쇄골 & 어깨 (고도 2.65m)
-            (self.pos.x - sin_h * 0.10, self.pos.y + cos_h * 0.10, self.pos.z + 2.65, 0.70, False),
-            # 흉곽 & 갈비뼈 (고도 2.00m)
-            (self.pos.x, self.pos.y, self.pos.z + 2.00, 0.75, False),
-            # 골반 & 하체 (후방 0.35m, 고도 1.40m)
-            (self.pos.x + sin_h * 0.35, self.pos.y - cos_h * 0.35, self.pos.z + 1.40, 0.70, False),
-            # 바닥을 짚는 두 팔 (고도 0.60m)
-            (self.pos.x - sin_h * 0.25, self.pos.y + cos_h * 0.25, self.pos.z + 0.60, 0.80, False),
+            # 쩍 벌어진 두개골 (헤드샷! - skull_pivot 동적 연동, 반경 0.75m)
+            (head_wx, head_wy, head_wz, 0.75 * s, True),
+            # 쇄골 & 어깨 (상체 상단)
+            (self.pos.x - sin_h * (-1.30 * s), self.pos.y + cos_h * (-1.30 * s), self.pos.z + 2.65 * s, 0.70 * s, False),
+            # 흉곽 & 갈비뼈 (상체 중심)
+            (self.pos.x - sin_h * (-0.95 * s), self.pos.y + cos_h * (-0.95 * s), self.pos.z + 2.00 * s, 0.75 * s, False),
+            # 골반 & 하체 (후방)
+            (self.pos.x - sin_h * (-0.65 * s), self.pos.y + cos_h * (-0.65 * s), self.pos.z + 1.40 * s, 0.70 * s, False),
+            # 바닥을 짚는 두 팔 & 손
+            (self.pos.x - sin_h * (-1.15 * s), self.pos.y + cos_h * (-1.15 * s), self.pos.z + 0.60 * s, 0.80 * s, False),
         ]
         for tx, ty, tz, r, is_head in targets:
             vx = tx - ray_o.x
@@ -1390,6 +1406,7 @@ class TallSkeletonMonster(ElementalMonsterMixin):
 
 
 class AbominableMudOrc(ElementalMonsterMixin):
+    col_radius = 0.45
     """
     1. 혐오스런 진흙 오크 (Abominable Mud Orc)
     - 진흙과 오물, 이끼로 뒤덮인 거대하고 육중한 야만 오크 괴물 (신장 약 2.6m, 폭 1.6m)
@@ -1976,10 +1993,11 @@ class AbominableMudOrc(ElementalMonsterMixin):
 
     def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
         self.last_hit_was_head = False
+        s = self.node.getScale()[0] if hasattr(self, 'node') and self.node and not self.node.isEmpty() else (1.25 if getattr(self, 'is_elite', False) else 1.0)
         targets = [
-            (self.pos.x, self.pos.y, self.pos.z + 2.3, 0.60, True), # 턱/머리 (헤드샷!)
-            (self.pos.x, self.pos.y, self.pos.z + 1.8, 0.80, False),
-            (self.pos.x, self.pos.y, self.pos.z + 1.0, 0.85, False)
+            (self.pos.x, self.pos.y, self.pos.z + 2.3 * s, 0.60 * s, True), # 턱/머리 (헤드샷!)
+            (self.pos.x, self.pos.y, self.pos.z + 1.8 * s, 0.80 * s, False),
+            (self.pos.x, self.pos.y, self.pos.z + 1.0 * s, 0.85 * s, False)
         ]
         for tx, ty, tz, r, is_head in targets:
             vx = tx - ray_o.x
@@ -2097,6 +2115,7 @@ class AbominableMudOrc(ElementalMonsterMixin):
 
 
 class AlluringAshWitch(ElementalMonsterMixin):
+    col_radius = 0.38
     """
     2. 매혹의 잿더미 마녀 (Alluring Ash Witch)
     - 칠흑과 잿더미 로브를 휘감고 공중에 부유(Levitation)하는 날렵하고 매혹적인 마녀 괴물
@@ -2396,10 +2415,11 @@ class AlluringAshWitch(ElementalMonsterMixin):
 
     def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
         self.last_hit_was_head = False
+        s = self.node.getScale()[0] if hasattr(self, 'node') and self.node and not self.node.isEmpty() else (1.25 if getattr(self, 'is_elite', False) else 1.0)
         targets = [
-            (self.pos.x, self.pos.y, self.pos.z + 2.0, 0.55, True), # 마녀 머리 (헤드샷!)
-            (self.pos.x, self.pos.y, self.pos.z + 1.4, 0.55, False),
-            (self.pos.x, self.pos.y, self.pos.z + 0.6, 0.65, False)
+            (self.pos.x, self.pos.y, self.pos.z + 2.0 * s, 0.55 * s, True), # 마녀 머리 (헤드샷!)
+            (self.pos.x, self.pos.y, self.pos.z + 1.4 * s, 0.55 * s, False),
+            (self.pos.x, self.pos.y, self.pos.z + 0.6 * s, 0.65 * s, False)
         ]
         for tx, ty, tz, r, is_head in targets:
             vx = tx - ray_o.x
@@ -2506,6 +2526,7 @@ TallShadowMonster = TallSkeletonMonster
 
 
 class SkeletalDobermanHellhound(ElementalMonsterMixin):
+    col_radius = 0.35
     """
     지옥의 파수견 (Skeletal Doberman Hellhound)
     - 뼈로만 이루어진 사나운 도베르만 골격 괴물
@@ -2880,17 +2901,18 @@ class SkeletalDobermanHellhound(ElementalMonsterMixin):
 
         h_rad = math.radians(self.node.getH())
         sin_h, cos_h = math.sin(h_rad), math.cos(h_rad)
+        s = self.node.getScale()[0] if hasattr(self, 'node') and self.node and not self.node.isEmpty() else (1.25 if getattr(self, 'is_elite', False) else 1.0)
 
         # (머리, 목, 흉곽/심장, 골반/엉덩이, 다리)
         targets = [
             # 뼈 두개골 및 주둥이 (헤드샷! 전방 0.52m, 고도 0.95m)
-            (self.pos.x - sin_h * 0.52, self.pos.y + cos_h * 0.52, self.pos.z + 0.95, 0.45, True),
+            (self.pos.x - sin_h * (0.52 * s), self.pos.y + cos_h * (0.52 * s), self.pos.z + 0.95 * s, 0.45 * s, True),
             # 흉곽 및 지옥불 심장 코어 (중앙, 고도 0.74m)
-            (self.pos.x, self.pos.y, self.pos.z + 0.74, 0.52, False),
+            (self.pos.x, self.pos.y, self.pos.z + 0.74 * s, 0.52 * s, False),
             # 골반 및 둔부 (후방 0.44m, 고도 0.72m)
-            (self.pos.x + sin_h * 0.44, self.pos.y - cos_h * 0.44, self.pos.z + 0.72, 0.46, False),
+            (self.pos.x + sin_h * (0.44 * s), self.pos.y - cos_h * (0.44 * s), self.pos.z + 0.72 * s, 0.46 * s, False),
             # 앞/뒷다리 지면 부근 (고도 0.35m)
-            (self.pos.x, self.pos.y, self.pos.z + 0.35, 0.45, False),
+            (self.pos.x, self.pos.y, self.pos.z + 0.35 * s, 0.45 * s, False),
         ]
 
         for tx, ty, tz, r, is_head in targets:
@@ -3046,6 +3068,7 @@ class SkeletalDobermanHellhound(ElementalMonsterMixin):
 
 
 class CableOverlordBoss(ElementalMonsterMixin):
+    col_radius = 0.55
     """
     [ 백룸 거대 보스 엔티티: 케이블 엔티티 - 심연의 지배자 (Cable Overlord Boss) ]
     - 높이 약 4.5m의 거대한 고압 절연 케이블 타래, 구리 도선 코일 및 중장갑 골격체

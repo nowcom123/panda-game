@@ -45,10 +45,10 @@ class CombatHUDFeaturesTests(unittest.TestCase):
         self.assertEqual(item.text_node.getText(), "CRIT 99!")
         self.assertEqual(item.color, (1.0, 0.30, 0.18))
 
-        # 헤드샷
+        # 헤드샷 (HEADSHOT 문구 없이 빨간색 숫자만 표시)
         item.activate(150.0, Vec3(0, 0, 1), is_crit=True, is_headshot=True)
-        self.assertEqual(item.text_node.getText(), "HEADSHOT 150!")
-        self.assertEqual(item.color, (1.0, 0.85, 0.15))
+        self.assertEqual(item.text_node.getText(), "150")
+        self.assertEqual(item.color, (1.0, 0.15, 0.15))
 
         # 원소 화염
         item.activate(25.0, Vec3(0, 0, 1), damage_type="fire")
@@ -467,7 +467,7 @@ class CombatHUDFeaturesTests(unittest.TestCase):
         self.assertLess(bar_calls[2][1], 0.0)
 
     def test_ar_hk416_configuration(self):
-        """AR이 H&K HK416으로 정밀 정의되었는지 검증"""
+        """AR이 H&K HK416으로 정밀 정의되고 장전 시간이 길어졌는지 검증"""
         ar = WEAPON_CONFIGS["AR"]
         self.assertIn("HK416", ar["name"])
         self.assertIn("AR", ar["name"])
@@ -476,8 +476,152 @@ class CombatHUDFeaturesTests(unittest.TestCase):
         self.assertEqual(ar["initial_reserve"], 90)
         self.assertEqual(ar["damage"], 38.0)
         self.assertEqual(ar["cooldown"], 0.082)
+        self.assertGreaterEqual(ar["reload_time"], 3.0)
+
+    def test_akimbo_semi_auto_and_ar_full_auto(self):
+        """마우스 꾹 눌렀을 때 아킴보는 연사되지 않고, AR만 풀오토 연사되는지 검증"""
+        combat = CombatSystem.__new__(CombatSystem)
+        combat.base = SimpleNamespace(
+            mouseWatcherNode=SimpleNamespace(
+                isButtonDown=lambda btn: True
+            ),
+            game=SimpleNamespace(monsters=[], player=None, hazard_barrels=None)
+        )
+        combat.is_reloading = False
+        combat.shoot_cooldown = 0.0
+        combat.is_moving = False
+        combat.is_sprinting = False
+        combat.bullet_storm_timer = 0.0
+        combat.hipfire_bloom = 0.0
+        combat.active_tracers = []
+        combat.active_smoke = []
+        combat.ammo_drops = []
+        combat.casing_effects = SimpleNamespace(update=lambda dt: None)
+        combat.weapon_recoil = SimpleNamespace(update=lambda dt: None)
+        combat.hit_particle_pool = []
+        combat.smoke_pool = []
+        combat.slide_blowback_duration = 0.06
+        combat.slide_timer_left = 0.0
+        combat.slide_timer_right = 0.0
+        combat.muzzle_timer = 0.0
+        combat.combo_timer = 0.0
+        combat.switch_timer = 0.0
+        combat.recoil_timer = 0.0
+        combat.hit_marker_timer = 0.0
+        combat.is_aiming = False
+        combat.ads_alpha = 0.0
+        combat.bobbing_time = 0.0
+        combat.vm_root = NodePath("vm_root")
+        combat.ui_mgr = SimpleNamespace(set_crosshair_visible=lambda *a: None)
+        combat.weapon_recoil = SimpleNamespace(update=lambda *a, **k: {})
+        combat._update_shotgun_pump = lambda dt: None
+        combat._update_ads_and_recoil_animations = lambda dt: None
+        combat.check_ammo_pickups = lambda px, py: None
+
+        shots = []
+        combat.shoot = lambda *args, **kwargs: shots.append(combat.current_weapon)
+
+        # 1. DUAL_PISTOL (아킴보) -> 마우스 꾹 눌러도 update()에서 자동 연사되지 않음
+        combat.current_weapon = "DUAL_PISTOL"
+        combat.update(0.016)
+        self.assertEqual(len(shots), 0, "아킴보는 마우스 유지 시 자동 연사되지 않아야 합니다.")
+
+        # 2. PISTOL -> 마우스 유지 시 자동 연사되지 않음
+        combat.current_weapon = "PISTOL"
+        combat.update(0.016)
+        self.assertEqual(len(shots), 0)
+
+        # 3. SHOTGUN -> 마우스 유지 시 자동 연사되지 않음
+        combat.current_weapon = "SHOTGUN"
+        combat.update(0.016)
+        self.assertEqual(len(shots), 0)
+
+        # 4. AR -> 마우스 유지 시 자동 연사됨
+        combat.current_weapon = "AR"
+        combat.update(0.016)
+        self.assertEqual(len(shots), 1, "AR은 마우스 유지 시 연사되어야 합니다.")
+        self.assertEqual(shots[0], "AR")
+
+    def test_ar_ads_increases_camera_recoil(self):
+        """AR 조준사격 시 카메라 반동 수치가 비조준 대비 대폭 증가하고, 타 무기는 안정화되는지 검증"""
+        combat = CombatSystem.__new__(CombatSystem)
+        combat.current_weapon = "AR"
+        combat.ammo = 30
+        combat._reserve_ammo = 120
+        combat.slide_locked = False
+        combat.shoot_cooldown = 0.0
+        combat.switch_timer = 0.0
+        combat.is_reloading = False
+        combat.overcharge_rounds = 0
+        combat.combo_count = 0
+        combat.bullet_storm_timer = 0.0
+        combat.dual_hand_toggle = 0
+        combat.stage_shots_fired = 0
+        combat.stage_shots_hit = 0
+        combat.hipfire_bloom = 0.0
+        combat.weapon_recoil = SimpleNamespace(kick=lambda *a, **k: None)
+        combat.camera = NodePath("camera")
+        combat.render = Mock()
+        combat.ar_muzzle_light = SimpleNamespace(setColor=lambda *a: None)
+        combat.ar_muzzle_light_np = NodePath("ar_light_np")
+        combat.muzzle_light = SimpleNamespace(setColor=lambda *a: None)
+        combat.muzzle_light_np = NodePath("muzzle_light_np")
+        combat.weapon_states = {
+            "AR": {"ammo": 30, "reserve_ammo": 120},
+            "PISTOL": {"ammo": 8, "reserve_ammo": 80},
+        }
+        combat.slide_blowback_duration = 0.05
+        combat.update_ammo_ui = lambda: None
+        combat.ui_mgr = SimpleNamespace(
+            trigger_hipfire_kick=lambda **k: None,
+            set_crosshair_visible=lambda *a: None,
+            trigger_crosshair_hit=lambda **k: None,
+            update_ammo=lambda *a, **k: None
+        )
+        combat.audio_mgr = None
+        combat.smoke_pool = []
+        combat.hit_particle_pool = []
+        combat.casing_pool = []
+        combat.casing_sg_pool = []
+        combat.tracer_pool = []
+        combat.pellet_rays = []
+        combat.enemies = []
+        combat._eject_casing = lambda *a, **k: None
+        combat._spawn_barrel_smoke = lambda *a, **k: None
+        combat._spawn_muzzle_embers = lambda *a, **k: None
+        combat._spawn_spark_ring = lambda *a, **k: None
+        combat._show_muzzle_flash = lambda *a, **k: None
+        combat._perform_raycast = lambda *a, **k: (False, False, False)
+
+        recoils = []
+        mock_player = SimpleNamespace(add_weapon_recoil=lambda s, y: recoils.append((s, y)), perks=set())
+
+        # AR 비조준 사격 (ads_alpha = 0.0)
+        combat.ads_alpha = 0.0
+        combat.shoot([], player=mock_player)
+        hip_strength, hip_yaw = recoils[-1]
+
+        # AR 조준 사격 (ads_alpha = 1.0)
+        combat.shoot_cooldown = 0.0
+        combat.ads_alpha = 1.0
+        combat.shoot([], player=mock_player)
+        ads_strength, ads_yaw = recoils[-1]
+
+        self.assertGreater(ads_strength, hip_strength * 1.5, "AR 조준사격 반동 강도는 비조준 대비 50% 이상 커야 합니다.")
+
+        # 권총(PISTOL)은 조준 시 반동 감소 유지
+        combat.current_weapon = "PISTOL"
+        combat.shoot_cooldown = 0.0
+        combat.ads_alpha = 0.0
+        combat.shoot([], player=mock_player)
+        pistol_hip = recoils[-1][0]
+
+        combat.shoot_cooldown = 0.0
+        combat.ads_alpha = 1.0
+        combat.shoot([], player=mock_player)
+        pistol_ads = recoils[-1][0]
+        self.assertLess(pistol_ads, pistol_hip, "일반 권총은 조준 시 반동이 감소해야 합니다.")
 
 
 if __name__ == "__main__":
     unittest.main()
-

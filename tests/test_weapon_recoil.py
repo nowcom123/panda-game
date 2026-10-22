@@ -41,6 +41,17 @@ class WeaponRecoilTests(unittest.TestCase):
         recoil.reset()
         self.assertTrue(all(p == (0, 0, 0, 0) for p in recoil.update(0, 0).values()))
 
+    def test_ar_ads_increases_viewmodel_kick_unlike_other_weapons(self):
+        recoil = WeaponRecoil()
+        recoil.kick('AR')
+        pose_hip = recoil.update(0.02, 0.0)
+        recoil.reset()
+        recoil.kick('AR')
+        pose_ads = recoil.update(0.02, 1.0)
+        # AR 조준사격 시 총구 들림(pitch)과 후퇴(travel) 반동이 비조준보다 크게 증가해야 함
+        self.assertGreater(pose_ads['ar_recoil_node'][2], pose_hip['ar_recoil_node'][2])
+        self.assertGreater(abs(pose_ads['ar_recoil_node'][0]), abs(pose_hip['ar_recoil_node'][0]))
+
     def test_camera_recovers_to_new_mouse_aim_without_overwriting_it(self):
         player = PlayerController(SimpleNamespace(game_state='PLAYING'), None,
                                   NodePath('camera'), None, None, Mock())
@@ -61,6 +72,34 @@ class WeaponRecoilTests(unittest.TestCase):
         player.add_weapon_recoil(1)
         player.reset_position(0, 0)
         self.assertEqual(player.recoil_pitch.velocity, 0)
+
+    def test_ar_ads_recoil_can_be_manually_controlled_with_mouse(self):
+        """AR 조준사격 시 마우스를 아래로 당겨 반동을 직접 상쇄 및 제어할 수 있는지 검증"""
+        mock_win = Mock()
+        mock_win.getXSize.return_value = 800
+        mock_win.getYSize.return_value = 600
+        # 마우스를 아래로 10픽셀 당긴 상태 시뮬레이션 (center_y = 300, getPointer y = 310)
+        mock_win.getPointer.return_value = SimpleNamespace(getX=lambda: 400, getY=lambda: 310)
+        mock_mouse_watcher = Mock()
+        mock_mouse_watcher.hasMouse.return_value = True
+
+        player = PlayerController(SimpleNamespace(game_state='PLAYING'), mock_win,
+                                  NodePath('camera'), mock_mouse_watcher, None, Mock())
+        player.reset_position(0, 0, heading=0, pitch=0)
+        player.mouse_locked = True
+        player.is_aiming = True
+
+        # AR 조준사격 반동 1.5도 인가
+        player.add_weapon_recoil(1.5, 0.0, weapon="AR", is_ads=True)
+        self.assertEqual(player.recoil_pitch.position, 1.5)
+        self.assertGreater(player.ar_recoil_hold_timer, 0.0)
+
+        # 마우스를 당긴 상태로 프레임 갱신 -> 반동 수동 흡수
+        player.update(0.016, {})
+
+        # 10px * (0.13 * 0.88) = 1.144도 흡수되어 recoil_pitch가 0.356도 이하로 줄어들고, pitch는 0 유지
+        self.assertLess(player.recoil_pitch.position, 0.40)
+        self.assertEqual(player.pitch, 0.0, "반동을 잡는 동안 기본 에임 앙각(pitch)이 바닥으로 처지지 않아야 함")
 
 
 if __name__ == '__main__':

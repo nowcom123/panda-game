@@ -2346,5 +2346,16 @@
     "ammo_left": 0,
     "reserve_ammo": 0,
     "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-10-22 15:23:48",
+    "stage": 1,
+    "result": "사망 (장신 해골 괴물)",
+    "success": false,
+    "time_elapsed": 21.6,
+    "time_left": 278.4,
+    "ammo_left": 5,
+    "reserve_ammo": 42,
+    "ammo_used": 7
   }
 ]
