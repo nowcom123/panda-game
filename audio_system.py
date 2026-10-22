@@ -420,6 +420,12 @@ class AudioManager:
             self.levelup_sfx.setVolume(0.85)
             self.levelup_sfx.play()
 
+    def play_witch_cast(self):
+        """마녀 마법 시전 경고음 (파이어볼 시전 시작 시 호출)"""
+        if self.witch_fireball_sfx:
+            self.witch_fireball_sfx.setVolume(0.55)
+            self.witch_fireball_sfx.play()
+
     def play_witch_fireball(self):
         """마녀 파이어볼 발사음"""
         if self.witch_fireball_sfx:

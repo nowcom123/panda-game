@@ -2357,5 +2357,115 @@
     "ammo_left": 5,
     "reserve_ammo": 42,
     "ammo_used": 7
+  },
+  {
+    "timestamp": "2026-10-22 21:38:11",
+    "stage": 1,
+    "result": "사망 (지옥의 파수견)",
+    "success": false,
+    "time_elapsed": 29.6,
+    "time_left": 270.4,
+    "ammo_left": 27,
+    "reserve_ammo": 30,
+    "ammo_used": -15
+  },
+  {
+    "timestamp": "2026-10-22 21:52:21",
+    "stage": 6,
+    "result": "사망 (뼈박살 오크)",
+    "success": false,
+    "time_elapsed": 88.1,
+    "time_left": 211.9,
+    "ammo_left": 16,
+    "reserve_ammo": 360,
+    "ammo_used": -4
+  },
+  {
+    "timestamp": "2026-10-22 23:23:22",
+    "stage": 1,
+    "result": "사망 (매혹의 잿더미 마녀)",
+    "success": false,
+    "time_elapsed": 11.9,
+    "time_left": 288.1,
+    "ammo_left": 2,
+    "reserve_ammo": 28,
+    "ammo_used": 10
+  },
+  {
+    "timestamp": "2026-10-22 23:24:11",
+    "stage": 1,
+    "result": "사망 (염마 스칼렛)",
+    "success": false,
+    "time_elapsed": 47.5,
+    "time_left": 252.5,
+    "ammo_left": 23,
+    "reserve_ammo": 70,
+    "ammo_used": -11
+  },
+  {
+    "timestamp": "2026-10-22 23:24:27",
+    "stage": 1,
+    "result": "사망 (장신 해골 괴물)",
+    "success": false,
+    "time_elapsed": 13.6,
+    "time_left": 286.4,
+    "ammo_left": 0,
+    "reserve_ammo": 90,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-10-22 23:24:51",
+    "stage": 1,
+    "result": "사망 (끝없는 고통의 켈베스)",
+    "success": false,
+    "time_elapsed": 21.3,
+    "time_left": 278.7,
+    "ammo_left": 0,
+    "reserve_ammo": 108,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-10-22 23:27:35",
+    "stage": 2,
+    "result": "사망 (끝없는 고통의 켈베스)",
+    "success": false,
+    "time_elapsed": 78.7,
+    "time_left": 221.3,
+    "ammo_left": 0,
+    "reserve_ammo": 87,
+    "ammo_used": 12
+  },
+  {
+    "timestamp": "2026-10-22 23:33:24",
+    "stage": 1,
+    "result": "사망 (장신 해골 괴물)",
+    "success": false,
+    "time_elapsed": 36.0,
+    "time_left": 264.0,
+    "ammo_left": 29,
+    "reserve_ammo": 41,
+    "ammo_used": -17
+  },
+  {
+    "timestamp": "2026-10-22 23:34:55",
+    "stage": 2,
+    "result": "사망 (장신 해골 괴물)",
+    "success": false,
+    "time_elapsed": 45.8,
+    "time_left": 254.2,
+    "ammo_left": 14,
+    "reserve_ammo": 48,
+    "ammo_used": -2
+  },
+  {
+    "timestamp": "2026-10-22 23:35:10",
+    "stage": 1,
+    "result": "사망 (장신 해골 괴물)",
+    "success": false,
+    "time_elapsed": 12.1,
+    "time_left": 287.9,
+    "ammo_left": 0,
+    "reserve_ammo": 90,
+    "ammo_used": 12
   }
 ]

@@ -905,7 +905,7 @@ class UIManager:
         self.boss_hud_frame.hide()
 
         self.boss_name_text = OnscreenText(
-            text="[ ★ BOSS: 케이블 엔티티 - 심연의 지배자 ★ ]",
+            text="[ ★ BOSS: 골해의 지배자 ★ ]",
             parent=self.boss_hud_frame,
             pos=(0, 0.030),
             scale=0.035,
@@ -927,10 +927,13 @@ class UIManager:
         self.boss_bar_fill = DirectFrame(
             parent=self.boss_hud_frame,
             frameColor=(0.25, 0.85, 1.0, 1.0),
-            frameSize=(-0.70, 0.70, -0.014, 0.014),
+            frameSize=(0.0, 1.40, -0.014, 0.014),
             relief=DGG.FLAT,
-            pos=(0, 0, -0.015)
+            pos=(-0.70, 0, -0.015)
         )
+        self._boss_hp_display_ratio = None
+        self._boss_hp_target_ratio = None
+        self._boss_hud_phase = None
 
         self.boss_hp_text = OnscreenText(
             text="3500 / 3500 (100.0%)",
@@ -1537,6 +1540,7 @@ class UIManager:
 
     def update(self, dt, player_pos=None, camera_heading=None, is_moving=False, is_sprinting=False):
         """HUD 실시간 애니메이션 (피격 플래시/방향 인디케이터 페이드아웃, 크로스헤어 블룸/흔들림 복구, 정전 경보 맥동)"""
+        self._animate_boss_hp(dt)
         # 크로스헤어 다이내믹 블룸 및 반동 흔들림 갱신
         if hasattr(self, 'crosshair') and hasattr(self.crosshair, 'update'):
             self.crosshair.update(dt, is_moving=is_moving, is_sprinting=is_sprinting)
@@ -1700,40 +1704,70 @@ class UIManager:
         self.perk_badge_text.setText(f"[퍽]  {'  '.join(names)}")
         self.perk_badge_text.setFg((0.35, 0.90, 1.0, 1.0))
 
-    def show_boss_hp_bar(self, boss_name="[ ★ BOSS: 케이블 엔티티 - 심연의 지배자 ★ ]", hp=None, max_hp=None):
+    def show_boss_hp_bar(self, boss_name="[ ★ BOSS: 골해의 지배자 ★ ]", hp=None, max_hp=None):
         """보스 출현 시 상단 전용 체력바 표시"""
         if hasattr(self, 'boss_hud_frame') and self.boss_hud_frame:
+            self._boss_hud_name = boss_name
+            self._boss_hud_phase = None
+            self._boss_hp_display_ratio = None
+            self._boss_hp_target_ratio = None
             self.boss_name_text.setText(boss_name)
             self.boss_hud_frame.show()
             if hp is not None and max_hp is not None:
                 self.update_boss_hp(hp, max_hp)
 
     def update_boss_hp(self, hp, max_hp, phase=1):
-        """보스 체력 및 페이즈 실시간 갱신"""
+        """실제 체력은 즉시 표시하고, 막대의 새 목표만 갱신한다."""
         if not hasattr(self, 'boss_hud_frame') or not self.boss_hud_frame:
             return
         if self.boss_hud_frame.isHidden():
             self.boss_hud_frame.show()
 
         pct = max(0.0, min(1.0, hp / max(1.0, max_hp)))
-        fill_width = 1.40 * pct
-        self.boss_bar_fill["frameSize"] = (-0.70, -0.70 + fill_width, -0.014, 0.014)
+        self._boss_hp_target_ratio = pct
+        if getattr(self, '_boss_hp_display_ratio', None) is None:
+            self._boss_hp_display_ratio = pct
+            self.boss_bar_fill.setSx(pct)
 
-        if phase == 2:
-            self.boss_bar_fill["frameColor"] = (1.0, 0.15, 0.15, 1.0)
-            self.boss_name_text.setText("[ ★ BOSS: 케이블 엔티티 - BERSERK 폭주 ★ ]")
-            self.boss_name_text.setFg((1.0, 0.20, 0.20, 1.0))
-        else:
-            self.boss_bar_fill["frameColor"] = (0.25, 0.85, 1.0, 1.0)
-            self.boss_name_text.setText("[ ★ BOSS: 케이블 엔티티 - 심연의 지배자 ★ ]")
-            self.boss_name_text.setFg((0.40, 0.90, 1.0, 1.0))
+        if getattr(self, '_boss_hud_phase', None) != phase:
+            self._boss_hud_phase = phase
+            name = getattr(self, '_boss_hud_name', '골해의 지배자')
+            if phase >= 2:
+                self.boss_bar_fill["frameColor"] = (1.0, 0.15, 0.15, 1.0)
+                self.boss_name_text.setText(f"{name} — 폭주")
+                self.boss_name_text.setFg((1.0, 0.20, 0.20, 1.0))
+            else:
+                self.boss_bar_fill["frameColor"] = (0.25, 0.85, 1.0, 1.0)
+                self.boss_name_text.setText(name)
+                self.boss_name_text.setFg((0.40, 0.90, 1.0, 1.0))
 
-        self.boss_hp_text.setText(f"{int(hp)} / {int(max_hp)} ({pct*100:.1f}%)")
+        self.boss_hp_text.setText(f"{int(max(0, hp))} / {int(max_hp)} ({pct*100:.1f}%)")
+
+    def _animate_boss_hp(self, dt):
+        frame = getattr(self, 'boss_hud_frame', None)
+        if frame is None or frame.isHidden():
+            return
+        # AI의 스턴/틱 분산과 관계없이 현재 체력을 매 HUD 프레임 읽는다.
+        boss = getattr(getattr(self, 'base', None), 'boss', None)
+        if boss is not None:
+            self.update_boss_hp(boss.hp, boss.max_hp, boss.phase)
+        target = getattr(self, '_boss_hp_target_ratio', None)
+        current = getattr(self, '_boss_hp_display_ratio', None)
+        if target is None or current is None or dt <= 0:
+            return
+        # 0.12초 시간상수: 연속 피격도 끊김 없이 이어지고 FPS에 의존하지 않는다.
+        current += (target - current) * -math.expm1(-dt / .12)
+        if abs(target - current) < .0001:
+            current = target
+        self._boss_hp_display_ratio = current
+        self.boss_bar_fill.setSx(current)
 
     def hide_boss_hp_bar(self):
         """보스 사망 시 상단 체력바 숨김"""
         if hasattr(self, 'boss_hud_frame') and self.boss_hud_frame:
             self.boss_hud_frame.hide()
+        self._boss_hp_display_ratio = None
+        self._boss_hp_target_ratio = None
 
     def show_stage_banner(self, text, color=(0.3, 1.0, 0.5, 1.0)):
         """스테이지 클리어/시작 배너 표시"""
@@ -3290,6 +3324,21 @@ class UIManager:
             **btn_step_style
         )
 
+        self.lbl_sharpening = OnscreenText(
+            text="화면 선명도 (Sharpening)", parent=self.pause_modal,
+            pos=(-0.55, -0.14), scale=0.030, fg=(0.92, 0.95, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.9), align=TextNode.ALeft, **self.font_kw
+        )
+        self.btn_sharpening = DirectButton(
+            parent=self.pause_modal, text="꺼짐 (OFF)", pos=(0.34, 0, -0.13),
+            image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png',
+                   'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None, scale=(0.22, 1, 0.040),
+            text_scale=((0.040 / 0.22) * 0.55, 0.55), text_pos=(0, -0.15),
+            text_fg=(0.75, 0.85, 0.92, 1), command=self._toggle_sharpening,
+            **self.btn_font_kw
+        )
+
         # 하단 조작 버튼들 (계속하기, 재시작, 타이틀, 종료)
         btn_action_style = {
             "image": ('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
@@ -3390,6 +3439,8 @@ class UIManager:
             fov = lens.getFov()[0] if lens and hasattr(lens, 'getFov') else 96.0
         self.txt_fov_val.setText(f"{int(round(fov))}°")
 
+        self._refresh_sharpening_setting()
+
         self.pause_modal.show()
 
     def hide_pause_menu(self):
@@ -3400,6 +3451,23 @@ class UIManager:
     def is_pause_menu_open(self):
         """일시정지 모달 오픈 상태 반환"""
         return hasattr(self, 'pause_modal') and self.pause_modal and not self.pause_modal.isHidden()
+
+    def _refresh_sharpening_setting(self):
+        base_obj = getattr(self, 'base', None)
+        game = getattr(base_obj, 'game', base_obj)
+        pipeline = getattr(game, 'pbr_pipeline', None)
+        enabled = bool(pipeline and pipeline.sharpening_enabled)
+        self.btn_sharpening['text'] = "켜짐 (ON)" if enabled else "꺼짐 (OFF)"
+        self.btn_sharpening['text_fg'] = (0.35, 1.0, 0.65, 1) if enabled else (0.75, 0.85, 0.92, 1)
+        self.btn_sharpening['state'] = 'normal' if pipeline else 'disabled'
+
+    def _toggle_sharpening(self):
+        base_obj = getattr(self, 'base', None)
+        game = getattr(base_obj, 'game', base_obj)
+        pipeline = getattr(game, 'pbr_pipeline', None)
+        if pipeline is not None:
+            pipeline.set_sharpening(not pipeline.sharpening_enabled)
+        self._refresh_sharpening_setting()
 
     def _adjust_setting(self, setting_type, delta):
         """마우스 감도, SFX/BGM 볼륨, FOV 실시간 조정"""

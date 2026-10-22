@@ -4,6 +4,7 @@ from panda3d.core import Vec3, LColor, PointLight, ClockObject
 from geometry import make_cube, make_cube_to, make_sphere, make_sphere_to, make_cylinder, make_cylinder_to
 from elemental_effects import ElementalMonsterMixin
 from elevation import get_floor_height
+from boss_patterns import BossPatternController
 
 
 def create_monster_explosion(parent, pos, monster_type, audio_mgr=None):
@@ -3070,16 +3071,18 @@ class SkeletalDobermanHellhound(ElementalMonsterMixin):
 class CableOverlordBoss(ElementalMonsterMixin):
     col_radius = 0.55
     """
-    [ 백룸 거대 보스 엔티티: 케이블 엔티티 - 심연의 지배자 (Cable Overlord Boss) ]
-    - 높이 약 4.5m의 거대한 고압 절연 케이블 타래, 구리 도선 코일 및 중장갑 골격체
-    - 흉부 중앙에 맥동하는 심연의 코어 펄스 라이트 (PointLight)
-      (페이즈 1: 청록/시안 발광 -> 페이즈 2 폭주: 타오르는 핏빛 진홍색 발광 및 방전)
-    - 4개의 초대형 절연 관절 촉수 (상단 2개 4.2m 채찍 텐타클, 하단 2개 지주 보행 다리)
-    - 2페이즈 전투 패턴:
-      1) 촉수 강타 채찍질 (Cable Lash - 근접 5.8m)
-      2) 지면 강타 충격파 (Ground Shockwave Slam - 반경 18m 지진/슬로우)
-      3) 유도 전선 침 발사 (Homing Wire Darts - 3연장 고전압 투사체)
-      4) [페이즈 2: 체력 50% 이하 폭주] 이동 속도 +45%, 사이렌 알람, 하수인 2체 소환, 주기적 EMP 방전
+    [ 백룸 거대 보스 엔티티: 골해의 지배자 (CableOverlordBoss) ]
+    - 크고 둥근 살색·옅은 분홍빛 해골 두개골 (깊은 검은 눈구멍 2개, 코구멍, 턱과 치아)
+    - 가는 원통형 척추와 둥근 갈비뼈/뼈 기둥 몸통 (케이블/금속 갑옷 제거)
+    - 2개의 길고 앙상한 팔 (어깨 관절, 상완/전완, 손가락 뼈, 360도 연속 회전축)
+    - 8개의 거미형 관절 뼈 다리 (좌우 4개씩, 교대 보행 모션, 넓고 낮은 실루엣)
+    - 1개의 두개골 안광 포인트라이트 (PointLight)
+    - 공정한 전투 기믹:
+      1) 360도 뼈팔 휩쓸기 (Bone Arm Sweep - 0.8s+ 예고 후 360도 회전 타격)
+      2) 순차 뼈 가시 분출 (Sequential Bone Spike Eruption - 고정 위치 3개소 순차 분출)
+      3) 거미 다리 도약 강타 (Spider Leap Slam - 충돌 검증 도약 및 착지 지진파)
+      4) 뼈 파편 일제사격 (Bone Shard Volley - 부채꼴 원거리 투척)
+      5) 2페이즈 폭주 (체력 50% 이하 붉은 안광 점등, 소환 및 패턴 가속)
     """
     def __init__(self, parent, start_x, start_y):
         self.parent_ref = parent
@@ -3087,7 +3090,7 @@ class CableOverlordBoss(ElementalMonsterMixin):
         floor_z, _ = get_floor_height(start_x, start_y)
         self.pos = Vec3(start_x, start_y, floor_z)
         self.node.setPos(self.pos)
-        self.name = "케이블 엔티티: 심연의 지배자"
+        self.name = "골해의 지배자"
         self.is_boss = True
         self.max_hp = 3500
         self.hp = self.max_hp
@@ -3111,7 +3114,7 @@ class CableOverlordBoss(ElementalMonsterMixin):
         self.burn_timer = 0.0
         self.burn_dps = 0.0
 
-        # 보스 특수 스킬 쿨다운
+        # 구버전 및 단위 테스트 호환용 쿨다운 필드
         self.cable_lash_cooldown = 2.0
         self.shockwave_cooldown = 5.0
         self.dart_cooldown = 4.0
@@ -3120,94 +3123,290 @@ class CableOverlordBoss(ElementalMonsterMixin):
         self.is_lashing = False
         self.lash_timer = 0.0
 
-        # 색상 팔레트
-        cable_black = LColor(0.06, 0.06, 0.08, 1.0)
-        cable_dark_metal = LColor(0.14, 0.15, 0.18, 1.0)
-        copper_coil = LColor(0.72, 0.44, 0.18, 1.0)
-        core_cyan = LColor(0.20, 0.95, 1.0, 1.0)
-        visor_glow = LColor(1.0, 0.25, 0.15, 1.0)
-        steel_armor = LColor(0.26, 0.28, 0.32, 1.0)
+        # 신규 패턴 컨트롤러 활성화
+        self.use_new_patterns = True
+        self.pattern_controller = BossPatternController(self)
+
+        # ------------------------------------------------------------------
+        # 팔레트: 살색·옅은 분홍빛 해골 뼈 및 심연 안광
+        # ------------------------------------------------------------------
+        bone_pale_pink = LColor(0.88, 0.77, 0.74, 1.0)  # 두개골 및 관절
+        bone_ivory = LColor(0.93, 0.90, 0.85, 1.0)      # 치아 및 갈비뼈
+        bone_dark = LColor(0.46, 0.40, 0.38, 1.0)       # 척추 마디 및 연결부
+        cavity_black = LColor(0.02, 0.02, 0.03, 1.0)    # 눈구멍 / 콧구멍
+        eye_glow_p1 = LColor(0.20, 0.90, 1.0, 1.0)      # 페이즈 1 청록 안광
 
         self.root_pivot = self.node.attachNewNode("boss_pivot")
 
-        # 1. 흉부 및 몸통 골격 (Torso & Cable Bundles, Z=1.6 ~ 3.2m)
+        # ==================================================================
+        # 1. 하단 골반 및 8개의 거미 관절 뼈 다리 (Pelvis & 8 Spider Bone Legs)
+        # ==================================================================
+        self.pelvis = self.root_pivot.attachNewNode("boss_pelvis")
+        self.pelvis.setPos(0, 0, 0.95)
+        # 낮은 원통형 골반 기저부
+        make_cylinder_to(self.pelvis, 1.30, 1.15, 0.40, bone_dark, 0, 0, 0, axis='z')
+        make_sphere_to(self.pelvis, 1.35, 0.85, 0.35, bone_pale_pink, 0, -0.15, 0.12)
+
+        # 좌우 4개씩 총 8개의 관절 다리 생성
+        self.spider_legs = []
+        leg_configs = [
+            # 좌측 4개 다리 (각도: 전방외측 -> 후방외측)
+            (0, 52, 1), (1, 20, 1), (2, -20, 1), (3, -52, 1),
+            # 우측 4개 다리 (대칭 각도)
+            (4, 128, -1), (5, 160, -1), (6, -160, -1), (7, -128, -1)
+        ]
+
+        for leg_idx, ang_deg, side_sign in leg_configs:
+            rad = math.radians(ang_deg)
+            attach_x = math.cos(rad) * 0.72
+            attach_y = math.sin(rad) * 0.62
+            leg_base = self.pelvis.attachNewNode(f"leg_base_{leg_idx}")
+            leg_base.setPos(attach_x, attach_y, -0.05)
+            leg_base.setH(ang_deg - 90)
+
+            # 기저 볼 관절
+            make_sphere_to(leg_base, 0.24, 0.24, 0.24, bone_dark, 0, 0, 0)
+
+            # 상퇴골 (Femur - 비스듬히 위로 뻗음)
+            femur_node = leg_base.attachNewNode(f"femur_{leg_idx}")
+            femur_bone = make_cylinder_to(femur_node, 0.14, math.hypot(1.25, .72), 0.14,
+                                          bone_pale_pink, 0, .625, .36, axis='y')
+            femur_bone.lookAt(femur_node, Vec3(0, 1.25, .72))
+
+            # 무릎 관절 (Knee)
+            knee_node = femur_node.attachNewNode(f"knee_{leg_idx}")
+            knee_node.setPos(0, 1.25, 0.72)
+            make_sphere_to(knee_node, 0.22, 0.22, 0.22, bone_dark, 0, 0, 0)
+
+            # 하퇴골 (Tibia - 바닥을 향해 아래로 뻗음)
+            tibia_node = knee_node.attachNewNode(f"tibia_{leg_idx}")
+            tibia_bone = make_cylinder_to(tibia_node, 0.12, math.hypot(1.25, 1.70), 0.12,
+                                          bone_ivory, 0, .625, -.85, axis='y')
+            tibia_bone.lookAt(tibia_node, Vec3(0, 1.25, -1.70))
+            # 뾰족한 발끝 뼈
+            make_cube_to(tibia_node, 0.08, 0.08, 0.22, bone_dark, 0, 1.25, -1.70)
+
+            self.spider_legs.append((leg_base, femur_node, knee_node, tibia_node, ang_deg, leg_idx))
+
+        # ==================================================================
+        # 2. 몸통: 가는 원통형 척추와 둥근 갈비뼈 (Spine & Rib Cage, Z=1.2 ~ 2.9m)
+        # ==================================================================
         self.torso = self.root_pivot.attachNewNode("boss_torso")
-        self.torso.setPos(0, 0, 2.2)
+        self.torso.setPos(0, 0, 1.25)
 
-        # 주 척추 기둥
-        make_cube_to(self.torso, 0.85, 0.75, 1.70, cable_black, 0, 0, 0)
-        # 구리 전선 코일 감개
-        make_cube_to(self.torso, 0.98, 0.88, 0.35, copper_coil, 0, 0, 0.45)
-        make_cube_to(self.torso, 0.98, 0.88, 0.35, copper_coil, 0, 0, -0.45)
-        # 등 뒤 고전압 배전반 & 방열 핀
-        make_cube_to(self.torso, 1.20, 0.40, 1.30, steel_armor, 0, -0.48, 0.10)
-        make_cube_to(self.torso, 0.25, 0.50, 0.08, copper_coil, -0.40, -0.52, 0.35)
-        make_cube_to(self.torso, 0.25, 0.50, 0.08, copper_coil, 0.40, -0.52, 0.35)
+        # 가는 원통형 척추 마디 (6개 적층 원통)
+        self.spine_vertebrae = []
+        for s in range(6):
+            vert = make_cylinder_to(self.torso, 0.28, 0.26, 0.24, bone_dark, 0, 0, 0.15 + s * 0.26, axis='z')
+            self.spine_vertebrae.append(vert)
 
-        # 2. 흉부 중앙 심연의 에너지 코어 (Abyssal Pulsating Core)
-        self.core_geom = make_sphere_to(self.torso, 0.48, 0.48, 0.48, core_cyan, 0, 0.32, 0.05, rot_h=45, rot_p=45)
-        self.core_geom.setLightOff()
+        # 둥근 갈비뼈 (5쌍의 곡선형 뼈 기둥)
+        self.rib_nodes = []
+        for r in range(5):
+            rz = 0.35 + r * 0.24
+            rw = 0.85 + (r * 0.06 if r < 3 else (4 - r) * 0.08)
+            # 좌측 갈비뼈
+            rib_l = make_cylinder_to(self.torso, 0.10, rw, 0.10, bone_ivory,
+                                    -rw * 0.45, 0.18, rz, rot_h=-28, rot_p=-10, axis='y')
+            # 우측 갈비뼈
+            rib_r = make_cylinder_to(self.torso, 0.10, rw, 0.10, bone_ivory,
+                                    rw * 0.45, 0.18, rz, rot_h=28, rot_p=-10, axis='y')
+            self.rib_nodes.extend([rib_l, rib_r])
+        self._rib_base_scales = [Vec3(rib.getScale()) for rib in self.rib_nodes]
 
-        # 코어 자체 발광 포인트라이트
-        self.core_light = PointLight("boss_core_light")
-        self.core_light.setColor((1.2, 3.8, 5.0, 1.0))
-        self.core_light.setAttenuation((1.0, 0.12, 0.025))
-        self.core_light_np = self.torso.attachNewNode(self.core_light)
-        self.core_light_np.setPos(0, 0.45, 0.05)
-        parent.setLight(self.core_light_np)
+        # 전면 흉골 및 뼈 기둥
+        make_cylinder_to(self.torso, 0.16, 0.16, 1.20, bone_ivory, 0, 0.48, 0.90, axis='z')
+        # 상단 쇄골 및 어깨 지지대
+        self.shoulder_bone = make_cylinder_to(self.torso, 2.30, 0.26, 0.22, bone_pale_pink, 0, 0.05, 1.62, axis='x')
 
-        # 3. 흉포한 케이블 머리 & 투구 (Head & Menacing Visor, Z=3.3 ~ 4.4m)
+        # ==================================================================
+        # 3. 두 개의 길고 앙상한 팔 (360도 연속 회전축 지원)
+        # ==================================================================
+        self.arm_pivot_l = self.torso.attachNewNode("arm_pivot_l")
+        self.arm_pivot_l.setPos(-1.20, 0.05, 1.62)
+        make_sphere_to(self.arm_pivot_l, 0.32, 0.32, 0.32, bone_dark, 0, 0, 0)
+
+        self.arm_pivot_r = self.torso.attachNewNode("arm_pivot_r")
+        self.arm_pivot_r.setPos(1.20, 0.05, 1.62)
+        make_sphere_to(self.arm_pivot_r, 0.32, 0.32, 0.32, bone_dark, 0, 0, 0)
+
+        # 상완 (Upper Arm)
+        self.upper_arm_l = self.arm_pivot_l.attachNewNode("upper_arm_l")
+        make_cylinder_to(self.upper_arm_l, 0.15, 0.15, 1.35, bone_pale_pink, 0, 0, -0.68, axis='z')
+        make_sphere_to(self.upper_arm_l, 0.24, 0.24, 0.24, bone_dark, 0, 0, -1.35)
+
+        self.upper_arm_r = self.arm_pivot_r.attachNewNode("upper_arm_r")
+        make_cylinder_to(self.upper_arm_r, 0.15, 0.15, 1.35, bone_pale_pink, 0, 0, -0.68, axis='z')
+        make_sphere_to(self.upper_arm_r, 0.24, 0.24, 0.24, bone_dark, 0, 0, -1.35)
+
+        # 전완 (Forearm - 이중 뼈 구조)
+        self.forearm_l = self.upper_arm_l.attachNewNode("forearm_l")
+        self.forearm_l.setPos(0, 0, -1.35)
+        make_cylinder_to(self.forearm_l, 0.10, 0.10, 1.45, bone_ivory, -0.06, 0, -0.72, axis='z')
+        make_cylinder_to(self.forearm_l, 0.10, 0.10, 1.45, bone_ivory, 0.06, 0, -0.72, axis='z')
+
+        self.forearm_r = self.upper_arm_r.attachNewNode("forearm_r")
+        self.forearm_r.setPos(0, 0, -1.35)
+        make_cylinder_to(self.forearm_r, 0.10, 0.10, 1.45, bone_ivory, -0.06, 0, -0.72, axis='z')
+        make_cylinder_to(self.forearm_r, 0.10, 0.10, 1.45, bone_ivory, 0.06, 0, -0.72, axis='z')
+
+        # 손목 및 갈퀴 손가락 뼈 (Finger Talons)
+        make_cube_to(self.forearm_l, 0.24, 0.20, 0.12, bone_dark, 0, 0, -1.48)
+        make_cube_to(self.forearm_r, 0.24, 0.20, 0.12, bone_dark, 0, 0, -1.48)
+        for f in (-0.09, -0.03, 0.03, 0.09):
+            make_cylinder_to(self.forearm_l, 0.04, 0.04, 0.40, bone_ivory, f, 0.08, -1.68, rot_p=-25, axis='z')
+            make_cylinder_to(self.forearm_r, 0.04, 0.04, 0.40, bone_ivory, f, 0.08, -1.68, rot_p=-25, axis='z')
+
+        # ==================================================================
+        # 4. 크고 둥근 살색·분홍빛 해골 머리 (Large Skull Head, Z=3.1 ~ 4.4m)
+        # ==================================================================
         self.head_pivot = self.torso.attachNewNode("boss_head")
-        self.head_pivot.setPos(0, 0.22, 1.15)
-        make_cube_to(self.head_pivot, 0.65, 0.60, 0.70, cable_black, 0, 0, 0)
-        # 뿔 형태의 강철 침 (Horns)
-        horn_l = make_cube_to(self.head_pivot, 0.12, 0.12, 0.85, steel_armor, -0.35, -0.10, 0.45, rot_h=-18, rot_r=-24)
-        horn_r = make_cube_to(self.head_pivot, 0.12, 0.12, 0.85, steel_armor, 0.35, -0.10, 0.45, rot_h=18, rot_r=24)
-        # 발광 바이저 안광 (Visor Slit Eyes)
-        self.visor_eye = make_cube_to(self.head_pivot, 0.48, 0.10, 0.12, visor_glow, 0, 0.32, 0.08)
-        self.visor_eye.setLightOff()
+        self.head_pivot.setPos(0, 0.18, 1.85)
 
-        # 4. 상단 2개 거대 타격 촉수 채찍 (Upper Tentacle Lashers - Left & Right, 길이 ~4.2m)
-        self.lash_l_segments = []
-        self.lash_r_segments = []
+        # 둥근 두개골 상단 (Cranium)
+        self.cranium = make_sphere_to(self.head_pivot, 1.45, 1.55, 1.35, bone_pale_pink, 0, 0, 0.35)
+        # 이마 및 눈썹 뼈 (Brow ridge)
+        make_sphere_to(self.head_pivot, 1.30, 0.65, 0.38, bone_ivory, 0, 0.52, 0.38)
+        # 광대뼈 (Cheekbones)
+        make_cylinder_to(self.head_pivot, 0.20, 0.50, 0.20, bone_pale_pink, -0.55, 0.35, 0.12, rot_h=20, rot_p=-15)
+        make_cylinder_to(self.head_pivot, 0.20, 0.50, 0.20, bone_pale_pink, 0.55, 0.35, 0.12, rot_h=-20, rot_p=-15)
 
-        # (1) 좌측 상단 촉수
-        prev_node = self.torso.attachNewNode("lash_l_root")
-        prev_node.setPos(-0.75, 0.15, 0.55)
-        for s in range(5):
-            seg_node = prev_node.attachNewNode(f"lash_l_seg_{s}")
-            seg_len = 0.80 - s * 0.06
-            thick = 0.24 - s * 0.03
-            col = copper_coil if (s % 2 == 1) else cable_black
-            make_cube_to(seg_node, thick, seg_len, thick, col, 0, seg_len * 0.5, 0)
-            self.lash_l_segments.append(seg_node)
-            prev_node = seg_node.attachNewNode("next_joint")
-            prev_node.setPos(0, seg_len, 0)
+        # 깊은 검은 눈구멍 2개 (Deep Black Eye Sockets)
+        make_sphere_to(self.head_pivot, 0.36, 0.32, 0.36, cavity_black, -0.34, 0.70, 0.30)
+        make_sphere_to(self.head_pivot, 0.36, 0.32, 0.36, cavity_black, 0.34, 0.70, 0.30)
 
-        # (2) 우측 상단 촉수
-        prev_node = self.torso.attachNewNode("lash_r_root")
-        prev_node.setPos(0.75, 0.15, 0.55)
-        for s in range(5):
-            seg_node = prev_node.attachNewNode(f"lash_r_seg_{s}")
-            seg_len = 0.80 - s * 0.06
-            thick = 0.24 - s * 0.03
-            col = copper_coil if (s % 2 == 1) else cable_black
-            make_cube_to(seg_node, thick, seg_len, thick, col, 0, seg_len * 0.5, 0)
-            self.lash_r_segments.append(seg_node)
-            prev_node = seg_node.attachNewNode("next_joint")
-            prev_node.setPos(0, seg_len, 0)
+        # 안구 속 발광 동공
+        self.eye_l = make_sphere_to(self.head_pivot, 0.12, 0.12, 0.12, eye_glow_p1, -0.34, 0.88, 0.30)
+        self.eye_r = make_sphere_to(self.head_pivot, 0.12, 0.12, 0.12, eye_glow_p1, 0.34, 0.88, 0.30)
+        self.eye_l.setLightOff()
+        self.eye_r.setLightOff()
 
-        # 5. 하단 2개 중장갑 지주 보행 다리 (Lower Heavy Struts - Left & Right)
-        self.strut_l = self.root_pivot.attachNewNode("strut_l")
-        self.strut_l.setPos(-0.65, 0, 1.4)
-        make_cube_to(self.strut_l, 0.32, 0.38, 1.35, cable_dark_metal, 0, 0, -0.65, rot_p=-12)
-        make_cube_to(self.strut_l, 0.55, 0.70, 0.25, steel_armor, 0, 0.15, -1.35)
+        # 콧구멍 (Nasal Cavity - 역삼각 공동)
+        make_cube_to(self.head_pivot, 0.16, 0.22, 0.22, cavity_black, 0, 0.74, 0.08, rot_p=22)
 
-        self.strut_r = self.root_pivot.attachNewNode("strut_r")
-        self.strut_r.setPos(0.65, 0, 1.4)
-        make_cube_to(self.strut_r, 0.32, 0.38, 1.35, cable_dark_metal, 0, 0, -0.65, rot_p=-12)
-        make_cube_to(self.strut_r, 0.55, 0.70, 0.25, steel_armor, 0, 0.15, -1.35)
+        # 상악 및 상단 치아 (Maxilla & Upper Teeth)
+        make_cube_to(self.head_pivot, 0.72, 0.52, 0.24, bone_pale_pink, 0, 0.52, -0.10)
+        for ti in range(6):
+            tx = -0.25 + ti * 0.10
+            make_cube_to(self.head_pivot, 0.065, 0.08, 0.14, bone_ivory, tx, 0.72, -0.20)
 
+        # 하악 및 하단 치아 (Mandible & Lower Teeth - 개폐 가동 턱)
+        self.jaw_pivot = self.head_pivot.attachNewNode("boss_jaw")
+        self.jaw_pivot.setPos(0, 0.35, -0.24)
+        make_cube_to(self.jaw_pivot, 0.68, 0.60, 0.18, bone_dark, 0, 0.12, -0.06)
+        for ti in range(6):
+            tx = -0.25 + ti * 0.10
+            make_cube_to(self.jaw_pivot, 0.065, 0.08, 0.14, bone_ivory, tx, 0.38, 0.06)
+
+        # ==================================================================
+        # 5. 유일 광원: 해골 안광 포인트라이트 (1개 이하 제한 준수)
+        # ==================================================================
+        self.skull_light = PointLight("boss_skull_light")
+        self.skull_light.setColor((1.2, 1.8, 2.2, 1.0))
+        self.skull_light.setAttenuation((1.0, 0.14, 0.03))
+        self.skull_light_np = self.head_pivot.attachNewNode(self.skull_light)
+        self.skull_light_np.setPos(0, 0.55, 0.30)
+        parent.setLight(self.skull_light_np)
+
+        # 구버전 코드 호환용 별칭 연결
+        self.core_light = self.skull_light
+        self.core_light_np = self.skull_light_np
+
+    # ----------------------------------------------------------------------
+    # 포즈 제어 헬퍼 (기믹 및 모션 연동)
+    # ----------------------------------------------------------------------
+    def set_sweep_telegraph_pose(self, active):
+        """360도 뼈팔 휩쓸기 예고 자세 (팔을 머리 위로 번쩍 치켜듦)"""
+        if active:
+            self.arm_pivot_l.setP(180.0)
+            self.arm_pivot_r.setP(180.0)
+            self.jaw_pivot.setP(-15.0)
+        else:
+            self.arm_pivot_l.setP(0.0)
+            self.arm_pivot_r.setP(0.0)
+            self.jaw_pivot.setP(0.0)
+
+    def set_sweep_arm_angle(self, angle_deg):
+        """360도 회전축 연속 회전 모션"""
+        angle = math.radians(angle_deg)
+        self.shoulder_bone.setPos(0, 0, -.60)
+        self.shoulder_bone.setH(angle_deg)
+        for arm, side in ((self.arm_pivot_l, -1), (self.arm_pivot_r, 1)):
+            arm.setPos(side * math.cos(angle) * 1.2, side * math.sin(angle) * 1.2, -.60)
+            arm.setHpr((angle_deg + (90 if side < 0 else 270)) % 360, 90, 0)
+
+    def set_cast_roar_pose(self, active):
+        """가시 분출 시전 포효 자세"""
+        if active:
+            self.head_pivot.setP(22.0)
+            self.jaw_pivot.setP(-28.0)
+            self.arm_pivot_l.setHpr(-35.0, -45.0, 20.0)
+            self.arm_pivot_r.setHpr(35.0, -45.0, -20.0)
+        else:
+            self.head_pivot.setP(0.0)
+            self.jaw_pivot.setP(0.0)
+            self.arm_pivot_l.setHpr(0.0, 0.0, 0.0)
+            self.arm_pivot_r.setHpr(0.0, 0.0, 0.0)
+
+    def set_crouch_pose(self, active):
+        """도약 강타 예고: 거미 다리를 웅크리고 상체를 낮춤"""
+        if active:
+            self.pelvis.setZ(0.55)
+            self.head_pivot.setP(-15.0)
+            for _, femur, knee, _, _, _ in self.spider_legs:
+                femur.setP(25.0)
+                knee.setP(-35.0)
+        else:
+            self.pelvis.setZ(0.95)
+            self.head_pivot.setP(0.0)
+            for _, femur, knee, _, _, _ in self.spider_legs:
+                femur.setP(0.0)
+                knee.setP(0.0)
+
+    def set_rib_flare_pose(self, active):
+        """뼈 파편 사격 시 갈비뼈 확장 및 상체 기립"""
+        if active:
+            self.head_pivot.setP(12.0)
+            for rib, scale in zip(self.rib_nodes, self._rib_base_scales):
+                rib.setScale(scale * 1.22)
+        else:
+            self.head_pivot.setP(0.0)
+            for rib, scale in zip(self.rib_nodes, self._rib_base_scales):
+                rib.setScale(scale)
+
+    def set_recovery_pose(self, active):
+        """공격 후 회복 자세: 머리와 팔이 앞으로 늘어지며 해골 약점 노출"""
+        self.shoulder_bone.setPos(0, .05, 1.62)
+        self.shoulder_bone.setH(0)
+        self.arm_pivot_l.setPos(-1.2, .05, 1.62)
+        self.arm_pivot_r.setPos(1.2, .05, 1.62)
+        self.arm_pivot_l.setHpr(0, 0, 0)
+        self.arm_pivot_r.setHpr(0, 0, 0)
+        if active:
+            self.head_pivot.setPos(0, 0.35, 1.45)
+            self.head_pivot.setP(-24.0)
+            self.jaw_pivot.setP(-14.0)
+            self.arm_pivot_l.setP(45.0)
+            self.arm_pivot_r.setP(45.0)
+        else:
+            self.head_pivot.setPos(0, 0.18, 1.85)
+            self.head_pivot.setP(0.0)
+            self.jaw_pivot.setP(0.0)
+            self.arm_pivot_l.setP(0.0)
+            self.arm_pivot_r.setP(0.0)
+
+    def apply_phase_2_visuals(self):
+        """2페이즈 폭주 시 안광 및 조명을 진홍색으로 변경"""
+        if hasattr(self, 'eye_l') and not self.eye_l.isEmpty():
+            self.eye_l.setColor(1.0, 0.15, 0.1, 1.0)
+        if hasattr(self, 'eye_r') and not self.eye_r.isEmpty():
+            self.eye_r.setColor(1.0, 0.15, 0.1, 1.0)
+        if hasattr(self, 'skull_light') and self.skull_light:
+            self.skull_light.setColor((3.0, 0.4, 0.25, 1.0))
+
+    # ----------------------------------------------------------------------
+    # 전투 및 상태이상 처리
+    # ----------------------------------------------------------------------
     def stun(self, duration):
         """보스는 강력한 질량 저항으로 인해 스턴 시간이 70% 감쇄됨"""
         self.stun_timer = max(self.stun_timer, duration * 0.30)
@@ -3225,59 +3424,62 @@ class CableOverlordBoss(ElementalMonsterMixin):
             entry_pos = (self.pos - hit_dir * 0.25) if hit_dir is not None else None
             self.apply_shock(damage=0.0, duration=0.65, hit_pos=entry_pos)
 
-        # 피격 순간 코어 라이트 섬광
-        if hasattr(self, 'core_light') and self.core_light:
-            self.core_light.setColor((5.0, 5.0, 5.0, 1.0))
+        # 피격 순간 안광 섬광
+        if hasattr(self, 'skull_light') and self.skull_light:
+            self.skull_light.setColor((4.0, 4.0, 4.0, 1.0))
 
         if self.hp <= 0:
             return True
         return False
 
     def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
-        """보스 레이캐스트 적중 판정 (두부 헤드샷, 흉부 코어, 하단부 판정)"""
+        """Intersect the animated skull and body ellipsoids in their own spaces."""
         self.last_hit_was_head = False
-        targets = [
-            # 1) 머리 (Headshot 영역)
-            (self.pos.x, self.pos.y, self.pos.z + 3.85, 0.85, True),
-            # 2) 흉부 코어 (Center Core 영역)
-            (self.pos.x, self.pos.y, self.pos.z + 2.30, 1.40, False),
-            # 3) 하단부 외골격
-            (self.pos.x, self.pos.y, self.pos.z + 1.10, 1.55, False),
-        ]
-
-        for tx, ty, tz, r, is_head in targets:
-            vx = tx - ray_o.x
-            vy = ty - ray_o.y
-            vz = tz - ray_o.z
-            t = vx * ray_d.x + vy * ray_d.y + vz * ray_d.z
-            if 0.2 < t < max_dist:
-                cx = ray_o.x + t * ray_d.x
-                cy = ray_o.y + t * ray_d.y
-                cz = ray_o.z + t * ray_d.z
-                dist_sq = (tx - cx)**2 + (ty - cy)**2 + (tz - cz)**2
-                if dist_sq <= r * r:
-                    self.last_hit_was_head = is_head
-                    return True, t
-        return False, 999.0
+        targets = (
+            (self.cranium, Vec3(0), Vec3(.5), True),
+            (self.torso, Vec3(0, .12, .85), Vec3(.65, .60, .85), False),
+            (self.pelvis, Vec3(0), Vec3(.70, .60, .28), False),
+        )
+        nearest = max_dist
+        hit_any = False
+        for node, center, radius, is_head in targets:
+            origin = node.getRelativePoint(self.parent_ref, ray_o) - center
+            direction = node.getRelativeVector(self.parent_ref, ray_d)
+            q = Vec3(origin.x/radius.x, origin.y/radius.y, origin.z/radius.z)
+            d = Vec3(direction.x/radius.x, direction.y/radius.y, direction.z/radius.z)
+            aa, bb, cc = d.dot(d), q.dot(d), q.dot(q) - 1
+            discriminant = bb*bb - aa*cc
+            if aa <= 1e-12 or discriminant < 0:
+                continue
+            entry = (-bb - math.sqrt(discriminant)) / aa
+            if .2 < entry < nearest:
+                nearest = entry
+                self.last_hit_was_head = is_head
+                hit_any = True
+        return (True, nearest) if hit_any else (False, 999.0)
 
     def turn_into_corpse(self, audio_mgr=None):
-        """보스 격파 시 대폭발 및 전선 파편 비산"""
+        """보스 격파 시 대폭발 및 모든 패턴/인디케이터 해제"""
         self.is_corpse = True
         self.is_dead = True
         self.hp = 0
         self.cleanup_elemental()
 
-        if hasattr(self, 'core_light_np') and self.core_light_np and not self.core_light_np.isEmpty():
+        if hasattr(self, 'pattern_controller') and self.pattern_controller:
+            self.pattern_controller.cleanup()
+
+        if hasattr(self, 'skull_light_np') and self.skull_light_np and not self.skull_light_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
-                self.parent_ref.clearLight(self.core_light_np)
-            self.core_light_np.removeNode()
+                self.parent_ref.clearLight(self.skull_light_np)
+            self.skull_light_np.removeNode()
 
         create_monster_explosion(self.parent_ref, self.pos, "boss", audio_mgr)
         self.node.hide()
 
     def update_pos(self, new_x, new_y, dt, dir_x, dir_y, wall_norm=None, climb_target_z=0.0):
         if self.stun_timer > 0.0:
-            self.stun_timer -= dt
+            self.stun_timer = max(0.0, self.stun_timer - dt)
+            self.update(dt, is_moving=False)
             return
 
         floor_z, s_type = get_floor_height(new_x, new_y, self.pos.z)
@@ -3296,83 +3498,57 @@ class CableOverlordBoss(ElementalMonsterMixin):
         self.update(dt, is_moving=True)
 
     def update(self, dt, is_moving=False, is_attacking=False):
-        """보스 4.5m 촉수 파동, 코어 맥동 및 모션 갱신"""
-        self.anim_time += dt * (7.5 if self.phase == 2 else 4.2)
+        """골해의 지배자 8다리 보행, 호흡 및 두개골 안광 갱신"""
+        self.anim_time += dt * (7.0 if self.phase == 2 else 4.2)
         phase = self.anim_time
 
         # 화염 지속 피해 및 전기 원소 시각 효과 갱신
         self.update_elemental(dt)
 
-        # 스킬 쿨다운 감소
-        if self.cable_lash_cooldown > 0.0:
-            self.cable_lash_cooldown -= dt
-        if self.shockwave_cooldown > 0.0:
-            self.shockwave_cooldown -= dt
-        if self.dart_cooldown > 0.0:
-            self.dart_cooldown -= dt
+        # 스턴 중이 아닐 때만 유휴 모션 및 조명 펄스 갱신
+        is_acting = getattr(getattr(self, 'pattern_controller', None), 'is_acting', lambda: False)()
+        if self.stun_timer <= 0.0:
+            # 패턴 미수행 시 자연스러운 해골 호흡 모션
+            if not is_acting:
+                self.head_pivot.setH(math.sin(phase * 0.6) * 10.0)
+                self.head_pivot.setP(math.sin(phase * 0.4) * 5.0)
+                self.torso.setZ(1.25 + math.sin(phase * 0.8) * 0.06)
 
-        # 머리 회전 및 호흡 바운스
-        self.head_pivot.setH(math.sin(phase * 0.6) * 12.0)
-        self.head_pivot.setP(math.sin(phase * 0.4) * 6.0)
-        self.torso.setZ(2.2 + math.sin(phase * 0.8) * 0.08)
+                # 팔 가벼운 흔들림
+                sway_arm = math.sin(phase * 0.8) * 12.0
+                self.arm_pivot_l.setP(sway_arm)
+                self.arm_pivot_r.setP(-sway_arm)
 
-        # 흉부 코어 맥동 발광
+            # 8개 거미 다리 보행 애니메이션 (교대 보행)
+            if is_moving and not is_acting:
+                for idx, (leg_base, femur, knee, tibia, base_ang, leg_idx) in enumerate(self.spider_legs):
+                    # 홀수/짝수 다리 교대 보행 (Tripod / Tetrapod gait)
+                    leg_phase = phase * 1.5 + (0.0 if leg_idx % 2 == 0 else math.pi)
+                    step_lift = max(0.0, math.sin(leg_phase)) * 24.0
+                    step_swing = math.cos(leg_phase) * 16.0
+                    femur.setP(step_swing - step_lift * 0.5)
+                    knee.setP(step_lift * 0.8)
+            elif not is_acting:
+                for _, femur, knee, _, _, _ in self.spider_legs:
+                    femur.setP(0.0)
+                    knee.setP(0.0)
+
+        # 안광 펄스
         pulse = 0.5 + 0.5 * math.sin(phase * 3.5)
-        if hasattr(self, 'core_light') and self.core_light:
+        if hasattr(self, 'skull_light') and self.skull_light:
             if self.phase == 2:
-                self.core_light.setColor((2.8 + pulse * 1.5, 0.2 + pulse * 0.3, 0.2, 1.0))
-                if hasattr(self, 'core_geom') and not self.core_geom.isEmpty():
-                    self.core_geom.setColorScale(1.0, 0.15 + pulse * 0.3, 0.15, 1.0)
+                self.skull_light.setColor((2.8 + pulse * 1.4, 0.25 + pulse * 0.2, 0.2, 1.0))
             else:
-                self.core_light.setColor((0.8 + pulse * 0.6, 2.8 + pulse * 1.2, 4.0 + pulse * 1.5, 1.0))
-                if hasattr(self, 'core_geom') and not self.core_geom.isEmpty():
-                    self.core_geom.setColorScale(0.2, 0.9 + pulse * 0.1, 1.0, 1.0)
-
-        # 상단 2개 촉수 사인파 파동 (Sinusoidal Writhing Motion)
-        for i, seg in enumerate(self.lash_l_segments):
-            seg_phase = phase + i * 0.65
-            sway_h = math.sin(seg_phase) * (18.0 + i * 4.0)
-            sway_p = math.cos(seg_phase * 0.8) * (14.0 + i * 3.5)
-            if self.is_lashing:
-                seg.setH(sway_h * 0.4 - 35.0)
-                seg.setP(sway_p * 0.4 + 45.0)
-            else:
-                seg.setH(sway_h)
-                seg.setP(sway_p)
-
-        for i, seg in enumerate(self.lash_r_segments):
-            seg_phase = phase - i * 0.65
-            sway_h = -math.sin(seg_phase) * (18.0 + i * 4.0)
-            sway_p = math.cos(seg_phase * 0.8) * (14.0 + i * 3.5)
-            if self.is_lashing:
-                seg.setH(sway_h * 0.4 + 35.0)
-                seg.setP(sway_p * 0.4 + 45.0)
-            else:
-                seg.setH(sway_h)
-                seg.setP(sway_p)
-
-        # 채찍 공격 타이머 해제
-        if self.is_lashing:
-            self.lash_timer -= dt
-            if self.lash_timer <= 0.0:
-                self.is_lashing = False
-
-        # 보행 시 하단 지주 다리 보행 애니메이션
-        if is_moving:
-            step_angle = math.sin(phase * 1.4) * 22.0
-            self.strut_l.setP(step_angle)
-            self.strut_r.setP(-step_angle)
-        else:
-            self.strut_l.setP(0)
-            self.strut_r.setP(0)
+                self.skull_light.setColor((1.0 + pulse * 0.4, 1.6 + pulse * 0.8, 2.2 + pulse * 1.0, 1.0))
 
     def destroy(self):
-        """노드 및 라이트 자원 완전 해제"""
+        """노드 및 조명, 패턴 자원 완전 해제"""
         self.cleanup_elemental()
-        if hasattr(self, 'core_light_np') and self.core_light_np and not self.core_light_np.isEmpty():
+        if hasattr(self, 'pattern_controller') and self.pattern_controller:
+            self.pattern_controller.cleanup()
+        if hasattr(self, 'skull_light_np') and self.skull_light_np and not self.skull_light_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
-                self.parent_ref.clearLight(self.core_light_np)
-            self.core_light_np.removeNode()
+                self.parent_ref.clearLight(self.skull_light_np)
+            self.skull_light_np.removeNode()
         if hasattr(self, 'node') and not self.node.isEmpty():
             self.node.removeNode()
-

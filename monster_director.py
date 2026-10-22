@@ -138,7 +138,7 @@ class MonsterDirector:
                         g.ui_mgr.hide_boss_hp_bar()
                     g.trigger_bullet_time(4.0)
                     g.ui_mgr.show_stage_banner(
-                        "[ ★ BOSS DEFEATED ★ ]\n심연의 지배자 격파 성공!\n탈출 관문 보안 락이 영구 해제되었습니다!",
+                        f"[ ★ BOSS DEFEATED ★ ]\n{m.name} 격파 성공!\n탈출 관문 보안 락이 영구 해제되었습니다!",
                         color=(0.2, 1.0, 0.4, 1.0)
                     )
                     g.stage_banner_timer = 5.0
@@ -267,75 +267,91 @@ class MonsterDirector:
                                 return True, closest_dist
                     continue
 
-            # 3-C. 심연의 지배자 (케이블 엔티티 보스) 2페이즈 전투 패턴 & 스킬 시전
+            # 3-C. 골해의 지배자 (CableOverlordBoss) 전투 패턴 & 스킬 시전
             if isinstance(m, CableOverlordBoss):
                 if hasattr(g.ui_mgr, 'update_boss_hp'):
                     g.ui_mgr.update_boss_hp(m.hp, m.max_hp, m.phase)
 
-                # 2페이즈 전환 (체력 50% 이하 시 폭주 및 적색 발광)
-                if m.hp <= m.max_hp * 0.5 and m.phase == 1:
-                    m.phase = 2
-                    m.speed = 6.2
-                    g.ui_mgr.show_stage_banner(
-                        "[ ! 경고: 심연의 지배자 2페이즈 폭주 돌입 ! ]\n심연의 코어가 적색으로 과부하되며 이동 속도 및 공격 빈도가 급증합니다!",
-                        color=(1.0, 0.15, 0.15, 1.0)
-                    )
-                    g.stage_banner_timer = 3.5
-                    if hasattr(g, 'audio_mgr') and g.audio_mgr:
-                        g.audio_mgr.play_siren_alarm()
-                    for _ in range(2):
-                        g.spawn_reinforcement_monster(near_gate=True)
-
-                # 1) 케이블 채찍 근접 강타 (Cable Lash, dist <= 5.8m, dist_z <= 3.5m)
-                if dist <= 5.8 and dist_z <= 3.5 and m.cable_lash_cooldown <= 0.0 and not m.is_lashing and m.stun_timer <= 0.0:
-                    m.is_lashing = True
-                    m.lash_timer = 0.65
-                    m.cable_lash_cooldown = 1.6 if m.phase == 2 else 2.5
-                    is_dead = g.player.take_damage(38 if m.phase == 2 else 28, source_pos=(mx, my))
-                    if hasattr(g, 'audio_mgr') and g.audio_mgr:
-                        g.audio_mgr.play_monster_3d("serp_slither", m.node, volume_scale=1.4)
-                    g.ui_mgr.show_hit_marker("보스 케이블 채찍 강타 피격!", (1.0, 0.2, 0.2, 1.0))
-                    if is_dead:
-                        g.trigger_game_over(killer=m, reason="killed")
+                # 신규 패턴 컨트롤러가 있는 경우 상태 머신 갱신
+                if getattr(m, 'use_new_patterns', False) and hasattr(m, 'pattern_controller') and m.pattern_controller:
+                    game_ended = m.pattern_controller.update(eff_dt, g, px, py, pz, dist, dist_z)
+                    if game_ended:
                         return True, closest_dist
-
-                # 2) 전방위 고전압 지진 충격파 (Ground Shockwave, dist <= 18m)
-                if dist <= 18.0 and m.shockwave_cooldown <= 0.0 and m.stun_timer <= 0.0:
-                    m.shockwave_cooldown = 4.2 if m.phase == 2 else 6.2
-                    g.shockwaves.append(GroundShockwave(g.render, mx, my))
-                    if hasattr(g, 'audio_mgr') and g.audio_mgr:
-                        g.audio_mgr.play_orc_slam()
-                    g.player.trigger_quake_shake(intensity=3.2, duration=1.0)
-                    if dist <= 11.0:
-                        player_floor, _ = get_floor_height(px, py, pz - PLAYER_EYE_HEIGHT)
-                        if player_floor < 1.2:
-                            is_dead = g.player.take_damage(20, source_pos=(mx, my))
-                            if is_dead:
-                                g.trigger_game_over(killer=m, reason="killed")
-                                return True, closest_dist
-                            g.player.apply_slow(duration=2.5, factor=0.45)
-                            g.ui_mgr.show_hit_marker("보스 지진 충격파 피격! (이동속도 저하)", (1.0, 0.45, 0.1, 1.0))
-
-                # 3) 고압 와이어 다트 일제 투척 (Wire Darts, dist <= 32m)
-                if dist <= 32.0 and m.dart_cooldown <= 0.0 and m.stun_timer <= 0.0:
-                    m.dart_cooldown = 3.2 if m.phase == 2 else 5.2
-                    if hasattr(g, 'audio_mgr') and g.audio_mgr:
-                        g.audio_mgr.play_witch_cast()
-                    start_pos = (mx, my, m.pos.z + 2.8)
-                    for spread_deg in (-14, 0, 14):
-                        base_rad = math.atan2(py - my, px - mx) + math.radians(spread_deg)
-                        target_p = (mx + math.cos(base_rad) * 22.0, my + math.sin(base_rad) * 22.0, pz)
-                        g.spawn_fireball(start_pos, target_p)
-                    g.ui_mgr.show_hit_marker("보스 고압 와이어 다트 사격!", (0.3, 0.9, 1.0, 1.0))
-
-                # 4) 2페이즈 심연의 괴물 소환 (Minion Summon)
-                if m.phase == 2 and getattr(m, 'summon_cooldown', 0.0) <= 0.0:
-                    m.summon_cooldown = 14.0
-                    if len(g.monsters) < 16:
+                    if m.pattern_controller.is_acting():
+                        # 도약, 휩쓸기 등 패턴 동작 중에는 방향을 플레이어 쪽으로 바라보고 일반 경로탐색 보행은 건너뜀
+                        # Keep the telegraphed orientation fixed throughout the attack.
+                        m.update(eff_dt, is_moving=False)
+                        continue
+                else:
+                    # 구버전 모의 객체 단위 테스트 호환용 레거시 분기
+                    if m.hp <= m.max_hp * 0.5 and m.phase == 1:
+                        m.phase = 2
+                        m.speed = 6.2
+                        if hasattr(g.ui_mgr, 'show_stage_banner'):
+                            g.ui_mgr.show_stage_banner(
+                                "[ ! 경고: 심연의 지배자 2페이즈 폭주 돌입 ! ]\n심연의 코어가 적색으로 과부하되며 이동 속도 및 공격 빈도가 급증합니다!",
+                                color=(1.0, 0.15, 0.15, 1.0)
+                            )
+                        g.stage_banner_timer = 3.5
+                        if hasattr(g, 'audio_mgr') and g.audio_mgr:
+                            g.audio_mgr.play_siren_alarm()
                         for _ in range(2):
                             g.spawn_reinforcement_monster(near_gate=True)
-                        g.ui_mgr.show_stage_banner("[ ! 보스 증원 소환 ! ]\n심연의 괴물들이 소환되었습니다!", color=(1.0, 0.3, 0.1, 1.0))
-                        g.stage_banner_timer = 2.5
+
+                    # 1) 케이블 채찍 근접 강타 (Cable Lash, dist <= 5.8m, dist_z <= 3.5m)
+                    if dist <= 5.8 and dist_z <= 3.5 and getattr(m, 'cable_lash_cooldown', 99.0) <= 0.0 and not getattr(m, 'is_lashing', False) and getattr(m, 'stun_timer', 0.0) <= 0.0:
+                        m.is_lashing = True
+                        m.lash_timer = 0.65
+                        m.cable_lash_cooldown = 1.6 if m.phase == 2 else 2.5
+                        is_dead = g.player.take_damage(38 if m.phase == 2 else 28, source_pos=(mx, my))
+                        if hasattr(g, 'audio_mgr') and g.audio_mgr:
+                            g.audio_mgr.play_monster_3d("serp_slither", m.node, volume_scale=1.4)
+                        if hasattr(g.ui_mgr, 'show_hit_marker'):
+                            g.ui_mgr.show_hit_marker("보스 케이블 채찍 강타 피격!", (1.0, 0.2, 0.2, 1.0))
+                        if is_dead:
+                            g.trigger_game_over(killer=m, reason="killed")
+                            return True, closest_dist
+
+                    # 2) 전방위 고전압 지진 충격파 (Ground Shockwave, dist <= 18m)
+                    if dist <= 18.0 and getattr(m, 'shockwave_cooldown', 99.0) <= 0.0 and getattr(m, 'stun_timer', 0.0) <= 0.0:
+                        m.shockwave_cooldown = 4.2 if m.phase == 2 else 6.2
+                        g.shockwaves.append(GroundShockwave(g.render, mx, my))
+                        if hasattr(g, 'audio_mgr') and g.audio_mgr:
+                            g.audio_mgr.play_orc_slam()
+                        g.player.trigger_quake_shake(intensity=3.2, duration=1.0)
+                        if dist <= 11.0:
+                            player_floor, _ = get_floor_height(px, py, pz - PLAYER_EYE_HEIGHT)
+                            if player_floor < 1.2:
+                                is_dead = g.player.take_damage(20, source_pos=(mx, my))
+                                if is_dead:
+                                    g.trigger_game_over(killer=m, reason="killed")
+                                    return True, closest_dist
+                                g.player.apply_slow(duration=2.5, factor=0.45)
+                                if hasattr(g.ui_mgr, 'show_hit_marker'):
+                                    g.ui_mgr.show_hit_marker("보스 지진 충격파 피격! (이동속도 저하)", (1.0, 0.45, 0.1, 1.0))
+
+                    # 3) 고압 와이어 다트 일제 투척 (Wire Darts, dist <= 32m)
+                    if dist <= 32.0 and getattr(m, 'dart_cooldown', 99.0) <= 0.0 and getattr(m, 'stun_timer', 0.0) <= 0.0:
+                        m.dart_cooldown = 3.2 if m.phase == 2 else 5.2
+                        if hasattr(g, 'audio_mgr') and g.audio_mgr:
+                            g.audio_mgr.play_witch_cast()
+                        start_pos = (mx, my, m.pos.z + 2.8)
+                        for spread_deg in (-14, 0, 14):
+                            base_rad = math.atan2(py - my, px - mx) + math.radians(spread_deg)
+                            target_p = (mx + math.cos(base_rad) * 22.0, my + math.sin(base_rad) * 22.0, pz)
+                            g.spawn_fireball(start_pos, target_p)
+                        if hasattr(g.ui_mgr, 'show_hit_marker'):
+                            g.ui_mgr.show_hit_marker("보스 고압 와이어 다트 사격!", (0.3, 0.9, 1.0, 1.0))
+
+                    # 4) 2페이즈 심연의 괴물 소환 (Minion Summon)
+                    if m.phase == 2 and getattr(m, 'summon_cooldown', 0.0) <= 0.0:
+                        m.summon_cooldown = 14.0
+                        if len(g.monsters) < 16:
+                            for _ in range(2):
+                                g.spawn_reinforcement_monster(near_gate=True)
+                            if hasattr(g.ui_mgr, 'show_stage_banner'):
+                                g.ui_mgr.show_stage_banner("[ ! 보스 증원 소환 ! ]\n심연의 괴물들이 소환되었습니다!", color=(1.0, 0.3, 0.1, 1.0))
+                            g.stage_banner_timer = 2.5
 
             # 4. 시야(LOS) 확인
             has_los = False

@@ -30,7 +30,7 @@ from panda3d.core import (
     SamplerState, LColor, WindowProperties,
     CardMaker, TextureStage, getModelPath, Filename, Vec3
 )
-import simplepbr
+from post_processing import GamePostProcessing
 
 # Panda3D 리소스 탐색 경로에 번들 디렉토리 등록
 getModelPath().prependDirectory(Filename.fromOsSpecific(basedir))
@@ -80,7 +80,7 @@ class LiminalInfiniteLoop(ShowBase):
 
         # PBR 렌더링 최적화
         if hasattr(self, 'win') and self.win is not None:
-            self.pbr_pipeline = simplepbr.init(
+            self.pbr_pipeline = GamePostProcessing(
                 max_lights=8,
                 use_normal_maps=False,
                 use_emission_maps=False,
@@ -639,9 +639,9 @@ class LiminalInfiniteLoop(ShowBase):
         self.boss_defeat_handled = False
 
         if hasattr(self, 'ui_mgr') and self.ui_mgr:
-            self.ui_mgr.show_boss_hp_bar("케이블 엔티티 : 심연의 지배자", self.boss.hp, self.boss.max_hp)
+            self.ui_mgr.show_boss_hp_bar(self.boss.name, self.boss.hp, self.boss.max_hp)
             self.ui_mgr.show_stage_banner(
-                "[ ! 긴급 경보: 심연의 지배자 각성 ! ]\n백룸 케이블 엔티티가 탈출 관문을 봉쇄했습니다! 보스를 격파하세요!",
+                f"[ ! 긴급 경보: {self.boss.name} 각성 ! ]\n보스가 탈출 관문을 봉쇄했습니다! 보스를 격파하세요!",
                 color=(1.0, 0.2, 0.2, 1.0)
             )
             self.stage_banner_timer = 4.5

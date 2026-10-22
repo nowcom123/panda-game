@@ -142,7 +142,7 @@ class EscapePortalManager:
                     self.game.spawn_boss()
                 if self.game.boss and getattr(self.game.boss, 'hp', 0) > 0 and self.game.boss in self.game.monsters:
                     self.game.ui_mgr.update_door_status(
-                        f"[ 관문 비상 봉쇄: 심연의 지배자를 먼저 격파하십시오! ]\n보스 체력: {int(self.game.boss.hp)} / {int(self.game.boss.max_hp)}",
+                        f"[ 관문 비상 봉쇄: {self.game.boss.name} 먼저 격파하십시오! ]\n보스 체력: {int(self.game.boss.hp)} / {int(self.game.boss.max_hp)}",
                         fg=(1.0, 0.25, 0.25, 1.0)
                     )
                     return False
