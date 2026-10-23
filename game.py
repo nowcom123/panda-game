@@ -4,6 +4,7 @@ import math
 import random
 import concurrent.futures
 import gc
+from bullet_time import intensity, world_scale
 
 # Windows OS 스케줄러 프로세스 우선순위 승격 (High Priority) 및 1ms 고정밀 타이머 활성화
 if sys.platform == 'win32':
@@ -198,6 +199,10 @@ class LiminalInfiniteLoop(ShowBase):
         self.door_hold_timer = 5.0
         self.stage_banner_timer = 0.0
         self.bullet_time_timer = 0.0
+        self.bullet_time_elapsed = 0.0
+        self.bullet_time_strength = 0.0
+        if getattr(self, "pbr_pipeline", None):
+            self.pbr_pipeline.set_bullet_time(0.0)
 
         # 보스 [케이블 엔티티: 심연의 지배자] 상태 관리
         self.boss = None
@@ -276,8 +281,10 @@ class LiminalInfiniteLoop(ShowBase):
 
     # --- 사용자 액션 및 게임플레이 시스템 ---
     def trigger_bullet_time(self, duration=3.0):
-        """시간 감속 불릿 타임 (0.35x 월드 감속) 발동"""
+        """시간 감속 불릿 타임 (0.25x 월드 감속) 발동"""
         was_active = (self.bullet_time_timer > 0.0)
+        if not was_active:
+            self.bullet_time_elapsed = 0.0
         self.bullet_time_timer = max(self.bullet_time_timer, duration)
         if not was_active and hasattr(self, 'audio_mgr') and self.audio_mgr:
             self.audio_mgr.play_bullet_time(is_start=True)
@@ -545,6 +552,10 @@ class LiminalInfiniteLoop(ShowBase):
         self.blackout_timer = 0.0
         self.blackout_triggered_this_stage = False
         self.bullet_time_timer = 0.0
+        self.bullet_time_elapsed = 0.0
+        self.bullet_time_strength = 0.0
+        if getattr(self, "pbr_pipeline", None):
+            self.pbr_pipeline.set_bullet_time(0.0)
         self.audio_mgr.stop_bullet_time()
         self.ui_mgr.hide_blackout_warning()
         if hasattr(self.ui_mgr, 'set_bullet_time_hud'):
@@ -729,6 +740,10 @@ class LiminalInfiniteLoop(ShowBase):
         self.door_hold_timer = 5.0
         self.stage_banner_timer = 0.0
         self.bullet_time_timer = 0.0
+        self.bullet_time_elapsed = 0.0
+        self.bullet_time_strength = 0.0
+        if getattr(self, "pbr_pipeline", None):
+            self.pbr_pipeline.set_bullet_time(0.0)
         self.audio_mgr.stop_bullet_time()
         if hasattr(self.ui_mgr, 'set_bullet_time_hud'):
             self.ui_mgr.set_bullet_time_hud(False)
@@ -1189,6 +1204,7 @@ class LiminalInfiniteLoop(ShowBase):
         """파이어볼 비행/벽체 및 플레이어 피격 충돌, 땅울림 분진 갱신"""
         # 1. 파이어볼 갱신 (오브젝트 풀 기반 비활성화)
         for fb in self.fireballs[:]:
+            fb.time_trail_strength = getattr(self, 'bullet_time_strength', 0.0)
             alive = fb.update(dt)
             if not alive:
                 fb.deactivate()
@@ -1259,6 +1275,14 @@ class LiminalInfiniteLoop(ShowBase):
         raw_dt = min(0.1, globalClock.getDt())
         cont = task.cont if task is not None else 1
 
+        # Clear presentation before menu/end-state early returns. Pausing keeps
+        # the gameplay timer, but must not leave a coloured overlay on menus.
+        if self.game_state != "PLAYING" or self.bullet_time_timer <= 0.0:
+            self.bullet_time_strength = 0.0
+            if getattr(self, 'pbr_pipeline', None):
+                self.pbr_pipeline.set_bullet_time(0.0)
+            self.ui_mgr.set_bullet_time_hud(False)
+
         dt = raw_dt
 
         # 1. 인트로 시네마틱 카메라 회전
@@ -1278,17 +1302,24 @@ class LiminalInfiniteLoop(ShowBase):
             self.ui_mgr.update(dt)
             return cont
 
-        # 0. 불릿 타임 (시간 감속) 연산: 몬스터 및 월드 발사체 속도를 0.35x로 감속 (플레이어는 실시간 유지)
+        # 0. 불릿 타임 (시간 감속) 연산: 몬스터 및 월드 발사체 속도를 0.25x로 감속 (플레이어는 실시간 유지)
         if self.bullet_time_timer > 0.0:
             self.bullet_time_timer = max(0.0, self.bullet_time_timer - raw_dt)
-            world_dt = raw_dt * 0.35
-            self.ui_mgr.set_bullet_time_hud(True, self.bullet_time_timer)
+            self.bullet_time_elapsed = getattr(self, "bullet_time_elapsed", 0.0) + raw_dt
+            self.bullet_time_strength = intensity(self.bullet_time_timer, self.bullet_time_elapsed)
+            world_dt = raw_dt * world_scale(self.bullet_time_strength)
+            self.ui_mgr.set_bullet_time_hud(True, self.bullet_time_timer,
+                strength=self.bullet_time_strength, elapsed=self.bullet_time_elapsed)
             if self.bullet_time_timer <= 0.0:
                 if hasattr(self, 'audio_mgr') and self.audio_mgr:
                     self.audio_mgr.play_bullet_time(is_start=False)
                 self.ui_mgr.set_bullet_time_hud(False)
         else:
+            self.bullet_time_strength = 0.0
             world_dt = raw_dt
+
+        if getattr(self, "pbr_pipeline", None):
+            self.pbr_pipeline.set_bullet_time(self.bullet_time_strength)
 
         if self.audio_mgr:
             self.audio_mgr.update_bullet_time(raw_dt)
@@ -1321,14 +1352,14 @@ class LiminalInfiniteLoop(ShowBase):
         if is_moving and not getattr(self, 'is_test_mode', False):
             self.update_chunks()
 
-        # 6. 괴물 군단 AI 및 공격 판정 (불릿 타임 시 0.35x world_dt 적용)
+        # 6. 괴물 군단 AI 및 공격 판정 (불릿 타임 시 0.25x world_dt 적용)
         px, py = self.camera.getX(), self.camera.getY()
         pz = self.camera.getZ()
         game_ended, closest_dist = self._update_monsters(world_dt, px, py, raw_dt=raw_dt)
         if game_ended:
             return cont
 
-        # 6-1. 마녀 파이어볼 및 진흙오크 충격파 갱신 (불릿 타임 시 0.35x world_dt 적용)
+        # 6-1. 마녀 파이어볼 및 진흙오크 충격파 갱신 (불릿 타임 시 0.25x world_dt 적용)
         if not getattr(self, 'is_test_mode', False):
             if self._update_projectiles(world_dt, px, py, pz):
                 return cont

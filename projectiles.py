@@ -35,6 +35,17 @@ class Fireball:
         fire_inner.setLightOff()
         fire_inner.reparentTo(self.node)
 
+        self.time_trail = []
+        self.time_trail_strength = 0.0
+        for i in range(4):
+            ghost = make_sphere('time_echo', .23, .23, .23, LColor(1.0, .42, .08, 1.0))
+            ghost.reparentTo(self.node)
+            ghost.setLightOff()
+            ghost.setTransparency(TransparencyAttrib.MAlpha)
+            ghost.setDepthWrite(False)
+            ghost.hide()
+            self.time_trail.append(ghost)
+
         pl = PointLight('fb_glow')
         pl.setColor((1.8, 0.45, 0.10, 1.0))
         pl.setAttenuation((1.0, 0.22, 0.06))
@@ -81,6 +92,17 @@ class Fireball:
             self.node.setPos(self.pos)
             self.node.setH(self.node.getH() + dt * 400.0)
             self.node.setP(self.node.getP() + dt * 280.0)
+            direction = self.node.getRelativeVector(self.render, self.vel)
+            if direction.lengthSquared() > 0:
+                direction.normalize()
+            for i, ghost in enumerate(self.time_trail):
+                if self.time_trail_strength > 0.01:
+                    ghost.setPos(-direction * (0.45 * (i + 1)))
+                    ghost.setScale(1.0 - i * .17)
+                    ghost.setColorScale(1, 1, 1, self.time_trail_strength * .28 * (1 - i / 4))
+                    ghost.show()
+                else:
+                    ghost.hide()
         return True
 
     def destroy(self):

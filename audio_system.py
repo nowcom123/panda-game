@@ -141,6 +141,12 @@ class AudioManager:
         self.bullet_time_audio_active = False
         self.bullet_time_audio_elapsed = 0.0
         self.bullet_time_audio_level = 0.0
+        self._world_sound_levels = {}
+        self.time_cues = {}
+        for key in ('enter', 'exit', 'tail'):
+            path = self._get_path('time_' + key + '.wav')
+            self.time_cues[key] = [self.loader.loadSfx(path) for _ in range(8 if key == 'tail' else 1)] if path else []
+        self._time_tail_index = 0
         overcharge_p = self._get_path("overcharge_shot.wav")
         self.overcharge_shot_sfx = self.loader.loadSfx(overcharge_p) if overcharge_p else None
         crunch_p = self._get_path("headshot_crunch.wav")
@@ -233,6 +239,7 @@ class AudioManager:
         self.audio3d.detachSound(chosen)
         self.audio3d.attachSoundToObject(chosen, node)
         chosen.setVolume(pool["base_vol"] * volume_scale)
+        self._register_world_sound(chosen, pool["base_vol"] * volume_scale)
         self.audio3d.setSoundMinDistance(chosen, pool["min_dist"])
         self.audio3d.setSoundMaxDistance(chosen, pool["max_dist"])
         chosen.play()
@@ -338,11 +345,14 @@ class AudioManager:
             sound.setVolume(volume)
             sound.setPlayRate(1.0)
             sound.play()
+            if getattr(self, "bullet_time_audio_active", False):
+                self._play_time_cue("tail")
 
     def play_serpent_hit(self):
         """뱀 피격 쉭쉭 효과음"""
         if self.serpent_hiss_sfx:
             self.serpent_hiss_sfx.setVolume(1.0)
+            self._register_world_sound(self.serpent_hiss_sfx, self.serpent_hiss_sfx.getVolume())
             self.serpent_hiss_sfx.play()
 
     play_serpent_hiss = play_serpent_hit
@@ -351,6 +361,7 @@ class AudioManager:
         """해골 피격 신음 효과음"""
         if self.skeleton_groan_sfx:
             self.skeleton_groan_sfx.setVolume(1.0)
+            self._register_world_sound(self.skeleton_groan_sfx, self.skeleton_groan_sfx.getVolume())
             self.skeleton_groan_sfx.play()
 
     def play_siren_alarm(self):
@@ -424,18 +435,21 @@ class AudioManager:
         """마녀 마법 시전 경고음 (파이어볼 시전 시작 시 호출)"""
         if self.witch_fireball_sfx:
             self.witch_fireball_sfx.setVolume(0.55)
+            self._register_world_sound(self.witch_fireball_sfx, self.witch_fireball_sfx.getVolume())
             self.witch_fireball_sfx.play()
 
     def play_witch_fireball(self):
         """마녀 파이어볼 발사음"""
         if self.witch_fireball_sfx:
             self.witch_fireball_sfx.setVolume(0.85)
+            self._register_world_sound(self.witch_fireball_sfx, self.witch_fireball_sfx.getVolume())
             self.witch_fireball_sfx.play()
 
     def play_orc_slam(self):
         """오크 땅울림 지진파 강타음"""
         if self.orc_slam_sfx:
             self.orc_slam_sfx.setVolume(1.0)
+            self._register_world_sound(self.orc_slam_sfx, self.orc_slam_sfx.getVolume())
             self.orc_slam_sfx.play()
 
     def play_crit_hit(self):
@@ -474,6 +488,7 @@ class AudioManager:
         """몬스터 사망 시 신체 폭발 및 파편화 파열음"""
         if self.monster_explode_sfx:
             self.monster_explode_sfx.setVolume(1.0)
+            self._register_world_sound(self.monster_explode_sfx, self.monster_explode_sfx.getVolume())
             self.monster_explode_sfx.play()
 
     def play_slide(self):
@@ -492,12 +507,14 @@ class AudioManager:
         """전술 수류탄 대규모 파열 폭발 및 충격파음"""
         if self.grenade_blast_sfx:
             self.grenade_blast_sfx.setVolume(1.0)
+            self._register_world_sound(self.grenade_blast_sfx, self.grenade_blast_sfx.getVolume())
             self.grenade_blast_sfx.play()
 
     def play_barrel_ignite(self):
         """폭발성 유류 드럼통 관통 점화 및 분출음"""
         if self.barrel_ignite_sfx:
             self.barrel_ignite_sfx.setVolume(0.95)
+            self._register_world_sound(self.barrel_ignite_sfx, self.barrel_ignite_sfx.getVolume())
             self.barrel_ignite_sfx.play()
 
     def play_combo_kill(self):
@@ -517,6 +534,7 @@ class AudioManager:
         if is_start:
             if self.bullet_time_audio_active:
                 return
+            self._play_time_cue('enter')
             # Retriggering during the exit fade continues the same voice.
             if self.bullet_time_audio_level <= 0.0:
                 self.bullet_time_audio_elapsed = 0.0
@@ -526,7 +544,26 @@ class AudioManager:
                     self.bullet_time_hum_sfx.play()
             self.bullet_time_audio_active = True
         else:
+            self._play_time_cue('exit')
             self.bullet_time_audio_active = False
+
+    def _play_time_cue(self, key):
+        voices = getattr(self, 'time_cues', {}).get(key, [])
+        if voices:
+            index = getattr(self, '_time_tail_index', 0) % len(voices)
+            sound = voices[index]
+            if sound:
+                sound.setVolume(0.16 if key == 'tail' else 0.35)
+                sound.play()
+            self._time_tail_index = index + 1
+
+    def _register_world_sound(self, sound, volume):
+        if not hasattr(self, '_world_sound_levels'):
+            self._world_sound_levels = {}
+        self._world_sound_levels[sound] = volume
+        level = getattr(self, 'bullet_time_audio_level', 0.0)
+        sound.setPlayRate(1.0 - 0.55 * level)
+        sound.setVolume(volume * (1.0 - 0.25 * level))
 
     def update_bullet_time(self, dt):
         snd = self.bullet_time_hum_sfx
@@ -535,6 +572,9 @@ class AudioManager:
             self.bullet_time_audio_level = min(1.0, self.bullet_time_audio_level + dt / 0.12)
         else:
             self.bullet_time_audio_level = max(0.0, self.bullet_time_audio_level - dt / 0.30)
+        for sound, volume in getattr(self, '_world_sound_levels', {}).items():
+            sound.setPlayRate(1.0 - 0.55 * self.bullet_time_audio_level)
+            sound.setVolume(volume * (1.0 - 0.25 * self.bullet_time_audio_level))
         if not snd:
             return
         if not self.bullet_time_audio_active and self.bullet_time_audio_level <= 0.0:
@@ -550,6 +590,13 @@ class AudioManager:
         self.bullet_time_audio_active = False
         self.bullet_time_audio_elapsed = 0.0
         self.bullet_time_audio_level = 0.0
+        for sound, volume in getattr(self, '_world_sound_levels', {}).items():
+            sound.setPlayRate(1.0)
+            sound.setVolume(volume)
+        for voices in getattr(self, 'time_cues', {}).values():
+            for sound in voices:
+                if sound:
+                    sound.stop()
         if self.bullet_time_hum_sfx:
             self.bullet_time_hum_sfx.stop()
 
@@ -631,6 +678,7 @@ class AudioManager:
                 if self.serpent_hiss_sfx:
                     h_vol = max(0.35, min(1.0, (22.0 - dist_serpent) / 18.0))
                     self.serpent_hiss_sfx.setVolume(h_vol)
+                    self._register_world_sound(self.serpent_hiss_sfx, self.serpent_hiss_sfx.getVolume())
                     self.serpent_hiss_sfx.play()
                 self.serpent_hiss_cooldown = random.uniform(3.5, 6.5)
 
@@ -645,5 +693,6 @@ class AudioManager:
                 if self.skeleton_groan_sfx:
                     g_vol = max(0.35, min(1.0, (24.0 - dist_skeleton) / 20.0))
                     self.skeleton_groan_sfx.setVolume(g_vol)
+                    self._register_world_sound(self.skeleton_groan_sfx, self.skeleton_groan_sfx.getVolume())
                     self.skeleton_groan_sfx.play()
                 self.skeleton_groan_cooldown = random.uniform(4.0, 7.5)

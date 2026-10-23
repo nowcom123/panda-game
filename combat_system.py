@@ -5,6 +5,7 @@ Combat System Module
 """
 
 import math
+from bullet_time import effect_scale
 import random
 import time
 from panda3d.core import (
@@ -2208,6 +2209,8 @@ class CombatSystem:
 
     def update(self, dt, px=0.0, py=0.0, is_moving=False, is_sprinting=False):
         """프레임별 트레이서, 탄피 물리, 화약 연기, 슬라이드 블로우백, 펌프액션, 반동/재장전, 밥빙, 탄약 습득 갱신"""
+        game_inst = getattr(self.base, "game", None) or self.base
+        fx_dt = dt * effect_scale(game_inst)
         self.is_moving = is_moving
         self.is_sprinting = is_sprinting
 
@@ -2229,11 +2232,11 @@ class CombatSystem:
 
         # 실감나는 고시인성 비행 총알 궤적 물리 & 페이드 갱신
         for tr in self.active_tracers[:]:
-            tr["life"] -= dt
+            tr["life"] -= fx_dt
 
             # 착탄 섬광 타이머 처리
             if tr.get("flash") and not tr["flash"].isEmpty():
-                tr["flash_timer"] = max(0.0, tr.get("flash_timer", 0.0) - dt)
+                tr["flash_timer"] = max(0.0, tr.get("flash_timer", 0.0) - fx_dt)
                 if tr["flash_timer"] <= 0.0:
                     tr["flash"].removeNode()
                     tr["flash"] = None
@@ -2242,7 +2245,7 @@ class CombatSystem:
                     tr["flash"].setScale(scale)
 
             if tr.get("phase") == "fly":
-                move = tr["speed"] * dt
+                move = tr["speed"] * fx_dt
                 tr["traveled"] += move
                 head_pos = tr["traveled"]
                 total_d = tr["total_dist"]
@@ -2334,7 +2337,7 @@ class CombatSystem:
                 tr["halo"].setBin("transparent", 100)
 
             elif tr.get("phase") == "fade":
-                tr["fade_timer"] = max(0.0, tr.get("fade_timer", 0.0) - dt)
+                tr["fade_timer"] = max(0.0, tr.get("fade_timer", 0.0) - fx_dt)
                 if tr["fade_timer"] <= 0.0:
                     tr["life"] = 0.0
                 else:
@@ -2356,13 +2359,13 @@ class CombatSystem:
         for p in self.hit_particle_pool:
             if not p["active"]:
                 continue
-            p["timer"] -= dt
+            p["timer"] -= fx_dt
             if p["timer"] <= 0.0:
                 p["active"] = False
                 p["node"].hide()
                 continue
-            p["vel"].z -= 13.0 * dt  # 중력
-            p["pos"] += p["vel"] * dt
+            p["vel"].z -= 13.0 * fx_dt  # 중력
+            p["pos"] += p["vel"] * fx_dt
             p["node"].setPos(p["pos"])
             scale = max(0.1, p["timer"] / 0.38)
             p["node"].setScale(scale)
@@ -2391,20 +2394,20 @@ class CombatSystem:
                     self.render.clearLight(self.sg_muzzle_light_np)
 
         # 3. 3D 탄피 물리 풀 갱신 (중력, 궤적, 지면 튕김, 회전)
-        self.casing_effects.update(dt)
+        self.casing_effects.update(fx_dt)
 
         # 4. 총구 잔여 가스 연기 풀 갱신 (열상승, 팽창, 페이드아웃)
         for s in self.smoke_pool:
             if not s["active"]:
                 continue
-            s["timer"] -= dt
+            s["timer"] -= fx_dt
             if s["timer"] <= 0.0:
                 s["active"] = False
                 s["node"].hide()
                 continue
-            s["vel"].z += 0.35 * dt
-            s["pos"] += s["vel"] * dt
-            s["scale"] += dt * 0.12
+            s["vel"].z += 0.35 * fx_dt
+            s["pos"] += s["vel"] * fx_dt
+            s["scale"] += fx_dt * 0.12
             s["node"].setPos(s["pos"])
             s["node"].setScale(s["scale"])
             alpha = max(0.0, (s["timer"] / s["max_timer"]) * 0.35)
@@ -2691,7 +2694,7 @@ class CombatSystem:
             ads_fov = base_fov * (80.0 / 96.0)
             cur_fov = base_fov * (1.0 - self.ads_alpha) + ads_fov * self.ads_alpha
             if getattr(game_inst, 'bullet_time_timer', 0.0) > 0.0:
-                cur_fov += 6.5
+                cur_fov += 6.5 * getattr(game_inst, "bullet_time_strength", 1.0)
             self.base.camLens.setFov(cur_fov)
 
         # 조준 중 크로스헤어 투명화 (권총 및 샷건 조준 시 가늠쇠/조준선 집중)

@@ -1101,7 +1101,7 @@ class UIManager:
         self.panel_bullet_time.hide()
 
         self.bullet_time_text = OnscreenText(
-            text="[ BULLET TIME  0.35x ]",
+            text="[ BULLET TIME  0.25x ]",
             pos=(0, 0.768),
             scale=0.038,
             fg=(0.25, 0.95, 1.0, 1.0),
@@ -1823,17 +1823,45 @@ class UIManager:
             self.timer_text.setFg(col)
             self._cached_timer_col = col
 
-    def set_bullet_time_hud(self, is_active, time_left=0.0):
-        """불릿 타임 (시간 감속) HUD 배너 및 일렉트릭 사이안 시공간 비네트 실시간 갱신"""
+    def set_bullet_time_hud(self, is_active, time_left=0.0, strength=1.0, elapsed=1.0):
+        """불릿 타임 (시간 감속) HUD 배너 및 멀티레이어 시각 효과 실시간 갱신
+
+        Layers:
+          • vignette_bullet_time : 외곽 일렉트릭 링 — 진입 플래시 + 진폭 맥동
+          • panel_bullet_time    : 상단 배너 패널
+          • bullet_time_text     : 잔여 시간 텍스트
+        """
         if is_active and time_left > 0.0:
-            pulse = 0.52 + 0.18 * math.sin(time.time() * 9.0)
+            # ── 진입 플래시 (elapsed 0→0.12s 동안 급격히 밝아졌다가 안정) ──
+            entry_flash = 0.55 * max(0.0, 1.0 - elapsed / 0.12)
+            # ── 안정기 전기 맥동 (느린 사인파 + 짧은 고주파 shimmer) ──
+            slow_pulse   = 0.22 * math.sin(elapsed * 3.8)
+            fast_shimmer = 0.04 * math.sin(elapsed * 22.0)
+            base_alpha = strength * (0.38 + slow_pulse + fast_shimmer) + entry_flash
+            base_alpha = max(0.0, min(1.0, base_alpha))
+
             if hasattr(self, 'vignette_bullet_time') and self.vignette_bullet_time:
-                self.vignette_bullet_time.setColorScale(0.18, 0.85, 1.0, pulse)
+                # 전기 사이안 링 : 밝기와 청색 비율을 강도에 따라 조절
+                r = 0.12 + 0.08 * (1.0 - strength)   # strength 낮을수록 따뜻하게 빠짐
+                g = 0.82
+                b = 1.04                               # 살짝 과포화 — 글로우 느낌
+                self.vignette_bullet_time.setColorScale(r, g, b, base_alpha)
                 self.vignette_bullet_time.show()
-            self.bullet_time_text.setText(f">> [ BULLET TIME : {time_left:.1f}s (0.35x) ] <<")
+
+            # ── 배너 텍스트 — 채도/색상을 강도에 맞게 조절 ──
+            pct = int(strength * 100)
+            label = f">> [ BULLET TIME  {time_left:.1f}s  ×0.25 ] <<"
+            self.bullet_time_text.setText(label)
+            # 진입 순간 흰색 플래시 → 안정되면 사이안
+            flash_t = max(0.0, 1.0 - elapsed / 0.18)
+            txt_r = 0.25 + 0.75 * flash_t
+            txt_g = 0.95
+            txt_b = 1.0
+            self.bullet_time_text.setFg((txt_r, txt_g, txt_b, 1.0))
             self.bullet_time_text.show()
             self.panel_bullet_time.show()
         else:
+            # ── 종료: 즉시 숨김 (fade-out은 게임 루프의 strength ramp-down이 처리) ──
             if hasattr(self, 'vignette_bullet_time') and self.vignette_bullet_time:
                 self.vignette_bullet_time.setColorScale(0.18, 0.85, 1.0, 0.0)
                 self.vignette_bullet_time.hide()
