@@ -1,5 +1,7 @@
 # Panda Game - Liminal Backrooms FPS Escape
 
+현재 코드 구조와 개발 검증 명령은 [구조 문서](docs/ARCHITECTURE.md)를 참고하세요.
+
 Panda3D 기반의 1인칭 호러 서바이벌 FPS 백룸 탈출 게임입니다.  
 칠흑 같은 어둠 속에서 왼손 손전등과 오른손 12발 권총만으로 1분 안에 비상탈출구를 찾아 5초간 문을 사수하며 다음 스테이지로 진출해야 합니다.
 

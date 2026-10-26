@@ -1,0 +1,73 @@
+{
+  "renderer": "NVIDIA GeForce RTX 4080 SUPER/PCIe/SSE2",
+  "size": [
+    1600,
+    900
+  ],
+  "enemies": 80,
+  "chunks": 25,
+  "frames": 600,
+  "profiled": false,
+  "timings": {
+    "player": {
+      "mean_ms": 0.023,
+      "p95_ms": 0.034,
+      "p99_ms": 0.042,
+      "max_ms": 0.062
+    },
+    "enemy_ai_animation": {
+      "mean_ms": 3.925,
+      "p95_ms": 4.859,
+      "p99_ms": 6.345,
+      "max_ms": 12.26
+    },
+    "projectiles": {
+      "mean_ms": 0.026,
+      "p95_ms": 0.138,
+      "p99_ms": 0.158,
+      "max_ms": 1.055
+    },
+    "lights": {
+      "mean_ms": 0.016,
+      "p95_ms": 0.08,
+      "p99_ms": 0.104,
+      "max_ms": 0.16
+    },
+    "weapon_effects": {
+      "mean_ms": 0.032,
+      "p95_ms": 0.048,
+      "p99_ms": 0.06,
+      "max_ms": 0.067
+    },
+    "chunk_culling": {
+      "mean_ms": 0.033,
+      "p95_ms": 0.044,
+      "p99_ms": 0.06,
+      "max_ms": 0.072
+    },
+    "ui_update": {
+      "mean_ms": 0.025,
+      "p95_ms": 0.046,
+      "p99_ms": 0.066,
+      "max_ms": 0.083
+    },
+    "game_update": {
+      "mean_ms": 4.313,
+      "p95_ms": 5.354,
+      "p99_ms": 6.968,
+      "max_ms": 12.739
+    },
+    "frame": {
+      "mean_ms": 35.788,
+      "p95_ms": 68.525,
+      "p99_ms": 79.551,
+      "max_ms": 110.064
+    },
+    "other_tasks_render_wait": {
+      "mean_ms": 31.474,
+      "p95_ms": 64.116,
+      "p99_ms": 74.321,
+      "max_ms": 104.57
+    }
+  }
+}

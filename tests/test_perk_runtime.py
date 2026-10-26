@@ -29,6 +29,23 @@ class Target:
 
 
 class PerkRuntimeTests(unittest.TestCase):
+    def test_shotgun_close_pellets_stagger_once_and_range_matters(self):
+        for distance in (5, 10):
+            combat, player = self.setup_combat('none', 0)
+            combat._shotgun_close_hits = {}
+            target = Target(y=distance)
+            target.stun = Mock()
+            with patch('combat_system.raycast_walls', return_value=(55, Vec3(0, 55, 0))):
+                for pellet in range(8):
+                    combat._perform_raycast(Vec3(0, 1, 0), Vec3(0, .5, 0),
+                        [target], player, None, False, WEAPON_CONFIGS['SHOTGUN'], pellet)
+                    if pellet < 2:
+                        target.stun.assert_not_called()
+            if distance == 5:
+                target.stun.assert_called_once_with(.55)
+            else:
+                target.stun.assert_not_called()
+
     def setup_combat(self, perk, level):
         camera = NodePath('camera')
         player = PlayerController(SimpleNamespace(game_state='PLAYING'), None,

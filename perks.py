@@ -149,12 +149,45 @@ PERK_CATALOG = {
         "tags": ["헤드샷 배율", "경험치 2배", "정밀 저격"],
         "max_level": None,
     },
+    "precision_training": {
+        "id": "precision_training",
+        "name": "정밀 조준",
+        "icon": "◎",
+        "rarity": RARITY_RARE,
+        "category": "전술 사격",
+        "desc": "적 회피 확률을 억제하여 날렵한 적의 회피 기동을 무력화합니다.",
+        "tags": ["회피 억제", "명중 보정", "카운터"],
+        "max_level": 3,
+    },
+    "guard_breaker": {
+        "id": "guard_breaker",
+        "name": "방어 파쇄",
+        "icon": "▲",
+        "rarity": RARITY_RARE,
+        "category": "화력 관통",
+        "desc": "적 방어 시 피해 감소율을 일정 비율 무시하여 전방 방어를 분쇄합니다.",
+        "tags": ["방어 관통", "피해 보존", "가드 무력화"],
+        "max_level": 3,
+    },
 }
 
 
 def draw_random_perks(player_perks, count=3):
     """신규 획득과 보유 퍽 강화를 함께 추첨하되 한 번의 제안에는 중복하지 않는다."""
-    pool = list(PERK_CATALOG)
+    pool = []
+    for pid, pdef in PERK_CATALOG.items():
+        max_lvl = pdef.get("max_level")
+        cur_lvl = 0
+        if player_perks is not None:
+            if hasattr(player_perks, "perk_levels"):
+                cur_lvl = player_perks.perk_levels.get(pid, 0)
+            elif isinstance(player_perks, dict):
+                cur_lvl = player_perks.get(pid, 0)
+            elif isinstance(player_perks, (set, list, tuple)):
+                cur_lvl = 1 if pid in player_perks else 0
+        if max_lvl is not None and cur_lvl >= max_lvl:
+            continue
+        pool.append(pid)
 
     # 희귀도별 가중치: COMMON=50, RARE=35, EPIC=12, LEGENDARY=3
     weights = []
@@ -228,6 +261,10 @@ def get_perk_stats(perk_id, level):
                     stamina_mult=.6**n)
     if perk_id == 'headhunter':
         return dict(damage_mult=1 + .45*n, xp_mult=1+n)
+    if perk_id == 'precision_training':
+        return dict(evasion_suppression=min(3, max(0, int(level))) * 0.05)
+    if perk_id == 'guard_breaker':
+        return dict(guard_penetration=min(3, max(0, int(level))) * 0.10)
     raise KeyError(perk_id)
 
 
@@ -261,6 +298,10 @@ def describe_perk(perk_id, level):
         return f"이동 +{(s['move_mult']-1)*100:.0f}%, 장전 시간 {(1-s['reload_mult'])*100:.1f}% 단축, 달리기 소모 {(1-s['stamina_mult'])*100:.1f}% 감소."
     if perk_id == 'headhunter':
         return f"헤드샷 피해 {s['damage_mult']:g}배, 헤드샷 처치 경험치 {s['xp_mult']:g}배."
+    if perk_id == 'precision_training':
+        return f"적 회피 확률 {s['evasion_suppression']*100:.0f}%p 억제 (기본 0%p, 최대 15%p)."
+    if perk_id == 'guard_breaker':
+        return f"적 방어의 피해 감소율 {s['guard_penetration']*100:.0f}% 무시 (기본 0%, 최대 30%)."
     raise KeyError(perk_id)
 
 

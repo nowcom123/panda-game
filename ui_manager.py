@@ -13,13 +13,18 @@ import datetime
 import time
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.OnscreenImage import OnscreenImage
-from direct.gui.DirectGui import DirectButton, DirectFrame, DGG
+from direct.gui.DirectGui import DirectButton, DirectFrame, DirectEntry, DGG
 from panda3d.core import (
     TextNode, TransparencyAttrib, LineSegs, Vec3, NodePath,
     GeomVertexFormat, GeomVertexData, GeomVertexWriter, GeomTriangles, Geom, GeomNode, LColor
 )
 from constants import CURSED_RELICS
 from perks import PERK_CATALOG, draw_random_perks, RARITY_COLORS, RARITY_NAMES, get_perk_level, describe_perk
+from combat.reactions import counter_stats
+from rpg.equipment_ui import EquipmentUIPanel
+from rpg.run_loot_ui import RunLootUIPanel
+from rpg.workshop_ui import WorkshopUIPanel
+from rpg.hangul_util import eng_to_hangul, get_clipboard_text
 
 
 class FloatingDamageItem:
@@ -554,6 +559,7 @@ class UIManager:
         self._setup_after_action_report_ui()
         self._setup_end_game_ui()
         self._setup_intro_ui()
+        self._setup_character_select_modal()
         self._setup_rank_ui()
         self._setup_shop_ui()
         self._setup_inventory_ui()
@@ -684,6 +690,18 @@ class UIManager:
             **self.font_kw
         )
 
+        self.poison_status_text = OnscreenText(
+            text="",
+            pos=(-1.60, -0.270),
+            scale=0.028,
+            fg=(0.40, 1.0, 0.35, 1.0),
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ALeft,
+            mayChange=True,
+            **self.font_kw
+        )
+        self.poison_status_text.hide()
+
         # 5-2. 스테미나바
         self.icon_stamina = OnscreenImage(
             image="assets/ui/icon_stamina.png",
@@ -813,6 +831,17 @@ class UIManager:
         )
         self.icon_ammo.setTransparency(TransparencyAttrib.MAlpha)
         self.icon_ammo.setBin("fixed", 5)
+
+        self.loot_hud_text = OnscreenText(
+            text="미확보 전리품  0 / 24",
+            pos=(1.66, -0.735),
+            scale=0.030,
+            fg=(0.75, 0.75, 0.80, 0.9),
+            shadow=(0, 0, 0, 1.0),
+            align=TextNode.ARight,
+            mayChange=True,
+            **self.font_kw
+        )
 
         self.weapon_name_text = OnscreenText(
             text="[ .50 매그넘 데저트 이글 ]",
@@ -1236,29 +1265,55 @@ class UIManager:
             **self.font_kw
         )
 
+        self.lbl_active_explorer = OnscreenText(
+            text="[ 탐험가 : 로딩 중... ]",
+            parent=self.intro_frame,
+            pos=(0, 0.16),
+            scale=0.030,
+            fg=(0.35, 0.95, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
         self.btn_start = DirectButton(
             parent=self.intro_frame,
             image=('assets/ui/btn_accent_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_accent_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="START GAME",
-            pos=(0, 0, 0.08),
-            scale=(0.54, 1, 0.075),
-            text_scale=((0.075 / 0.54) * 0.46, 0.46),
+            pos=(0, 0, 0.05),
+            scale=(0.54, 1, 0.070),
+            text_scale=((0.070 / 0.54) * 0.46, 0.46),
             text_pos=(0, -0.14),
             text_fg=(0.35, 1.0, 0.55, 1.0),
-            command=self.on_start,
+            command=self._on_start_clicked,
             **self.btn_font_kw
         )
         self.btn_start.setTransparency(TransparencyAttrib.MAlpha)
+
+        self.btn_char_select = DirectButton(
+            parent=self.intro_frame,
+            image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
+            relief=None,
+            text="EXPLORER (탐험가 선택 / 관리)",
+            pos=(0, 0, -0.07),
+            scale=(0.54, 1, 0.070),
+            text_scale=((0.070 / 0.54) * 0.44, 0.44),
+            text_pos=(0, -0.14),
+            text_fg=(0.35, 0.90, 1.0, 1.0),
+            command=self.show_character_select_modal,
+            **self.btn_font_kw
+        )
+        self.btn_char_select.setTransparency(TransparencyAttrib.MAlpha)
 
         self.btn_test = DirectButton(
             parent=self.intro_frame,
             image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="TEST MODE (사격 시험장)",
-            pos=(0, 0, -0.06),
-            scale=(0.54, 1, 0.075),
-            text_scale=((0.075 / 0.54) * 0.44, 0.44),
+            pos=(0, 0, -0.19),
+            scale=(0.54, 1, 0.070),
+            text_scale=((0.070 / 0.54) * 0.44, 0.44),
             text_pos=(0, -0.14),
             text_fg=(0.35, 0.88, 1.0, 1.0),
             command=self.on_test_mode if self.on_test_mode else self.on_start,
@@ -1271,9 +1326,9 @@ class UIManager:
             image=('assets/ui/btn_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="RANKING",
-            pos=(0, 0, -0.20),
-            scale=(0.54, 1, 0.075),
-            text_scale=((0.075 / 0.54) * 0.46, 0.46),
+            pos=(0, 0, -0.31),
+            scale=(0.54, 1, 0.070),
+            text_scale=((0.070 / 0.54) * 0.46, 0.46),
             text_pos=(0, -0.14),
             text_fg=(1.0, 0.85, 0.25, 1.0),
             command=self.show_rank_modal,
@@ -1286,9 +1341,9 @@ class UIManager:
             image=('assets/ui/btn_danger_normal.png', 'assets/ui/btn_click.png', 'assets/ui/btn_danger_hover.png', 'assets/ui/btn_disabled.png'),
             relief=None,
             text="EXIT",
-            pos=(0, 0, -0.34),
-            scale=(0.54, 1, 0.075),
-            text_scale=((0.075 / 0.54) * 0.46, 0.46),
+            pos=(0, 0, -0.43),
+            scale=(0.54, 1, 0.070),
+            text_scale=((0.070 / 0.54) * 0.46, 0.46),
             text_pos=(0, -0.14),
             text_fg=(1.0, 0.45, 0.45, 1.0),
             command=self.on_exit,
@@ -1375,6 +1430,7 @@ class UIManager:
             getattr(self, 'perk_badge_text', None),
             getattr(self, 'panel_hud_ammo', None),
             getattr(self, 'icon_ammo', None),
+            getattr(self, 'loot_hud_text', None),
             getattr(self, 'weapon_name_text', None),
             getattr(self, 'ammo_text', None),
             getattr(self, 'weapon_guide_text', None),
@@ -1416,6 +1472,768 @@ class UIManager:
             if hasattr(self, 'inv_modal') and self.inv_modal:
                 self.inv_modal.hide()
 
+
+    def _on_start_clicked(self):
+        """Handle Start Game button click: open character select if needed or start."""
+        char_mgr = getattr(getattr(self, 'base', None), 'character_mgr', None)
+        single_mode = getattr(getattr(self, 'base', None), 'single_character_mode', False)
+        if char_mgr and not single_mode:
+            if not char_mgr.character_list or not char_mgr.character_list.active_character_id:
+                self.show_character_select_modal()
+                return
+        if self.on_start:
+            self.on_start()
+
+    def update_active_explorer_display(self):
+        """Update active explorer info shown on title screen."""
+        if not hasattr(self, 'lbl_active_explorer') or not self.lbl_active_explorer:
+            return
+        char_mgr = getattr(getattr(self, 'base', None), 'character_mgr', None)
+        if not char_mgr or getattr(getattr(self, 'base', None), 'single_character_mode', False):
+            self.lbl_active_explorer.setText("[ 단일 프로필 모드 ]")
+            return
+        if not char_mgr.character_list or not char_mgr.character_list.active_character_id:
+            self.lbl_active_explorer.setText("[ 탐험가 선택 필요 (EXPLORER 버튼 클릭) ]")
+            self.lbl_active_explorer.setFg((1.0, 0.7, 0.2, 1.0))
+            return
+        act_id = char_mgr.character_list.active_character_id
+        data = char_mgr.get_character_card_data(act_id)
+        name = data.get("name", "알 수 없음")
+        p_name = data.get("primary_name", "없음")
+        s_name = data.get("secondary_name", "없음")
+        credits_val = data.get("credits", 0)
+        self.lbl_active_explorer.setText(f"[ 현재 탐험가: {name}  |  주: {p_name} / 보조: {s_name}  |  {credits_val:,} C ]")
+        self.lbl_active_explorer.setFg((0.35, 0.95, 1.0, 1.0))
+
+    def _setup_character_select_modal(self):
+        """탐험가 선택 및 생성 전용 모달 카드 UI (최대 3명)"""
+        self.char_select_modal = DirectFrame(
+            parent=self.base.aspect2d,
+            frameColor=(0.05, 0.07, 0.10, 0.96),
+            frameSize=(-1.45, 1.45, -0.82, 0.82),
+            relief=DGG.FLAT,
+            pos=(0, 0, 0)
+        )
+        self.char_select_modal.setTransparency(TransparencyAttrib.MAlpha)
+        self.char_select_modal.setBin("gui-popup", 50)
+        self.char_select_modal.hide()
+
+        self.lbl_char_modal_title = OnscreenText(
+            text="[ 탐험가 선택 및 관리 (EXPLORER SELECTION) ]",
+            parent=self.char_select_modal,
+            pos=(0, 0.68),
+            scale=0.048,
+            fg=(0.35, 0.95, 1.0, 1.0),
+            shadow=(0, 0, 0, 0.95),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+        self.lbl_char_modal_sub = OnscreenText(
+            text="최대 3명의 탐험가를 생성하고 관리합니다. (탐험 중에는 전환 불가)",
+            parent=self.char_select_modal,
+            pos=(0, 0.61),
+            scale=0.024,
+            fg=(0.80, 0.85, 0.90, 0.90),
+            shadow=(0, 0, 0, 0.9),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+        # 3 Cards
+        self.char_cards = []
+        card_x_positions = [-0.88, 0.0, 0.88]
+
+        for i in range(3):
+            cx = card_x_positions[i]
+            card_frame = DirectFrame(
+                parent=self.char_select_modal,
+                frameColor=(0.10, 0.13, 0.18, 0.95),
+                frameSize=(-0.38, 0.38, -0.48, 0.48),
+                relief=DGG.RIDGE,
+                borderWidth=(0.005, 0.005),
+                pos=(cx, 0, 0.04)
+            )
+
+            slot_hdr = OnscreenText(
+                text=f"[ 슬롯 {i+1} ]",
+                parent=card_frame,
+                pos=(0, 0.38),
+                scale=0.034,
+                fg=(0.95, 0.85, 0.35, 1.0),
+                align=TextNode.ACenter,
+                **self.font_kw
+            )
+
+            name_lbl = OnscreenText(
+                text="빈 슬롯",
+                parent=card_frame,
+                pos=(0, 0.26),
+                scale=0.032,
+                fg=(1.0, 1.0, 1.0, 1.0),
+                align=TextNode.ACenter,
+                **self.font_kw
+            )
+
+            items_lbl = OnscreenText(
+                text="",
+                parent=card_frame,
+                pos=(0, 0.14),
+                scale=0.024,
+                fg=(0.85, 0.88, 0.92, 1.0),
+                align=TextNode.ACenter,
+                **self.font_kw
+            )
+
+            pri_lbl = OnscreenText(
+                text="",
+                parent=card_frame,
+                pos=(0, 0.04),
+                scale=0.024,
+                fg=(0.85, 0.88, 0.92, 1.0),
+                align=TextNode.ACenter,
+                **self.font_kw
+            )
+
+            sec_lbl = OnscreenText(
+                text="",
+                parent=card_frame,
+                pos=(0, -0.06),
+                scale=0.024,
+                fg=(0.85, 0.88, 0.92, 1.0),
+                align=TextNode.ACenter,
+                **self.font_kw
+            )
+
+            credits_lbl = OnscreenText(
+                text="",
+                parent=card_frame,
+                pos=(0, -0.16),
+                scale=0.024,
+                fg=(1.0, 0.85, 0.30, 1.0),
+                align=TextNode.ACenter,
+                **self.font_kw
+            )
+
+            rule_lbl = OnscreenText(
+                text="[ 탐험 레벨: 런마다 초기화 ]",
+                parent=card_frame,
+                pos=(0, -0.26),
+                scale=0.020,
+                fg=(0.60, 0.65, 0.70, 0.85),
+                align=TextNode.ACenter,
+                **self.font_kw
+            )
+
+            status_lbl = OnscreenText(
+                text="",
+                parent=card_frame,
+                pos=(0, -0.34),
+                scale=0.025,
+                fg=(0.35, 1.0, 0.55, 1.0),
+                align=TextNode.ACenter,
+                **self.font_kw
+            )
+
+            action_btn = DirectButton(
+                parent=card_frame,
+                relief=DGG.RIDGE if DGG else None,
+                borderWidth=(0.003, 0.003),
+                frameColor=(0.12, 0.18, 0.26, 0.95),
+                frameSize=(-0.30, 0.30, -0.042, 0.042),
+                pos=(0, 0, -0.41),
+                text="[ 선택 ]",
+                text_scale=0.026,
+                text_pos=(0, -0.008),
+                text_fg=(0.35, 0.95, 1.0, 1.0),
+                **self.btn_font_kw
+            )
+
+            del_btn = DirectButton(
+                parent=card_frame,
+                relief=DGG.RIDGE if DGG else None,
+                borderWidth=(0.003, 0.003),
+                frameColor=(0.28, 0.10, 0.10, 0.95),
+                frameSize=(-0.09, 0.09, -0.038, 0.038),
+                pos=(0.24, 0, -0.41),
+                text="[ 삭제 ]",
+                text_scale=0.024,
+                text_pos=(0, -0.008),
+                text_fg=(1.0, 0.40, 0.40, 1.0),
+                **self.btn_font_kw
+            )
+            del_btn.hide()
+
+            self.char_cards.append({
+                "frame": card_frame,
+                "slot_hdr": slot_hdr,
+                "name": name_lbl,
+                "items": items_lbl,
+                "pri": pri_lbl,
+                "sec": sec_lbl,
+                "credits": credits_lbl,
+                "rule": rule_lbl,
+                "status": status_lbl,
+                "btn": action_btn,
+                "del_btn": del_btn,
+            })
+
+        # Bottom Buttons
+        self.btn_char_start_game = DirectButton(
+            parent=self.char_select_modal,
+            relief=None,
+            frameSize=(-0.35, 0.35, -0.045, 0.045),
+            pos=(0.42, 0, -0.66),
+            text="[ 선택한 탐험가로 탐험 시작 ▶ ]",
+            text_scale=0.028,
+            text_pos=(0, -0.009),
+            text_fg=(0.35, 1.0, 0.55, 1.0),
+            command=self._on_click_start_with_selected,
+            **self.btn_font_kw
+        )
+
+        self.btn_char_back = DirectButton(
+            parent=self.char_select_modal,
+            relief=None,
+            frameSize=(-0.25, 0.25, -0.045, 0.045),
+            pos=(-0.42, 0, -0.66),
+            text="[ ◀ 뒤로 (메인 메뉴) ]",
+            text_scale=0.028,
+            text_pos=(0, -0.009),
+            text_fg=(0.85, 0.88, 0.92, 1.0),
+            command=self.hide_character_select_modal,
+            **self.btn_font_kw
+        )
+
+        # Character Creation Sub-Modal Box
+        self.char_create_frame = DirectFrame(
+            parent=self.char_select_modal,
+            frameColor=(0.04, 0.06, 0.08, 0.98),
+            frameSize=(-0.65, 0.65, -0.38, 0.38),
+            relief=DGG.RIDGE,
+            borderWidth=(0.006, 0.006),
+            pos=(0, 0, 0.04)
+        )
+        self.char_create_frame.setBin("gui-popup", 60)
+        self.char_create_frame.hide()
+
+        self.lbl_create_title = OnscreenText(
+            text="[ 새 탐험가 등록 ]",
+            parent=self.char_create_frame,
+            pos=(0, 0.25),
+            scale=0.040,
+            fg=(0.35, 0.95, 1.0, 1.0),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+        self.lbl_create_prompt = OnscreenText(
+            text="탐험가 이름 입력 (2~12자, 한글/영문):",
+            parent=self.char_create_frame,
+            pos=(0, 0.15),
+            scale=0.026,
+            fg=(0.85, 0.90, 0.95, 1.0),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+        self.char_create_entry = DirectEntry(
+            parent=self.char_create_frame,
+            scale=0.032,
+            pos=(-0.30, 0, 0.02),
+            numLines=1,
+            width=19,
+            frameColor=(0.12, 0.16, 0.22, 1.0),
+            text_fg=(1.0, 1.0, 1.0, 1.0),
+            initialText="",
+            focus=1,
+            **self.btn_font_kw
+        )
+
+        self.btn_create_paste = DirectButton(
+            parent=self.char_create_frame,
+            relief=DGG.RIDGE if DGG else None,
+            borderWidth=(0.003, 0.003),
+            frameColor=(0.14, 0.18, 0.24, 0.95),
+            frameSize=(-0.15, 0.15, -0.028, 0.028),
+            pos=(-0.16, 0, -0.05),
+            text="[ 붙여넣기 (Ctrl+V) ]",
+            text_scale=0.022,
+            text_pos=(0, -0.006),
+            text_fg=(0.80, 0.88, 0.95, 1.0),
+            command=self._on_paste_create_entry,
+            **self.btn_font_kw
+        )
+
+        self.btn_create_convert = DirectButton(
+            parent=self.char_create_frame,
+            relief=DGG.RIDGE if DGG else None,
+            borderWidth=(0.003, 0.003),
+            frameColor=(0.14, 0.20, 0.28, 0.95),
+            frameSize=(-0.14, 0.14, -0.028, 0.028),
+            pos=(0.16, 0, -0.05),
+            text="[ 한글 변환 ]",
+            text_scale=0.022,
+            text_pos=(0, -0.006),
+            text_fg=(0.40, 0.85, 1.0, 1.0),
+            command=self._on_click_convert_create_name,
+            **self.btn_font_kw
+        )
+
+        self.lbl_create_err = OnscreenText(
+            text="",
+            parent=self.char_create_frame,
+            pos=(0, -0.13),
+            scale=0.024,
+            fg=(1.0, 0.35, 0.35, 1.0),
+            align=TextNode.ACenter,
+            **self.font_kw
+        )
+
+        self.btn_confirm_create = DirectButton(
+            parent=self.char_create_frame,
+            relief=None,
+            frameSize=(-0.18, 0.18, -0.04, 0.04),
+            pos=(-0.20, 0, -0.24),
+            text="[ 확인 (생성) ]",
+            text_scale=0.026,
+            text_pos=(0, -0.008),
+            text_fg=(0.35, 1.0, 0.55, 1.0),
+            command=self._on_click_confirm_create,
+            **self.btn_font_kw
+        )
+
+        self.btn_cancel_create = DirectButton(
+            parent=self.char_create_frame,
+            relief=None,
+            frameSize=(-0.18, 0.18, -0.04, 0.04),
+            pos=(0.20, 0, -0.24),
+            text="[ 취소 ]",
+            text_scale=0.026,
+            text_pos=(0, -0.008),
+            text_fg=(1.0, 0.45, 0.45, 1.0),
+            command=self._on_click_cancel_create,
+            **self.btn_font_kw
+        )
+
+        self._setup_character_delete_modal()
+
+        if hasattr(self, 'base') and hasattr(self.base, 'accept'):
+            try:
+                self.base.accept("control-v", self._on_global_ctrl_v)
+            except Exception:
+                pass
+
+    def show_character_select_modal(self):
+        """Display character selection modal and refresh slots."""
+        if hasattr(self, 'intro_frame'):
+            self.intro_frame.hide()
+        if hasattr(self, 'char_select_modal'):
+            self.char_select_modal.show()
+            self._refresh_character_select_modal()
+
+    def hide_character_select_modal(self):
+        """Hide character selection modal and return to intro frame."""
+        if hasattr(self, 'char_delete_modal'):
+            self.hide_character_delete_modal()
+        if hasattr(self, 'char_select_modal'):
+            self.char_select_modal.hide()
+        if hasattr(self, 'char_create_frame'):
+            self.char_create_frame.hide()
+        if hasattr(self, 'intro_frame'):
+            self.intro_frame.show()
+        self.update_active_explorer_display()
+
+    def _refresh_character_select_modal(self):
+        """Synchronize the 3 character cards with CharacterManager state."""
+        char_mgr = getattr(getattr(self, 'base', None), 'character_mgr', None)
+        if not char_mgr:
+            return
+        char_list = char_mgr.character_list or char_mgr.load_character_list()
+        chars = char_list.characters
+        active_id = char_list.active_character_id
+
+        for i in range(3):
+            card = self.char_cards[i]
+            if i < len(chars):
+                c = chars[i]
+                data = char_mgr.get_character_card_data(c.id)
+                is_active = (c.id == active_id)
+
+                card["name"].setText(f"탐험가: {c.name}")
+                card["items"].setText(f"보유 장비: {data['item_count']}개")
+                card["pri"].setText(f"주 무기: {data['primary_name']}")
+                card["sec"].setText(f"보조 무기: {data['secondary_name']}")
+                card["credits"].setText(f"보유 크레딧: {data['credits']:,} C")
+                card["rule"].show()
+
+                card["frame"]["borderWidth"] = (0.007, 0.007) if is_active else (0.004, 0.004)
+                card["frame"]["frameColor"] = (0.12, 0.17, 0.24, 0.98) if is_active else (0.09, 0.11, 0.16, 0.95)
+                card["btn"].setPos(-0.10, 0, -0.41)
+                card["btn"]["frameSize"] = (-0.21, 0.21, -0.038, 0.038)
+                if "del_btn" in card:
+                    card["del_btn"].show()
+                    card["del_btn"]["command"] = self._on_click_delete_character
+                    card["del_btn"]["extraArgs"] = [c.id]
+
+                if is_active:
+                    card["status"].setText("★ [ 현재 선택됨 ]")
+                    card["status"].setFg((0.35, 1.0, 0.55, 1.0))
+                    card["btn"]["text"] = "[ 선택됨 ]"
+                    card["btn"]["state"] = DGG.DISABLED
+                    card["btn"]["text_fg"] = (0.5, 0.6, 0.7, 1.0)
+                    card["btn"]["command"] = None
+                    card["btn"]["extraArgs"] = []
+                else:
+                    card["status"].setText("[ 대기 중 ]")
+                    card["status"].setFg((0.7, 0.75, 0.8, 1.0))
+                    card["btn"]["text"] = "[ 탐험가 선택 ]"
+                    card["btn"]["state"] = DGG.NORMAL
+                    card["btn"]["text_fg"] = (0.35, 0.95, 1.0, 1.0)
+                    card["btn"]["command"] = self._on_click_select_character
+                    card["btn"]["extraArgs"] = [c.id]
+            else:
+                card["frame"]["borderWidth"] = (0.004, 0.004)
+                card["frame"]["frameColor"] = (0.07, 0.09, 0.12, 0.90)
+                card["btn"].setPos(0, 0, -0.41)
+                card["btn"]["frameSize"] = (-0.30, 0.30, -0.042, 0.042)
+                if "del_btn" in card:
+                    card["del_btn"].hide()
+                card["name"].setText("[ 빈 슬롯 ]")
+                card["items"].setText("등록된 탐험가가 없습니다.")
+                card["pri"].setText("")
+                card["sec"].setText("")
+                card["credits"].setText("")
+                card["rule"].hide()
+                card["status"].setText("")
+                card["btn"]["text"] = "[ + 새 탐험가 생성 ]"
+                card["btn"]["state"] = DGG.NORMAL
+                card["btn"]["text_fg"] = (0.4, 1.0, 0.6, 1.0)
+                card["btn"]["command"] = self._on_click_create_character
+                card["btn"]["extraArgs"] = []
+
+        # Start game button state
+        has_active = bool(active_id and any(c.id == active_id for c in chars))
+        if has_active:
+            self.btn_char_start_game["state"] = DGG.NORMAL
+            self.btn_char_start_game["text_fg"] = (0.35, 1.0, 0.55, 1.0)
+        else:
+            self.btn_char_start_game["state"] = DGG.DISABLED
+            self.btn_char_start_game["text_fg"] = (0.5, 0.55, 0.6, 1.0)
+
+    def _on_click_select_character(self, char_id):
+        if hasattr(self.base, 'switch_to_character'):
+            if not self.base.switch_to_character(char_id):
+                self.show_hit_marker(getattr(self.base, 'character_error', None) or "캐릭터 선택 실패", (1, .3, .3, 1))
+        self._refresh_character_select_modal()
+
+    def _on_click_create_character(self):
+        if hasattr(self, 'lbl_create_err'):
+            self.lbl_create_err.setText("")
+        if hasattr(self, 'char_create_entry'):
+            self.char_create_entry.set("")
+        if hasattr(self, 'char_create_frame'):
+            self.char_create_frame.show()
+
+    def _on_click_confirm_create(self):
+        name = self.char_create_entry.get().strip()
+        if hasattr(self.base, 'create_and_switch_character'):
+            success = self.base.create_and_switch_character(name)
+            if success:
+                self.char_create_frame.hide()
+                self._refresh_character_select_modal()
+            else:
+                char_mgr = getattr(self.base, 'character_mgr', None)
+                err_msg = getattr(self.base, 'character_error', None) or "캐릭터 생성 실패: 2~12자 이름을 입력하세요."
+                if char_mgr:
+                    try:
+                        from rpg.characters import validate_character_name
+                        validate_character_name(name)
+                    except Exception as e:
+                        err_msg = str(e)
+                self.lbl_create_err.setText(err_msg)
+
+    def _on_click_cancel_create(self):
+        if hasattr(self, 'char_create_frame'):
+            self.char_create_frame.hide()
+
+    def _on_paste_create_entry(self):
+        text = get_clipboard_text().strip()
+        if text and hasattr(self, 'char_create_entry'):
+            self.char_create_entry.set(text)
+
+    def _on_click_convert_create_name(self):
+        if hasattr(self, 'char_create_entry'):
+            raw = self.char_create_entry.get().strip()
+            converted = eng_to_hangul(raw)
+            if converted:
+                self.char_create_entry.set(converted)
+
+    def _on_global_ctrl_v(self):
+        if self.is_char_delete_modal_open():
+            self._on_paste_delete_entry()
+        elif hasattr(self, 'char_create_frame') and not self.char_create_frame.isHidden():
+            self._on_paste_create_entry()
+
+    def _setup_character_delete_modal(self):
+        """Create Character Deletion confirmation modal."""
+        self.char_delete_blocker = DirectFrame(
+            parent=self.char_select_modal, frameSize=(-2, 2, -1.5, 1.5),
+            frameColor=(0, 0, 0, .65), state=DGG.NORMAL,
+            relief=DGG.FLAT)
+        self.char_delete_blocker.setBin('gui-popup', 69)
+        self.char_delete_blocker.hide()
+        self.char_delete_modal = DirectFrame(
+            parent=self.char_select_modal,
+            frameColor=(0.04, 0.05, 0.08, 0.98),
+            frameSize=(-0.70, 0.70, -0.42, 0.42),
+            relief=DGG.RIDGE if DGG else None,
+            borderWidth=(0.007, 0.007),
+            pos=(0, 0, 0.04)
+        )
+        self.char_delete_modal.setBin("gui-popup", 70)
+        self.char_delete_modal.hide()
+
+        self.lbl_del_title = OnscreenText(
+            text="[ 탐험가 삭제 확인 ]",
+            parent=self.char_delete_modal,
+            pos=(0, 0.32),
+            scale=0.038,
+            fg=(1.0, 0.35, 0.35, 1.0),
+            align=TextNode.ACenter if TextNode else 0,
+            **self.font_kw
+        )
+
+        self.frame_del_info = DirectFrame(
+            parent=self.char_delete_modal,
+            frameColor=(0.10, 0.12, 0.18, 0.95),
+            frameSize=(-0.62, 0.62, -0.045, 0.045),
+            relief=DGG.RIDGE if DGG else None,
+            borderWidth=(0.003, 0.003),
+            pos=(0, 0, 0.22)
+        )
+
+        self.lbl_del_target_info = OnscreenText(
+            text="슬롯 1  |  탐험가: 이름  |  보유 장비: 0개",
+            parent=self.frame_del_info,
+            pos=(0, -0.009),
+            scale=0.026,
+            fg=(0.85, 0.92, 1.0, 1.0),
+            align=TextNode.ACenter if TextNode else 0,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.lbl_del_notice = OnscreenText(
+            text="목록에서 삭제하고 캐릭터 슬롯을 비웁니다.\n"
+                 "실수 복구를 위해 기존 저장 파일은 안전하게 보존됩니다.\n"
+                 "삭제할 탐험가의 이름을 입력하거나 아래 [자동 입력]을 누르세요.",
+            parent=self.char_delete_modal,
+            pos=(0, 0.11),
+            scale=0.030,
+            fg=(0.85, 0.88, 0.92, 0.95),
+            align=TextNode.ACenter if TextNode else 0,
+            **self.font_kw
+        )
+
+        self.char_delete_entry = DirectEntry(
+            parent=self.char_delete_modal,
+            scale=0.032,
+            pos=(-0.30, 0, -0.04),
+            numLines=1,
+            width=19,
+            frameColor=(0.12, 0.16, 0.22, 1.0),
+            text_fg=(1.0, 1.0, 1.0, 1.0),
+            initialText="",
+            focus=0,
+            command=self._on_delete_entry_enter,
+            **self.btn_font_kw
+        )
+
+        self.btn_del_autofill = DirectButton(
+            parent=self.char_delete_modal,
+            relief=DGG.RIDGE if DGG else None,
+            borderWidth=(0.003, 0.003),
+            frameColor=(0.14, 0.22, 0.32, 0.95),
+            frameSize=(-0.16, 0.16, -0.030, 0.030),
+            pos=(-0.14, 0, -0.13),
+            text="[ 이름 자동 입력 ]",
+            text_scale=0.024,
+            text_pos=(0, -0.007),
+            text_fg=(0.40, 0.85, 1.0, 1.0),
+            command=self._on_click_autofill_delete_name,
+            **self.btn_font_kw
+        )
+
+        self.btn_del_paste = DirectButton(
+            parent=self.char_delete_modal,
+            relief=DGG.RIDGE if DGG else None,
+            borderWidth=(0.003, 0.003),
+            frameColor=(0.16, 0.18, 0.24, 0.95),
+            frameSize=(-0.15, 0.15, -0.030, 0.030),
+            pos=(0.19, 0, -0.13),
+            text="[ 붙여넣기 (Ctrl+V) ]",
+            text_scale=0.022,
+            text_pos=(0, -0.007),
+            text_fg=(0.80, 0.85, 0.95, 1.0),
+            command=self._on_paste_delete_entry,
+            **self.btn_font_kw
+        )
+
+        self.lbl_del_err = OnscreenText(
+            text="",
+            parent=self.char_delete_modal,
+            pos=(0, -0.20),
+            scale=0.023,
+            fg=(1.0, 0.35, 0.35, 1.0),
+            align=TextNode.ACenter if TextNode else 0,
+            mayChange=True,
+            **self.font_kw
+        )
+
+        self.btn_confirm_delete = DirectButton(
+            parent=self.char_delete_modal,
+            relief=DGG.RIDGE if DGG else None,
+            borderWidth=(0.004, 0.004),
+            frameColor=(0.14, 0.15, 0.18, 0.85),
+            frameSize=(-0.20, 0.20, -0.040, 0.040),
+            pos=(-0.22, 0, -0.29),
+            text="[ 삭제 확정 ]",
+            text_scale=0.026,
+            text_pos=(0, -0.008),
+            text_fg=(0.50, 0.50, 0.55, 1.0),
+            command=self._on_click_confirm_delete,
+            state=DGG.DISABLED if DGG else "disabled",
+            **self.btn_font_kw
+        )
+
+        self.btn_cancel_delete = DirectButton(
+            parent=self.char_delete_modal,
+            relief=DGG.RIDGE if DGG else None,
+            borderWidth=(0.004, 0.004),
+            frameColor=(0.16, 0.20, 0.26, 0.95),
+            frameSize=(-0.20, 0.20, -0.040, 0.040),
+            pos=(0.22, 0, -0.29),
+            text="[ 취소 (ESC) ]",
+            text_scale=0.026,
+            text_pos=(0, -0.008),
+            text_fg=(0.85, 0.88, 0.92, 1.0),
+            command=self.hide_character_delete_modal,
+            **self.btn_font_kw
+        )
+
+    def _on_click_delete_character(self, char_id):
+        char_mgr = getattr(getattr(self, 'base', None), 'character_mgr', None)
+        if not char_mgr:
+            return
+        c_info = next((c for c in char_mgr.character_list.characters if c.id == char_id), None)
+        if not c_info:
+            return
+        self._deleting_char_id = char_id
+        self._deleting_char_name = c_info.name
+
+        slot_idx = next((i + 1 for i, c in enumerate(char_mgr.character_list.characters) if c.id == char_id), 1)
+        card_data = char_mgr.get_character_card_data(char_id)
+
+        self.lbl_del_target_info.setText(
+            f"슬롯 {slot_idx}  |  탐험가: {c_info.name}  |  보유 장비: {card_data.get('item_count', 0)}개"
+        )
+        self.char_delete_entry.set("")
+        self.lbl_del_err.setText("")
+        self._update_delete_confirm_btn_state()
+        if hasattr(self, 'char_delete_blocker'):
+            self.char_delete_blocker.show()
+        self.char_delete_modal.show()
+        self.char_delete_entry["focus"] = 1
+
+        if hasattr(self, 'base') and hasattr(self.base, 'taskMgr') and self.base.taskMgr:
+            self.base.taskMgr.add(self._delete_name_check_task, "check_delete_name_match")
+
+    def _on_delete_entry_enter(self, text):
+        self._update_delete_confirm_btn_state()
+        if self.btn_confirm_delete["state"] == (DGG.NORMAL if DGG else "normal"):
+            self._on_click_confirm_delete()
+
+    def _delete_name_check_task(self, task):
+        if not hasattr(self, 'char_delete_modal') or self.char_delete_modal.isHidden():
+            return task.done
+        self._update_delete_confirm_btn_state()
+        return task.cont
+
+    def _on_click_autofill_delete_name(self):
+        expected = getattr(self, '_deleting_char_name', None)
+        if expected and hasattr(self, 'char_delete_entry'):
+            self.char_delete_entry.set(expected)
+            self._update_delete_confirm_btn_state()
+
+    def _on_paste_delete_entry(self):
+        text = get_clipboard_text().strip()
+        if text and hasattr(self, 'char_delete_entry'):
+            self.char_delete_entry.set(text)
+            self._update_delete_confirm_btn_state()
+
+    def _update_delete_confirm_btn_state(self):
+        entered = self.char_delete_entry.get().strip() if hasattr(self, 'char_delete_entry') else ""
+        expected = getattr(self, '_deleting_char_name', None)
+        converted = eng_to_hangul(entered)
+        is_match = bool(expected and (entered == expected or converted == expected))
+        if is_match and entered != expected and converted == expected:
+            self.char_delete_entry.set(converted)
+            entered = converted
+
+        if is_match:
+            self.btn_confirm_delete["state"] = DGG.NORMAL if DGG else "normal"
+            self.btn_confirm_delete["text_fg"] = (1.0, 0.35, 0.35, 1.0)
+            self.btn_confirm_delete["frameColor"] = (0.35, 0.12, 0.12, 0.95)
+        else:
+            self.btn_confirm_delete["state"] = DGG.DISABLED if DGG else "disabled"
+            self.btn_confirm_delete["text_fg"] = (0.50, 0.50, 0.55, 1.0)
+            self.btn_confirm_delete["frameColor"] = (0.14, 0.15, 0.18, 0.85)
+
+    def hide_character_delete_modal(self):
+        if hasattr(self, 'char_delete_blocker'):
+            self.char_delete_blocker.hide()
+        if hasattr(self, 'char_delete_entry'):
+            self.char_delete_entry['focus'] = 0
+        if hasattr(self, 'char_delete_modal'):
+            self.char_delete_modal.hide()
+        self._deleting_char_id = None
+        self._deleting_char_name = None
+        if hasattr(self, 'base') and hasattr(self.base, 'taskMgr') and self.base.taskMgr:
+            try:
+                self.base.taskMgr.remove("check_delete_name_match")
+            except Exception:
+                pass
+
+    def _on_click_confirm_delete(self):
+        char_id = getattr(self, '_deleting_char_id', None)
+        expected_name = getattr(self, '_deleting_char_name', None)
+        entered_name = self.char_delete_entry.get().strip()
+        if eng_to_hangul(entered_name) == expected_name:
+            entered_name = expected_name
+
+        if not char_id or entered_name != expected_name:
+            self.lbl_del_err.setText("탐험가 이름이 일치하지 않습니다.")
+            return
+
+        if hasattr(self.base, 'delete_character'):
+            success = self.base.delete_character(char_id, entered_name)
+            if success:
+                self.hide_character_delete_modal()
+                self._refresh_character_select_modal()
+                self.update_active_explorer_display()
+            else:
+                err = getattr(self.base, 'character_error', None) or "삭제 처리 실패"
+                self.lbl_del_err.setText(f"삭제 실패: {err}")
+
+    def is_char_delete_modal_open(self):
+        return hasattr(self, 'char_delete_modal') and not self.char_delete_modal.isHidden()
+
+    def _on_click_start_with_selected(self):
+        self.hide_character_select_modal()
+        if hasattr(self.base, 'start_game'):
+            self.base.start_game()
+
     def show_intro(self):
         """인트로 화면 표시"""
         self.hide_all_ingame()
@@ -1426,7 +2244,12 @@ class UIManager:
         self.btn_game_menu.hide()
         self.btn_game_rank.hide()
         self.rank_modal.hide()
+        if hasattr(self, 'char_delete_modal'):
+            self.hide_character_delete_modal()
+        if hasattr(self, 'char_select_modal'):
+            self.char_select_modal.hide()
         self.intro_frame.show()
+        self.update_active_explorer_display()
 
     def start_game_ui(self):
         """게임 시작 시 인게임 HUD 표시"""
@@ -1704,24 +2527,31 @@ class UIManager:
         self.perk_badge_text.setText(f"[퍽]  {'  '.join(names)}")
         self.perk_badge_text.setFg((0.35, 0.90, 1.0, 1.0))
 
-    def show_boss_hp_bar(self, boss_name="[ ★ BOSS: 골해의 지배자 ★ ]", hp=None, max_hp=None):
+    def show_boss_hp_bar(self, boss_name="[ ★ BOSS: 골해의 지배자 ★ ]", hp=None, max_hp=None, stage_level=None, broken_legs=None):
         """보스 출현 시 상단 전용 체력바 표시"""
         if hasattr(self, 'boss_hud_frame') and self.boss_hud_frame:
             self._boss_hud_name = boss_name
             self._boss_hud_phase = None
             self._boss_hp_display_ratio = None
             self._boss_hp_target_ratio = None
+            self._boss_hud_stage_level = stage_level
+            self._boss_hud_broken_legs = broken_legs
             self.boss_name_text.setText(boss_name)
             self.boss_hud_frame.show()
             if hp is not None and max_hp is not None:
-                self.update_boss_hp(hp, max_hp)
+                self.update_boss_hp(hp, max_hp, stage_level=stage_level, broken_legs=broken_legs)
 
-    def update_boss_hp(self, hp, max_hp, phase=1):
+    def update_boss_hp(self, hp, max_hp, phase=1, stage_level=None, broken_legs=None, total_legs=8):
         """실제 체력은 즉시 표시하고, 막대의 새 목표만 갱신한다."""
         if not hasattr(self, 'boss_hud_frame') or not self.boss_hud_frame:
             return
         if self.boss_hud_frame.isHidden():
             self.boss_hud_frame.show()
+
+        if stage_level is not None:
+            self._boss_hud_stage_level = stage_level
+        if broken_legs is not None:
+            self._boss_hud_broken_legs = broken_legs
 
         pct = max(0.0, min(1.0, hp / max(1.0, max_hp)))
         self._boss_hp_target_ratio = pct
@@ -1729,16 +2559,28 @@ class UIManager:
             self._boss_hp_display_ratio = pct
             self.boss_bar_fill.setSx(pct)
 
-        if getattr(self, '_boss_hud_phase', None) != phase:
+        cur_lvl = getattr(self, '_boss_hud_stage_level', None)
+        cur_broken = getattr(self, '_boss_hud_broken_legs', None)
+        base_name = getattr(self, '_boss_hud_name', '골해의 지배자')
+        clean_name = base_name.replace("[ ★ BOSS: ", "").replace(" ★ ]", "").replace("[★ BOSS: ", "").replace("★]", "").strip()
+        if " — 폭주" in clean_name:
+            clean_name = clean_name.replace(" — 폭주", "")
+
+        lvl_prefix = f"[Lv.{cur_lvl}] " if cur_lvl is not None else ""
+        part_suffix = f" (다리 파괴: {cur_broken}/{total_legs})" if cur_broken is not None else ""
+
+        if getattr(self, '_boss_hud_phase', None) != phase or getattr(self, '_boss_hud_last_broken', None) != cur_broken:
             self._boss_hud_phase = phase
-            name = getattr(self, '_boss_hud_name', '골해의 지배자')
+            self._boss_hud_last_broken = cur_broken
             if phase >= 2:
                 self.boss_bar_fill["frameColor"] = (1.0, 0.15, 0.15, 1.0)
-                self.boss_name_text.setText(f"{name} — 폭주")
+                display_text = f"{lvl_prefix}{clean_name} — 폭주{part_suffix}"
+                self.boss_name_text.setText(display_text)
                 self.boss_name_text.setFg((1.0, 0.20, 0.20, 1.0))
             else:
                 self.boss_bar_fill["frameColor"] = (0.25, 0.85, 1.0, 1.0)
-                self.boss_name_text.setText(name)
+                display_text = f"{lvl_prefix}{clean_name}{part_suffix}"
+                self.boss_name_text.setText(display_text)
                 self.boss_name_text.setFg((0.40, 0.90, 1.0, 1.0))
 
         self.boss_hp_text.setText(f"{int(max(0, hp))} / {int(max_hp)} ({pct*100:.1f}%)")
@@ -1750,7 +2592,10 @@ class UIManager:
         # AI의 스턴/틱 분산과 관계없이 현재 체력을 매 HUD 프레임 읽는다.
         boss = getattr(getattr(self, 'base', None), 'boss', None)
         if boss is not None:
-            self.update_boss_hp(boss.hp, boss.max_hp, boss.phase)
+            b_lvl = getattr(boss, 'stage_level', None)
+            leg_hps = getattr(boss, 'leg_hp', None)
+            b_broken = sum(1 for hp in leg_hps if hp <= 0) if isinstance(leg_hps, (list, tuple)) else None
+            self.update_boss_hp(boss.hp, boss.max_hp, boss.phase, stage_level=b_lvl, broken_legs=b_broken, total_legs=len(leg_hps) if leg_hps else 8)
         target = getattr(self, '_boss_hp_target_ratio', None)
         current = getattr(self, '_boss_hp_display_ratio', None)
         if target is None or current is None or dt <= 0:
@@ -1824,32 +2669,11 @@ class UIManager:
             self._cached_timer_col = col
 
     def set_bullet_time_hud(self, is_active, time_left=0.0, strength=1.0, elapsed=1.0):
-        """불릿 타임 (시간 감속) HUD 배너 및 멀티레이어 시각 효과 실시간 갱신
-
-        Layers:
-          • vignette_bullet_time : 외곽 일렉트릭 링 — 진입 플래시 + 진폭 맥동
-          • panel_bullet_time    : 상단 배너 패널
-          • bullet_time_text     : 잔여 시간 텍스트
-        """
+        """불릿타임 배너 표시. 검은 비네트를 중첩해 시야를 가리지 않는다."""
+        if hasattr(self, 'vignette_bullet_time') and self.vignette_bullet_time:
+            self.vignette_bullet_time.hide()
         if is_active and time_left > 0.0:
-            # ── 진입 플래시 (elapsed 0→0.12s 동안 급격히 밝아졌다가 안정) ──
-            entry_flash = 0.55 * max(0.0, 1.0 - elapsed / 0.12)
-            # ── 안정기 전기 맥동 (느린 사인파 + 짧은 고주파 shimmer) ──
-            slow_pulse   = 0.22 * math.sin(elapsed * 3.8)
-            fast_shimmer = 0.04 * math.sin(elapsed * 22.0)
-            base_alpha = strength * (0.38 + slow_pulse + fast_shimmer) + entry_flash
-            base_alpha = max(0.0, min(1.0, base_alpha))
-
-            if hasattr(self, 'vignette_bullet_time') and self.vignette_bullet_time:
-                # 전기 사이안 링 : 밝기와 청색 비율을 강도에 따라 조절
-                r = 0.12 + 0.08 * (1.0 - strength)   # strength 낮을수록 따뜻하게 빠짐
-                g = 0.82
-                b = 1.04                               # 살짝 과포화 — 글로우 느낌
-                self.vignette_bullet_time.setColorScale(r, g, b, base_alpha)
-                self.vignette_bullet_time.show()
-
             # ── 배너 텍스트 — 채도/색상을 강도에 맞게 조절 ──
-            pct = int(strength * 100)
             label = f">> [ BULLET TIME  {time_left:.1f}s  ×0.25 ] <<"
             self.bullet_time_text.setText(label)
             # 진입 순간 흰색 플래시 → 안정되면 사이안
@@ -1867,6 +2691,22 @@ class UIManager:
                 self.vignette_bullet_time.hide()
             self.bullet_time_text.hide()
             self.panel_bullet_time.hide()
+
+    def update_run_loot_hud(self, count, capacity=24):
+        if hasattr(self, 'loot_hud_text') and self.loot_hud_text:
+            if count >= capacity:
+                col = (1.0, 0.40, 0.40, 1.0)
+            elif count > 0:
+                col = (1.0, 0.90, 0.35, 1.0)
+            else:
+                col = (0.75, 0.75, 0.80, 0.9)
+            self.loot_hud_text.setText(f"미확보 전리품  {count} / {capacity}")
+            self.loot_hud_text.setFg(col)
+
+    def set_run_loot_bag(self, bag):
+        self.run_loot_bag = bag
+        if hasattr(self, 'run_loot_ui') and self.run_loot_ui:
+            self.run_loot_ui.set_run_loot_bag(bag)
 
     def update_ammo(self, ammo, max_ammo, reserve_ammo=0, overcharge_rounds=0, weapon_name=None):
         if weapon_name and hasattr(self, 'weapon_name_text') and self.weapon_name_text:
@@ -1942,6 +2782,19 @@ class UIManager:
             else:
                 self.exp_text.setFg((0.85, 0.70, 1.0, 1.0))
             self._cached_exp_str = msg_exp
+
+    def update_poison_hud(self, timer, dps=4.0):
+        """HUD 상단 독 상태이상 표시 갱신"""
+        if not hasattr(self, 'poison_status_text') or not self.poison_status_text:
+            return
+        if timer > 0.0:
+            msg = f"[☣ 맹독 감염: {timer:.1f}s (-{int(dps)}/s)]"
+            self.poison_status_text.setText(msg)
+            self.poison_status_text.show()
+        else:
+            if not self.poison_status_text.isHidden():
+                self.poison_status_text.setText("")
+                self.poison_status_text.hide()
 
     def update_hud(self, px, py, escape_pos=None, heading=0.0):
         """중앙 상단 길잡이 삭제 완료 (우측 상단 원형 전술 레이더 위젯으로 통합 대체)"""
@@ -2360,19 +3213,29 @@ class UIManager:
         self.shop_msg_text.setFg((1.0, 0.85, 0.25, 1.0))
         self._refresh_owned_perks_label()
 
-        # STAGE 3 이상 클리어 시 미궁 완전 탈출 버튼 활성화
-        if stage >= 3 and on_victory_callback is not None:
+        pending_cnt = 0
+        bag = getattr(getattr(self, 'base', None), 'run_loot_bag', getattr(self, 'run_loot_bag', None))
+        if bag:
+            pending_cnt = bag.count
+
+        if on_victory_callback is not None:
             self.btn_start_next.setPos(-0.35, 0, -0.62)
-            self.btn_start_next["text"] = "심연 더 깊이 진입 (NEXT STAGE)"
+            self.btn_start_next["text"] = "심연 더 깊이 진입 (계속 탐험)"
             self.btn_escape_victory.setPos(0.35, 0, -0.62)
+            self.btn_escape_victory["text"] = f"★ 전리품 확보하고 탈출 ({pending_cnt}개) ★"
             self.btn_escape_victory.show()
         else:
             self.btn_start_next.setPos(0, 0, -0.62)
             self.btn_start_next["text"] = "다음 스테이지 시작 (START NEXT STAGE)"
             self.btn_escape_victory.hide()
 
+        self.shop_desc.setText(
+            f"심연의 미궁을 돌파하기 위한 전술 강화 퍽을 1장 선택하세요 (키보드 [1], [2], [3] 선택 / 마우스 클릭)\n"
+            f"[ 이번 탐험 미확보 전리품: {pending_cnt}개 | 계속 탐험 시 유지 · 사망 시 소실 | 탈출 시 영구 보관함으로 이관 ]"
+        )
+
         # 퍽 풀에서 3장 무작위 추첨
-        p_perks = getattr(player, 'perks', set())
+        p_perks = getattr(player, 'perk_levels', None) or getattr(player, 'perks', set())
         self.offered_perks = draw_random_perks(p_perks, count=3)
 
         for i, card in enumerate(self.perk_cards):
@@ -2424,7 +3287,7 @@ class UIManager:
         self.btn_escape_victory.hide()
 
         # 퍽 풀에서 3장 무작위 추첨
-        p_perks = getattr(player, 'perks', set())
+        p_perks = getattr(player, 'perk_levels', None) or getattr(player, 'perks', set())
         self.offered_perks = draw_random_perks(p_perks, count=3)
 
         for i, card in enumerate(self.perk_cards):
@@ -2493,12 +3356,73 @@ class UIManager:
         self.inv_subtitle = OnscreenText(
             text="생존 소모품 보급 현황 및 무기 제원 관리  |  단축키 [1~4] 인게임 즉시 사용 가능",
             parent=self.inv_modal,
-            pos=(0, 0.74),
-            scale=0.028,
+            pos=(0, 0.75),
+            scale=0.026,
             fg=(0.78, 0.85, 0.92, 0.90),
             shadow=(0, 0, 0, 0.9),
             align=TextNode.ACenter,
             **self.font_kw
+        )
+
+        # Clear geometric separation lines for modal structure
+        DirectFrame(parent=self.inv_modal, frameColor=(0.20, 0.32, 0.45, 0.8), frameSize=(-1.55, 1.55, -0.002, 0.002), relief=DGG.FLAT if DGG else None, pos=(0, 0, 0.71))
+        DirectFrame(parent=self.inv_modal, frameColor=(0.20, 0.32, 0.45, 0.8), frameSize=(-1.55, 1.55, -0.002, 0.002), relief=DGG.FLAT if DGG else None, pos=(0, 0, 0.58))
+
+        # 상단 [소모품] / [장비] / [작업대] / [이번 탐험] 4개 탭 버튼
+        self.btn_tab_consumables = DirectButton(
+            parent=self.inv_modal,
+            relief=None,
+            frameSize=(-0.19, 0.19, -0.038, 0.038),
+            pos=(-0.63, 0, 0.64),
+            text="[ ★ 소모품 배낭 ]",
+            text_scale=0.027,
+            text_pos=(0, -0.01),
+            text_fg=(0.35, 0.95, 1.0, 1.0),
+            command=self._switch_inventory_tab,
+            extraArgs=["consumables"],
+            **self.btn_font_kw
+        )
+
+        self.btn_tab_equipment = DirectButton(
+            parent=self.inv_modal,
+            relief=None,
+            frameSize=(-0.19, 0.19, -0.038, 0.038),
+            pos=(-0.21, 0, 0.64),
+            text="[ 영구 장비함 ]",
+            text_scale=0.027,
+            text_pos=(0, -0.01),
+            text_fg=(0.75, 0.80, 0.85, 1.0),
+            command=self._switch_inventory_tab,
+            extraArgs=["equipment"],
+            **self.btn_font_kw
+        )
+
+        self.btn_tab_workshop = DirectButton(
+            parent=self.inv_modal,
+            relief=None,
+            frameSize=(-0.19, 0.19, -0.038, 0.038),
+            pos=(0.21, 0, 0.64),
+            text="[ 무기 작업대 ]",
+            text_scale=0.027,
+            text_pos=(0, -0.01),
+            text_fg=(0.75, 0.80, 0.85, 1.0),
+            command=self._switch_inventory_tab,
+            extraArgs=["workshop"],
+            **self.btn_font_kw
+        )
+
+        self.btn_tab_run_loot = DirectButton(
+            parent=self.inv_modal,
+            relief=None,
+            frameSize=(-0.19, 0.19, -0.038, 0.038),
+            pos=(0.63, 0, 0.64),
+            text="[ 이번 탐험 (미확보) ]",
+            text_scale=0.027,
+            text_pos=(0, -0.01),
+            text_fg=(0.75, 0.80, 0.85, 1.0),
+            command=self._switch_inventory_tab,
+            extraArgs=["run_loot"],
+            **self.btn_font_kw
         )
 
         self.btn_close_inv = DirectButton(
@@ -2745,11 +3669,250 @@ class UIManager:
             **self.font_kw
         )
 
+        # 소모품 전용 위젯 목록 수집 (장비 탭 전환 시 일괄 숨김/표시)
+        self.consumables_widgets = [
+            getattr(self, 'inv_left_title', None),
+            getattr(self, 'inv_stats_text', None),
+            getattr(self, 'inv_wpn_header', None),
+            getattr(self, 'inv_wpn_name', None),
+            getattr(self, 'inv_wpn_stats', None),
+            getattr(self, 'inv_grid_title', None),
+            getattr(self, 'inv_detail_title', None),
+            getattr(self, 'inv_item_name', None),
+            getattr(self, 'inv_item_desc', None),
+            getattr(self, 'inv_item_stats', None),
+            getattr(self, 'btn_inv_use_item', None),
+            getattr(self, 'inv_msg_text', None),
+            getattr(self, 'inv_footer_text', None),
+        ]
+        self.consumables_widgets.extend([
+            self.inv_right_title, self.inv_detail_icon, self.inv_detail_name,
+            self.inv_detail_meta, self.inv_detail_desc, self.btn_use_item,
+            self.inv_relics_title, *self.inv_relic_labels,
+            *(slot['btn'] for slot in self.inv_slots),
+        ])
+        self.consumables_widgets = [w for w in self.consumables_widgets if w is not None]
+        self._layout_consumables_tab()
+
+        # 장비 UI 패널 초기화
+        sess = getattr(self.base, 'rpg_session', None)
+        self.equipment_ui = EquipmentUIPanel(
+            parent_node=self.inv_modal,
+            session=sess,
+            combat=None,
+            on_change_callback=self._on_equipment_changed,
+            font_kw=self.font_kw,
+            btn_font_kw=self.btn_font_kw,
+            on_open_workshop=lambda: self._switch_inventory_tab("workshop"),
+        )
+        self.active_inventory_tab = "consumables"
+
+        # 무기 작업대 UI 패널 초기화
+        self.workshop_ui = WorkshopUIPanel(
+            parent_node=self.inv_modal,
+            session=sess,
+            game=getattr(self, 'base', None),
+            on_change_callback=self._on_equipment_changed,
+            font_kw=self.font_kw,
+            btn_font_kw=self.btn_font_kw,
+        )
+
+        # 이번 탐험 전리품 UI 패널 초기화
+        run_bag = getattr(self.base, 'run_loot_bag', getattr(self, 'run_loot_bag', None))
+        self.run_loot_ui = RunLootUIPanel(
+            parent_node=self.inv_modal,
+            run_loot_bag=run_bag,
+            font_kw=self.font_kw,
+            btn_font_kw=self.btn_font_kw,
+        )
+
         self.inv_modal.hide()
+
+    def _layout_consumables_tab(self):
+        """Keep all consumable widgets under one visibility boundary."""
+        self.consumables_root = self.inv_modal.attachNewNode('consumables_tab')
+        for center in (-1.06, 0, 1.06):
+            DirectFrame(parent=self.consumables_root, relief=DGG.FLAT,
+                        frameColor=(.055, .075, .105, .98),
+                        frameSize=(-.49, .49, -.64, .55), pos=(center, 0, 0))
+            DirectFrame(parent=self.consumables_root, relief=DGG.FLAT,
+                        frameColor=(.22, .35, .45, 1),
+                        frameSize=(-.44, .44, -.002, .002), pos=(center, 0, .45))
+        for widget in self.consumables_widgets:
+            widget.reparentTo(self.consumables_root)
+
+        self.inv_left_title.setText('■ 탐험가 상태 / 현재 무기')
+        self.inv_left_title.setPos(-1.49, .50)
+        self.inv_left_title.setScale(.034)
+        self.inv_stats_text.setPos(-1.49, .40)
+        self.inv_stats_text.textNode.setWordwrap(28)
+        self.inv_grid_title.setText('■ 소모품 배낭 · 6칸')
+        self.inv_grid_title.setPos(0, .50)
+        self.inv_grid_title.setScale(.034)
+        self.inv_right_title.setText('■ 선택한 소모품')
+        self.inv_right_title.setPos(1.06, .50)
+        self.inv_right_title.setScale(.034)
+
+        for i, slot in enumerate(self.inv_slots):
+            slot['btn'].setPos(-.23 if i % 2 == 0 else .23, 0, .27 - .35 * (i // 2))
+            slot['btn'].setScale(.15, 1, .15)
+            slot['icon'].setScale(.54, 1, .54)
+            slot['icon'].setPos(0, 0, .10)
+            slot['tag'].setPos(-.76, .72)
+            slot['tag'].setScale(.20)
+            slot['count'].setPos(.76, -.20)
+            slot['count'].setScale(.21)
+            slot['name'].setPos(0, -.70)
+            slot['name'].setScale(.20)
+            slot['name'].textNode.setWordwrap(9)
+
+        self.inv_detail_icon.setPos(1.06, 0, .29)
+        self.inv_detail_icon.setScale(.12, 1, .12)
+        self.inv_detail_name.setPos(1.06, .12)
+        self.inv_detail_name.setScale(.036)
+        self.inv_detail_meta.setPos(1.06, .045)
+        self.inv_detail_meta.setScale(.028)
+        self.inv_detail_meta.textNode.setWordwrap(31)
+        self.inv_detail_desc.setPos(.63, -.045)
+        self.inv_detail_desc.textNode.setWordwrap(28)
+        self.btn_use_item.setPos(1.06, 0, -.45)
+        self.btn_use_item.setScale(.40, 1, .055)
+        self.inv_msg_text.setPos(1.06, -.55)
+        self.inv_msg_text.textNode.setWordwrap(30)
+        self.inv_relics_title.setText('■ 장착 유물')
+        self.inv_relics_title.setPos(0, -.69)
+        for i, label in enumerate(self.inv_relic_labels):
+            label.setPos((-1.15, -.38, .38, 1.15)[i], -.76)
+            label.textNode.setWordwrap(26)
+        self.inv_footer_text.setPos(0, -.88)
 
     def is_inventory_open(self):
         """인벤토리 모달이 열려 있는지 확인"""
         return hasattr(self, 'inv_modal') and not self.inv_modal.isHidden()
+
+    def _switch_inventory_tab(self, tab):
+        """인벤토리 모달 탭 전환 ('consumables', 'equipment', 'workshop', 'run_loot')"""
+        self.active_inventory_tab = tab
+        root = getattr(self, 'consumables_root', None)
+        if root is not None:
+            root.show() if tab == 'consumables' else root.hide()
+        if tab == "consumables":
+            if hasattr(self, "btn_tab_consumables"):
+                self.btn_tab_consumables["text_fg"] = (0.35, 0.95, 1.0, 1.0)
+                self.btn_tab_consumables["text"] = "[ ★ 소모품 배낭 ]"
+            if hasattr(self, "btn_tab_equipment"):
+                self.btn_tab_equipment["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_equipment["text"] = "[ 무기 / 장비함 ]"
+            if hasattr(self, "btn_tab_workshop"):
+                self.btn_tab_workshop["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_workshop["text"] = "[ 무기 작업대 ]"
+            if hasattr(self, "btn_tab_run_loot"):
+                self.btn_tab_run_loot["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_run_loot["text"] = "[ 이번 탐험 (미확보) ]"
+            if hasattr(self, "consumables_widgets"):
+                for w in self.consumables_widgets:
+                    if hasattr(w, "show"):
+                        w.show()
+            if hasattr(self, "equipment_ui") and self.equipment_ui:
+                self.equipment_ui.hide()
+            if hasattr(self, "workshop_ui") and self.workshop_ui:
+                self.workshop_ui.hide()
+            if hasattr(self, "run_loot_ui") and self.run_loot_ui:
+                self.run_loot_ui.hide()
+            self._refresh_inventory_ui()
+        elif tab == "equipment":
+            if hasattr(self, "btn_tab_consumables"):
+                self.btn_tab_consumables["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_consumables["text"] = "[ 소모품 배낭 ]"
+            if hasattr(self, "btn_tab_equipment"):
+                self.btn_tab_equipment["text_fg"] = (0.35, 0.95, 1.0, 1.0)
+                self.btn_tab_equipment["text"] = "[ ★ 무기 / 장비함 ]"
+            if hasattr(self, "btn_tab_workshop"):
+                self.btn_tab_workshop["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_workshop["text"] = "[ 무기 작업대 ]"
+            if hasattr(self, "btn_tab_run_loot"):
+                self.btn_tab_run_loot["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_run_loot["text"] = "[ 이번 탐험 (미확보) ]"
+            if hasattr(self, "consumables_widgets"):
+                for w in self.consumables_widgets:
+                    if hasattr(w, "hide"):
+                        w.hide()
+            if hasattr(self, "run_loot_ui") and self.run_loot_ui:
+                self.run_loot_ui.hide()
+            if hasattr(self, "workshop_ui") and self.workshop_ui:
+                self.workshop_ui.hide()
+            if hasattr(self, "equipment_ui") and self.equipment_ui:
+                if self.inv_combat and getattr(self.inv_combat, "rpg_session", None):
+                    self.equipment_ui.session = self.inv_combat.rpg_session
+                    self.equipment_ui.combat = self.inv_combat
+                elif hasattr(self.base, "rpg_session"):
+                    self.equipment_ui.session = self.base.rpg_session
+                    self.equipment_ui.combat = getattr(self.base, "combat", None)
+                self.equipment_ui.show()
+        elif tab == "workshop":
+            if hasattr(self, "btn_tab_consumables"):
+                self.btn_tab_consumables["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_consumables["text"] = "[ 소모품 배낭 ]"
+            if hasattr(self, "btn_tab_equipment"):
+                self.btn_tab_equipment["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_equipment["text"] = "[ 무기 / 장비함 ]"
+            if hasattr(self, "btn_tab_workshop"):
+                self.btn_tab_workshop["text_fg"] = (1.0, 0.85, 0.35, 1.0)
+                self.btn_tab_workshop["text"] = "[ ★ 무기 작업대 ]"
+            if hasattr(self, "btn_tab_run_loot"):
+                self.btn_tab_run_loot["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_run_loot["text"] = "[ 이번 탐험 (미확보) ]"
+            if hasattr(self, "consumables_widgets"):
+                for w in self.consumables_widgets:
+                    if hasattr(w, "hide"):
+                        w.hide()
+            if hasattr(self, "equipment_ui") and self.equipment_ui:
+                self.equipment_ui.hide()
+            if hasattr(self, "run_loot_ui") and self.run_loot_ui:
+                self.run_loot_ui.hide()
+            if hasattr(self, "workshop_ui") and self.workshop_ui:
+                if self.inv_combat and getattr(self.inv_combat, "rpg_session", None):
+                    self.workshop_ui.session = self.inv_combat.rpg_session
+                elif hasattr(self.base, "rpg_session"):
+                    self.workshop_ui.session = self.base.rpg_session
+                self.workshop_ui.game = getattr(self, "base", None)
+                self.workshop_ui.show()
+        elif tab == "run_loot":
+            if hasattr(self, "btn_tab_consumables"):
+                self.btn_tab_consumables["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_consumables["text"] = "[ 소모품 배낭 ]"
+            if hasattr(self, "btn_tab_equipment"):
+                self.btn_tab_equipment["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_equipment["text"] = "[ 무기 / 장비함 ]"
+            if hasattr(self, "btn_tab_workshop"):
+                self.btn_tab_workshop["text_fg"] = (0.75, 0.80, 0.85, 1.0)
+                self.btn_tab_workshop["text"] = "[ 무기 작업대 ]"
+            if hasattr(self, "btn_tab_run_loot"):
+                self.btn_tab_run_loot["text_fg"] = (1.0, 0.90, 0.35, 1.0)
+                self.btn_tab_run_loot["text"] = "[ ★ 이번 탐험 (미확보) ]"
+            if hasattr(self, "consumables_widgets"):
+                for w in self.consumables_widgets:
+                    if hasattr(w, "hide"):
+                        w.hide()
+            if hasattr(self, "equipment_ui") and self.equipment_ui:
+                self.equipment_ui.hide()
+            if hasattr(self, "workshop_ui") and self.workshop_ui:
+                self.workshop_ui.hide()
+            if hasattr(self, "run_loot_ui") and self.run_loot_ui:
+                bag = getattr(getattr(self, 'base', None), 'run_loot_bag', getattr(self, 'run_loot_bag', None))
+                self.run_loot_ui.set_run_loot_bag(bag)
+                self.run_loot_ui.show()
+
+    def _on_equipment_changed(self):
+        """장비 변경 시 전투/UI 동기화"""
+        if self.inv_combat and hasattr(self.inv_combat, "update_ammo_ui"):
+            self.inv_combat.update_ammo_ui()
+        if hasattr(self, "_refresh_inventory_ui"):
+            self._refresh_inventory_ui()
+        if hasattr(self, "equipment_ui") and self.equipment_ui:
+            self.equipment_ui.refresh()
+        if hasattr(self, "workshop_ui") and self.workshop_ui:
+            self.workshop_ui.refresh()
 
     def show_inventory(self, player, combat, on_use_item_callback=None, on_close_callback=None):
         """전술 인벤토리 배낭 모달 오픈"""
@@ -2757,12 +3920,25 @@ class UIManager:
         self.inv_combat = combat
         self.on_use_item_callback = on_use_item_callback
         self.on_close_inventory = on_close_callback
-        self.inv_msg_text.setText("")
-        self._refresh_inventory_ui()
+        if hasattr(self, "inv_msg_text") and self.inv_msg_text:
+            self.inv_msg_text.setText("")
+        char_name = "탐험가"
+        char_mgr = getattr(getattr(self, 'base', None), 'character_mgr', None)
+        if char_mgr and char_mgr.character_list and char_mgr.character_list.active_character_id:
+            c_info = next((c for c in char_mgr.character_list.characters if c.id == char_mgr.character_list.active_character_id), None)
+            if c_info:
+                char_name = c_info.name
+        if hasattr(self, 'inv_title'):
+            self.inv_title.setText(f"[ TACTICAL INVENTORY // 탐험가: {char_name} ]")
+        if hasattr(self, 'inv_subtitle'):
+            self.inv_subtitle.setText("[1] 주 무기  |  [2] 보조 무기  |  [3] 탄약팩  |  [4] 수류탄  |  [Tab/I] 가방 닫기")
+        self._switch_inventory_tab(getattr(self, "active_inventory_tab", "consumables"))
         self.inv_modal.show()
 
     def hide_inventory(self):
         """전술 인벤토리 배낭 모달 닫기"""
+        if hasattr(self, 'workshop_ui') and self.workshop_ui:
+            self.workshop_ui.hide()
         if hasattr(self, 'inv_modal'):
             self.inv_modal.hide()
         if hasattr(self, 'on_close_inventory') and self.on_close_inventory:
@@ -2795,6 +3971,10 @@ class UIManager:
         p = self.inv_player
         c = self.inv_combat
         inv = getattr(p, 'inventory', [])
+        rpg_controls = bool(getattr(self.base, 'rpg_session', None)) and not getattr(self.base, 'is_test_mode', False)
+        self.inv_footer_text.setText(
+            '[3] 탄약팩 · [4] 수류탄 · 다른 소모품은 선택 후 사용 | [Tab/I/ESC] 닫기'
+            if rpg_controls else '[1~4] 소모품 사용 | [Tab/I/ESC] 닫기')
 
         # 1. 좌측 스탯 텍스트 갱신
         lvl = getattr(p, 'level', 1)
@@ -2812,23 +3992,22 @@ class UIManager:
         max_ammo = c.max_ammo if c else 12
         res_ammo = c.reserve_ammo if c else 0
 
+        c_stats = counter_stats(get_perk_level(p, 'precision_training'), get_perk_level(p, 'guard_breaker'))
+        ev_supp = int(round(c_stats['evasion_suppression'] * 100))
+        gd_pen = int(round(c_stats['guard_penetration'] * 100))
+
         stats_str = (
-            f"• 레벨: LV.{lvl}  [경험치: {exp} / {exp_next}]\n"
+            f"탐험 레벨 {lvl} · 경험치 {exp}/{exp_next}\n\n"
             f"• 체력: {hp} / {max_hp} HP\n"
             f"• 공격력: {atk} DMG  (기본: {int(getattr(p, 'attack_power', 35))})\n"
             f"• 이동 속도: {spd_pct}%\n"
             f"• 스테미나: {stamina} / {max_stamina}\n"
+            f"• 회피 억제: {ev_supp}%p · 방어 관통: {gd_pen}%\n"
             f"• 장착 퍽: {perks_count}개 보유\n"
-            f"-----------------------------------------\n"
-            f"[장착 무기] {getattr(c, 'get_weapon_display_name', lambda: '9mm 택티컬 권총')() if c else '9mm 택티컬 권총'}\n"
-            f"• 탄약 상태: {ammo} / {max_ammo}발 (예비: {res_ammo}발)\n"
-            f"• 무기 스왑: [Q / 휠] 또는 [Z]권총 [X]쌍권총 [C]샷건\n"
-            f"• 1. 9mm 택티컬 권총 (12발 / 핀포인트 정밀 헤드샷)\n"
-            f"• 2. 아킴보 쌍권총 (24발 / 초고속 0.11s 교차 난사)\n"
-            f"• 3. 12G 전술 샷건 (8발 / 8발 산탄 224 극딜 펌프액션)\n"
-            f"-----------------------------------------\n"
-            f"[보조장비] M67 전술 파열 수류탄 [G]\n"
-            f"[전술기동] 컴뱃 슬라이드 & 회피 [Space]"
+            f"\n현재 무기\n{getattr(c, 'get_weapon_display_name', lambda: '권총')() if c else '권총'}\n\n"
+            f"탄약 {ammo}/{max_ammo} · 예비 {res_ammo}\n"
+            f"[1] 주 무기 / [2] 보조 무기\n"
+            f"[3] 탄약팩 / [4] 수류탄"
         )
         self.inv_stats_text.setText(stats_str)
 
@@ -2838,11 +4017,14 @@ class UIManager:
                 item = inv[idx]
                 cnt = item.get("count", 0)
                 qs = item.get("quick_slot")
+                if rpg_controls and qs in (1, 2):
+                    qs = None
                 slot_ui["icon"].setImage(item["icon"])
                 slot_ui["icon"].show()
                 slot_ui["tag"].setText(f"[{qs}]" if qs else "")
                 slot_ui["count"].setText(f"x{cnt}")
-                slot_ui["name"].setText(item["name"])
+                name = item['name']
+                slot_ui["name"].setText(name if len(name) <= 9 else name[:8] + '…')
                 slot_ui["name"].setFg(item.get("rarity_color", (0.9, 0.9, 0.9, 1.0)))
 
                 if idx == self.selected_inv_slot:
@@ -2866,8 +4048,14 @@ class UIManager:
             self.inv_detail_name.setFg(sel_item.get("rarity_color", (1, 1, 1, 1)))
 
             qs_str = f" | [단축키 {sel_item['quick_slot']}번]" if sel_item.get("quick_slot") else ""
-            self.inv_detail_meta.setText(f"분류: {sel_item['category']}  |  보유: {sel_item['count']}/{sel_item.get('max_count', 99)}개{qs_str}")
-            self.inv_detail_desc.setText(sel_item["desc"])
+            if rpg_controls and sel_item.get('quick_slot') in (1, 2):
+                qs_str = ''
+            self.inv_detail_meta.setText(f"{sel_item['category']} · {sel_item['count']}/{sel_item.get('max_count', 99)}개{qs_str}")
+            description = sel_item['desc']
+            if rpg_controls and sel_item.get('quick_slot') in (1, 2):
+                description = '\n'.join(line for line in description.splitlines() if '[단축키' not in line)
+                description += '\n아래 사용 버튼으로 사용합니다.'
+            self.inv_detail_desc.setText(description)
 
             if sel_item["count"] > 0:
                 self.btn_use_item["state"] = DGG.NORMAL
@@ -2904,6 +4092,8 @@ class UIManager:
             if qs in counts:
                 counts[qs] = item.get("count", 0)
         txt = f"[1] 응급키트: {counts[1]}개   |   [2] 아드레날린: {counts[2]}개   |   [3] 탄약팩: {counts[3]}개   |   [4] 수류탄: {counts[4]}개   |   [Tab] 배낭"
+        if getattr(self.base, 'rpg_session', None) and not getattr(self.base, 'is_test_mode', False):
+            txt = f"[1] 주 무기 | [2] 보조 무기 | [3] 탄약팩: {counts[3]}개 | [4] 수류탄: {counts[4]}개 | [Tab] 소모품 / 장비"
         if hasattr(self, 'quickslot_text'):
             self.quickslot_text.setText(txt)
 
@@ -3808,3 +4998,90 @@ class UIManager:
         self.hide_after_action_report()
         if self.on_aar_continue:
             self.on_aar_continue()
+
+    def _init_extraction_error_modal(self):
+        """탈출 저장 실패 시 전리품 소실 방지를 위한 재시도/포기 모달 초기화"""
+        self.extraction_error_modal = DirectFrame(
+            parent=self.base.aspect2d,
+            relief=None,
+            image="assets/ui/panel_modal_bg.png",
+            frameSize=(-0.72, 0.72, -0.42, 0.42),
+            pos=(0, 0, 0),
+        )
+        if hasattr(self.extraction_error_modal, "setTransparency"):
+            self.extraction_error_modal.setTransparency(TransparencyAttrib.MAlpha)
+        self.extraction_error_modal.setBin("fixed", 80)
+
+        self.lbl_extract_err_title = OnscreenText(
+            parent=self.extraction_error_modal,
+            text="[ ! 탈출 전리품 저장 실패 ! ]",
+            pos=(0, 0.28),
+            scale=0.042,
+            fg=(1.0, 0.25, 0.25, 1.0),
+            align=TextNode.ACenter,
+            **self.font_kw,
+        )
+
+        self.lbl_extract_err_desc = OnscreenText(
+            parent=self.extraction_error_modal,
+            text="",
+            pos=(0, 0.05),
+            scale=0.026,
+            fg=(0.95, 0.90, 0.85, 1.0),
+            align=TextNode.ACenter,
+            **self.font_kw,
+        )
+
+        self.btn_extract_retry = DirectButton(
+            parent=self.extraction_error_modal,
+            relief=None,
+            image="assets/ui/btn_accent_normal.png",
+            frameSize=(-0.24, 0.24, -0.042, 0.042),
+            pos=(-0.30, 0, -0.28),
+            text="[ 저장 재시도 ]",
+            text_scale=0.027,
+            text_pos=(0, -0.009),
+            text_fg=(0.40, 0.95, 1.0, 1.0),
+            command=self._on_click_extract_retry,
+            **self.btn_font_kw,
+        )
+
+        self.btn_extract_abandon = DirectButton(
+            parent=self.extraction_error_modal,
+            relief=None,
+            image="assets/ui/btn_danger_normal.png",
+            frameSize=(-0.24, 0.24, -0.042, 0.042),
+            pos=(0.30, 0, -0.28),
+            text="[ 보상 포기 후 복귀 ]",
+            text_scale=0.027,
+            text_pos=(0, -0.009),
+            text_fg=(1.0, 0.40, 0.40, 1.0),
+            command=self._on_click_extract_abandon,
+            **self.btn_font_kw,
+        )
+        self.extraction_error_modal.hide()
+
+    def _on_click_extract_retry(self):
+        if hasattr(self, 'extraction_error_modal') and self.extraction_error_modal:
+            self.extraction_error_modal.hide()
+        if hasattr(self, '_on_retry_save_callback') and self._on_retry_save_callback:
+            self._on_retry_save_callback()
+
+    def _on_click_extract_abandon(self):
+        if hasattr(self, 'extraction_error_modal') and self.extraction_error_modal:
+            self.extraction_error_modal.hide()
+        if hasattr(self, '_on_abandon_save_callback') and self._on_abandon_save_callback:
+            self._on_abandon_save_callback()
+
+    def show_extraction_error_dialog(self, error_msg, on_retry, on_abandon):
+        if not hasattr(self, 'extraction_error_modal') or self.extraction_error_modal is None:
+            self._init_extraction_error_modal()
+        self._on_retry_save_callback = on_retry
+        self._on_abandon_save_callback = on_abandon
+        self.lbl_extract_err_desc.setText(
+            f"탈출 저장 중 치명적 오류가 발생했습니다:\n{error_msg}\n\n"
+            f"획득한 전리품은 손실되지 않았으며 재시도할 수 있습니다.\n"
+            f"보상을 포기하고 메인으로 돌아가려면 '보상 포기 후 복귀'를 누르세요.\n"
+            f"(포기 시 이번 탐험의 미확보 전리품은 영구 소실됩니다)"
+        )
+        self.extraction_error_modal.show()

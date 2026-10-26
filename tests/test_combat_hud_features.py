@@ -347,7 +347,7 @@ class CombatHUDFeaturesTests(unittest.TestCase):
         self.assertEqual(deagle["max_ammo"], 7)
         self.assertEqual(deagle["initial_reserve"], 28)
         self.assertEqual(deagle["damage"], 120.0)
-        self.assertEqual(deagle["headshot_mult"], 3.2)
+        self.assertEqual(deagle["headshot_mult"], 4.2)
 
         # 2. 9mm 듀얼 글록 (아킴보)
         glock = WEAPON_CONFIGS["DUAL_PISTOL"]

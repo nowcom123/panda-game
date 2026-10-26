@@ -148,6 +148,8 @@ class PlayerController:
         ]
         self.speed_boost_timer = 0.0
         self.stim_boost_timer = 0.0
+        self.poison_timer = 0.0
+        self.poison_dps = 4.0
 
         # 키보드 입력 상태
         self.key_map = {
@@ -155,7 +157,7 @@ class PlayerController:
             "shift": 0
         }
 
-    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_inventory=None, on_quick_use=None, on_grenade=None, on_escape=None, on_interact=None, on_weapon_next=None, on_weapon_prev=None, on_weapon_select=None, on_perk_modal=None, on_tab=None):
+    def setup_input(self, on_shoot, on_reload, on_aim_start=None, on_aim_stop=None, on_inventory=None, on_quick_use=None, on_grenade=None, on_escape=None, on_interact=None, on_weapon_next=None, on_weapon_prev=None, on_weapon_select=None, on_perk_modal=None, on_tab=None, on_quick_select_down=None, on_quick_select_up=None):
         """키보드 및 마우스 조작 이벤트 등록 (사격, 재장전, ADS 정밀조준, 인벤토리, 퀵슬롯, 슬라이드, 수류탄, 상호작용, 무기교체, 퍽 모달)"""
         self.base.disableMouse()
         self.lock_mouse(True)
@@ -243,6 +245,14 @@ class PlayerController:
             for num_k in ["1", "2", "3", "4"]:
                 self.base.accept(num_k, on_quick_use, [int(num_k)])
 
+        # 백틱 (`) 빠른 소모품 선택창
+        if on_quick_select_down:
+            for bt in ["`", "~", "shift-`", "shift-~"]:
+                self.base.accept(bt, on_quick_select_down)
+        if on_quick_select_up:
+            for bt_up in ["`-up", "~-up", "shift-`-up", "shift-~-up"]:
+                self.base.accept(bt_up, on_quick_select_up)
+
         # ESC 마우스 커서 해제 / 인벤토리 닫기 토글
         self.on_escape = on_escape
         self.base.accept("escape", self._on_escape_pressed)
@@ -267,6 +277,11 @@ class PlayerController:
         else:
             self.toggle_mouse_lock()
 
+    def apply_poison(self, duration=3.0, dps=4.0):
+        """맹독 상태이상 부여: 시간 갱신 (중첩 불가)"""
+        self.poison_timer = max(getattr(self, 'poison_timer', 0.0), duration)
+        self.poison_dps = dps
+
     def reset_inventory(self):
         """새 게임 시작 시 기본 생존 보급품으로 리셋"""
         self.inventory = [
@@ -277,6 +292,8 @@ class PlayerController:
         ]
         self.speed_boost_timer = 0.0
         self.stim_boost_timer = 0.0
+        self.poison_timer = 0.0
+        self.poison_dps = 4.0
 
     def add_item(self, item_id, count=1):
         """인벤토리에 아이템 획득 및 수량 추가"""
@@ -413,6 +430,8 @@ class PlayerController:
                 self.audio_mgr.play_footstep(is_sprinting=True)
 
     def _on_aim_down(self, cb):
+        if getattr(self.base, 'game_state', 'PLAYING') != 'PLAYING':
+            return
         self.is_aiming = True
         cb()
 
@@ -469,9 +488,9 @@ class PlayerController:
             dmg *= 1.40  # 생체 공격 강화제 공격력 +40%
         return dmg
 
-    def take_damage(self, amount, source_pos=None):
+    def take_damage(self, amount, source_pos=None, damage_type=None):
         """몬스터 공격 피격 시 체력 감소 및 시각 피격 효과 (화면 붉은 플래시, 카메라 충격 흔들림, 피격 방향 표시)"""
-        if self.invincible_timer > 0.0:
+        if self.invincible_timer > 0.0 and damage_type != 'dot':
             return False
         # 유리의 총열 유물: 받는 피해 +40%
         if "glass_cannon" in self.relics:
@@ -482,8 +501,12 @@ class PlayerController:
 
         self.hp = max(0.0, self.hp - amount)
         self.stage_damage_taken = getattr(self, 'stage_damage_taken', 0.0) + amount
-        self.invincible_timer = 0.55  # 0.55초 무적 쿨다운
+        if damage_type != 'dot':
+            self.invincible_timer = 0.55  # 0.55초 무적 쿨다운
         self.ui_mgr.update_hp_exp(self.hp, self.max_hp, self.exp, self.exp_to_next, self.level, pending_perks=self.pending_perk_picks)
+
+        if damage_type == 'dot':
+            return self.hp <= 0.0
 
         # 플레이어 피격 시각 효과: 화면 붉은 플래시 및 카메라 충격 흔들림
         self.ui_mgr.trigger_player_damage_flash(intensity=0.65)

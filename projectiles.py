@@ -51,7 +51,8 @@ class Fireball:
         pl.setAttenuation((1.0, 0.22, 0.06))
         self.light_np = self.node.attachNewNode(pl)
 
-    def activate(self, start_pos, target_pos):
+    def activate(self, start_pos, target_pos, damage_scale=1.0):
+        self.damage = 22.0 * damage_scale
         if not hasattr(self, 'node') or self.node is None or self.node.isEmpty():
             self._build_node()
 

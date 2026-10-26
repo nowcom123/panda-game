@@ -11,6 +11,50 @@ from collision import register_custom_collider, clear_custom_colliders
 
 
 class BossIntegrationTests(unittest.TestCase):
+    def test_leg_break_interrupts_attack_and_exposes_head(self):
+        self.ctrl._start_bone_arm_sweep(self.game)
+        self.boss.take_damage(300, hit_part=0)
+        self.assertEqual(self.boss.leg_hp[0], 0)
+        self.assertTrue(self.boss.spider_legs[0][0].isHidden())
+        self.assertEqual(self.ctrl.state, State.RECOVERY)
+        self.assertEqual(self.ctrl.recovery_duration, 2)
+        self.assertFalse(self.ctrl.indicators)
+        before = self.boss.hp
+        self.boss.take_damage(100, hit_part='head')
+        self.assertAlmostEqual(before-self.boss.hp, 135)
+        self.ctrl.timer = .5
+        self.boss.take_damage(10)  # DOT/explosion does not reuse the previous ray part.
+        self.assertEqual(self.ctrl.timer, .5)
+        self.assertEqual(self.boss.leg_hp[1], 300)
+
+    def test_leg_ray_tracks_bones_and_broken_leg_is_excluded(self):
+        bone = self.boss.leg_hit_nodes[0][1]
+        center = self.root.getRelativePoint(bone, Vec3(0))
+        origin = center + Vec3(0, 0, 5)
+        hit, distance = self.boss.is_hit_by_ray(origin, Vec3(0, 0, -1))
+        self.assertTrue(hit)
+        self.assertIsInstance(self.boss.last_hit_part, int)
+        index = self.boss.last_hit_part
+        self.boss.take_damage(300, hit_part=index)
+        self.boss.is_hit_by_ray(origin, Vec3(0, 0, -1))
+        self.assertNotEqual(self.boss.last_hit_part, index)
+
+    def test_phase_two_spikes_chain_with_fresh_telegraph_then_finish(self):
+        self.boss.phase = 2
+        self.ctrl._start_bone_spikes(self.game, 0, 8)
+        self.step(1)
+        self.step(1.4)
+        self.assertTrue(self.ctrl.pending_chain)
+        self.step(.41)
+        self.assertEqual(self.ctrl.current_pattern, 'leap')
+        self.assertEqual(self.ctrl.state, State.TELEGRAPH)
+        self.assertGreaterEqual(self.ctrl.telegraph_duration, .8)
+        self.step(1)
+        self.step(1)
+        self.assertFalse(self.ctrl.pending_chain)
+        self.step(2)
+        self.assertEqual(self.ctrl.state, State.IDLE)
+
     def setUp(self):
         self.root = NodePath('boss_integration')
         self.boss = CableOverlordBoss(self.root, 0, 0)

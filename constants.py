@@ -12,8 +12,9 @@ loadPrcFileData('', 'clock-mode limited')
 loadPrcFileData('', 'clock-frame-rate 144')
 loadPrcFileData('', 'sync-video false')
 
-# CPU 멀티코어 렌더링 파이프라인 (Cull/Draw 분리 스레딩)
-loadPrcFileData('', 'threading-model Cull/Draw')
+# Keep culling and drawing on the app thread as a stability workaround for
+# reported Windows GeomMunger assertions. Chunk workers remain enabled.
+loadPrcFileData('', 'threading-model')
 
 # 텍스처, 지오메트리 캐시 및 GPU 파이프라인 비동기 I/O
 loadPrcFileData('', 'asynchronous-texture-loading true') # 텍스처 백그라운드 I/O 비동기 로딩

@@ -637,7 +637,7 @@ class AudioManager:
     def play_hound_growl(self, node=None):
         """지옥의 파수견 으르렁거림 (3D 위치 음향 지원)"""
         if node and self.audio3d:
-            self.play_pooled_3d("hound_growl", node, volume=1.0)
+            self.play_monster_3d("hound_growl", node, volume_scale=1.0)
         elif self.hound_growl_sfx:
             self.hound_growl_sfx.setVolume(0.95)
             self.hound_growl_sfx.play()
@@ -657,7 +657,7 @@ class AudioManager:
     def play_hound_step(self, node=None):
         """지옥의 파수견 고속 발톱 착지음"""
         if node and self.audio3d:
-            self.play_pooled_3d("hound_step", node, volume=0.85)
+            self.play_monster_3d("hound_step", node, volume_scale=0.85)
         elif self.hound_step_sfx:
             self.hound_step_sfx.setVolume(0.80)
             self.hound_step_sfx.play()

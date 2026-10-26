@@ -1,10 +1,14 @@
 import math
 import random
-from panda3d.core import Vec3, LColor, PointLight, ClockObject
+from panda3d.core import Vec3, LColor, PointLight, ClockObject, TransparencyAttrib, LineSegs, Point3, Vec2
 from geometry import make_cube, make_cube_to, make_sphere, make_sphere_to, make_cylinder, make_cylinder_to
 from elemental_effects import ElementalMonsterMixin
 from elevation import get_floor_height
 from boss_patterns import BossPatternController
+from monster_visuals import optimize_monster_geometry, group_shared_tint, set_shared_tint, animation_dt
+from collision import resolve_collision
+from projectiles import GroundShockwave
+from combat_system import raycast_walls
 
 
 def create_monster_explosion(parent, pos, monster_type, audio_mgr=None):
@@ -194,6 +198,75 @@ def create_monster_explosion(parent, pos, monster_type, audio_mgr=None):
     return debris_list, blast_np, puddle
 
 
+
+
+def create_fan_telegraph(parent, origin, direction, radius=7.0, half_angle_deg=25.0, color=(0.2, 1.0, 0.35, 0.7)):
+    """전방 부채꼴 위험 예고 영역 시각화 (녹색 맹독 브레스)"""
+    if not parent or (hasattr(parent, 'isEmpty') and parent.isEmpty()):
+        return None
+    try:
+        ls = LineSegs("fan_telegraph")
+        ls.setColor(color[0], color[1], color[2], color[3])
+        ls.setThickness(2.5)
+
+        base_angle = math.atan2(direction.y, direction.x)
+        half_rad = math.radians(half_angle_deg)
+        steps = 16
+
+        z_off = origin.z + 0.08
+        center = Point3(origin.x, origin.y, z_off)
+        ls.moveTo(center)
+
+        start_angle = base_angle - half_rad
+        p_start = Point3(origin.x + math.cos(start_angle) * radius,
+                         origin.y + math.sin(start_angle) * radius, z_off)
+        ls.drawTo(p_start)
+
+        for s in range(1, steps + 1):
+            a = start_angle + (2 * half_rad * s / steps)
+            pt = Point3(origin.x + math.cos(a) * radius,
+                        origin.y + math.sin(a) * radius, z_off)
+            ls.drawTo(pt)
+
+        ls.drawTo(center)
+
+        node = parent.attachNewNode(ls.create())
+        node.setTransparency(TransparencyAttrib.MAlpha)
+        node.setLightOff()
+        node.setBin("fixed", 45)
+        return node
+    except Exception:
+        return None
+
+
+def create_circle_telegraph(parent, origin, radius=8.0, color=(1.0, 0.78, 0.25, 0.7)):
+    """바닥 원형 지진 위험 예고 영역 시각화 (골렘 대지진)"""
+    if not parent or (hasattr(parent, 'isEmpty') and parent.isEmpty()):
+        return None
+    try:
+        ls = LineSegs("circle_telegraph")
+        ls.setColor(color[0], color[1], color[2], color[3])
+        ls.setThickness(2.5)
+
+        z_off = origin.z + 0.08
+        steps = 32
+        for s in range(steps + 1):
+            a = 2 * math.pi * s / steps
+            pt = Point3(origin.x + math.cos(a) * radius,
+                        origin.y + math.sin(a) * radius, z_off)
+            if s == 0:
+                ls.moveTo(pt)
+            else:
+                ls.drawTo(pt)
+
+        node = parent.attachNewNode(ls.create())
+        node.setTransparency(TransparencyAttrib.MAlpha)
+        node.setLightOff()
+        node.setBin("fixed", 45)
+        return node
+    except Exception:
+        return None
+
 def update_monster_debris_list(debris_list, dt):
     """3D 파편 물리 시뮬레이션: 중력, 탄성 튕김, 회전 및 잔여 수명 페이드아웃"""
     for d in debris_list[:]:
@@ -237,6 +310,7 @@ def update_monster_debris_list(debris_list, dt):
 
 class LongBlackSerpent(ElementalMonsterMixin):
     col_radius = 0.38
+    reaction_role = 'serpent'
     """
     몸통이 긴 칠흑의 대사(뱀) 괴물 엔티티
     - 14개의 마디형 세그먼트가 부드럽게 S자 파동(Sinusoidal Undulation)을 그리며 슬리더링
@@ -270,6 +344,15 @@ class LongBlackSerpent(ElementalMonsterMixin):
         self.strike_cooldown = 0.0
         self.strike_has_hit = False
         self.strike_duration = 0.85
+        self.reaction_role = 'serpent'
+        self.reaction_cooldown = 0.0
+        self.reaction_timer = 0.0
+        self.is_guarding = False
+        self.counter_pending = False
+        self.counter_timer = 0.0
+        self.counter_telegraph_duration = 0.85
+        self.counter_fixed_dir = Vec2(0, 1)
+        self.telegraph_np = None
         self.debris_list = []
         self.blast_light_np = None
         self.puddle_np = None
@@ -496,6 +579,7 @@ class LongBlackSerpent(ElementalMonsterMixin):
         aura_light.setAttenuation((1.0, 0.025, 0.0035))
         self.aura_np = self.node.attachNewNode(aura_light)
         self.aura_np.setPos(0, 0, 0.95)
+        optimize_monster_geometry(self)
 
     def reset_pos(self, x, y, z=0.45):
         """뱀 위치 및 상태 초기화"""
@@ -555,9 +639,69 @@ class LongBlackSerpent(ElementalMonsterMixin):
 
         return self.hp <= 0
 
+    def trigger_guard(self, duration, cooldown, player=None):
+        """전방 120도 방어 성공 및 맹독 브레스 반격 예약"""
+        self.is_guarding = True
+        self.reaction_timer = duration
+        self.reaction_cooldown = cooldown
+        self.counter_pending = True
+        self.counter_timer = 0.0
+        self.counter_telegraph_duration = 0.85
+
+        p_pos = player.camera.getPos() if (player and hasattr(player, 'camera')) else self.pos + Vec3(0, 1, 0)
+        dx = p_pos.x - self.pos.x
+        dy = p_pos.y - self.pos.y
+        mag = math.hypot(dx, dy)
+        if mag > 0.01:
+            self.counter_fixed_dir = Vec2(dx / mag, dy / mag)
+        else:
+            self.counter_fixed_dir = Vec2(0, 1)
+
+        parent = getattr(self.node, 'getParent', lambda: None)()
+        if not parent or (hasattr(parent, 'isEmpty') and parent.isEmpty()):
+            parent = getattr(self, 'parent_ref', None) or self.node
+        self.cleanup_telegraph()
+        self.telegraph_np = create_fan_telegraph(
+            parent, self.pos, self.counter_fixed_dir, radius=7.0, half_angle_deg=25.0, color=(0.2, 1.0, 0.35, 0.75)
+        )
+
+    def cleanup_telegraph(self):
+        if getattr(self, 'telegraph_np', None) and not self.telegraph_np.isEmpty():
+            self.telegraph_np.removeNode()
+            self.telegraph_np = None
+
+    def update_reactions(self, dt, game=None, px=0, py=0, pz=0):
+        self.reaction_cooldown = max(0.0, getattr(self, 'reaction_cooldown', 0.0) - dt)
+        if getattr(self, 'is_guarding', False):
+            self.reaction_timer = getattr(self, 'reaction_timer', 0.0) - dt
+            if self.reaction_timer <= 0.0:
+                self.is_guarding = False
+                self.reaction_timer = 0.0
+
+        if getattr(self, 'counter_pending', False):
+            self.counter_timer = getattr(self, 'counter_timer', 0.0) + dt
+            if self.counter_timer >= self.counter_telegraph_duration:
+                if game and getattr(game, 'player', None):
+                    p = game.player
+                    dist = math.hypot(px - self.pos.x, py - self.pos.y)
+                    if dist <= 7.0 and dist > 0.01:
+                        to_p = Vec2((px - self.pos.x) / dist, (py - self.pos.y) / dist)
+                        dot = self.counter_fixed_dir.x * to_p.x + self.counter_fixed_dir.y * to_p.y
+                        if dot >= math.cos(math.radians(25.0)):
+                            chunks = getattr(game, 'chunks', {})
+                            w_dist, _ = raycast_walls(chunks, Vec3(self.pos.x, self.pos.y, self.pos.z + 0.5), Vec3(to_p.x, to_p.y, 0), max_dist=dist)
+                            if w_dist >= dist - 0.2:
+                                p.take_damage(10.0, source_pos=(self.pos.x, self.pos.y))
+                                if hasattr(p, 'apply_poison'):
+                                    p.apply_poison(duration=3.0, dps=4.0)
+                self.counter_pending = False
+                self.cleanup_telegraph()
+
     def turn_into_corpse(self, audio_mgr=None):
         """사망 시 14개 마디와 거대 송곳니/머리통이 사방으로 폭발 파편화"""
         self.is_corpse = True
+        self.counter_pending = False
+        self.cleanup_telegraph()
         self.is_striking = False
         self.hp = 0
         self.cleanup_elemental()
@@ -592,6 +736,8 @@ class LongBlackSerpent(ElementalMonsterMixin):
 
     def destroy(self):
         """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        self.counter_pending = False
+        self.cleanup_telegraph()
         self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
@@ -811,6 +957,11 @@ class LongBlackSerpent(ElementalMonsterMixin):
             if self.stun_timer <= 0.0 and hasattr(self, 'aura_np') and self.aura_np:
                 self.aura_np.node().setColor((0.95, 0.05, 0.05, 1.0))
 
+        pose_dt = animation_dt(self, dt, is_attacking)
+        if pose_dt is None:
+            return
+        dt = pose_dt
+
         if is_attacking:
             # 점프스케어/공격 태세: 몸 상부(머리 및 0~4번 마디)를 2.25m 높이로 치켜세우고 독니와 혀를 활짝 벌림
             self.head.setP(-28)
@@ -879,6 +1030,7 @@ class LongBlackSerpent(ElementalMonsterMixin):
 
 class TallSkeletonMonster(ElementalMonsterMixin):
     col_radius = 0.40
+    reaction_role = 'skeleton'
     """
     비정상적으로 긴 두 팔로 바닥을 기어 다니며 턱이 쩍 벌어진 기괴한 해골 보행 괴물 엔티티
     - 두 다리를 뒤로 꺾어 치켜든 채, 2.7m에 달하는 거대한 두 팔로 바닥을 짚고 성큼성큼 기어 다니는 암 워커(Arm-Crawler) 형태
@@ -904,6 +1056,11 @@ class TallSkeletonMonster(ElementalMonsterMixin):
         self.attack_damage = 35
         self.speed = 9.5
         self.col_radius = 0.40
+        self.reaction_role = 'skeleton'
+        self.reaction_cooldown = 0.0
+        self.reaction_timer = 0.0
+        self.is_dodging = False
+        self._base_part_positions = None
         self.debris_list = []
         self.blast_light_np = None
         self.puddle_np = None
@@ -1143,6 +1300,7 @@ class TallSkeletonMonster(ElementalMonsterMixin):
         aura_light.setAttenuation((1.0, 0.05, 0.010))
         self.aura_np = self.node.attachNewNode(aura_light)
         self.aura_np.setPos(0, 0.1, 2.5)
+        optimize_monster_geometry(self)
 
     def reset_pos(self, x, y, z=0.0):
         """해골 위치 및 상태 초기화"""
@@ -1196,9 +1354,86 @@ class TallSkeletonMonster(ElementalMonsterMixin):
 
         return self.hp <= 0
 
+    def _cache_base_part_positions(self):
+        if self._base_part_positions is not None:
+            return
+        self._base_part_positions = {
+            'pelvis': (self.pelvis, self.pelvis.getPos()) if hasattr(self, 'pelvis') and self.pelvis else None,
+            'spine': (self.spine, self.spine.getPos()) if hasattr(self, 'spine') and self.spine else None,
+            'skull': (self.skull_pivot, self.skull_pivot.getPos()) if hasattr(self, 'skull_pivot') and self.skull_pivot else None,
+            'ribs': [(r, r.getPos()) for r in getattr(self, 'ribs', []) if r],
+            'arms': [(a['shoulder'], a['shoulder'].getPos()) for a in getattr(self, 'arms', []) if a.get('shoulder')],
+            'legs': [(l['hip'], l['hip'].getPos()) for l in getattr(self, 'legs', []) if l.get('hip')],
+        }
+
+    def restore_base_part_positions(self):
+        if not self._base_part_positions:
+            return
+        for key in ('pelvis', 'spine', 'skull'):
+            entry = self._base_part_positions.get(key)
+            if entry and entry[0] and not entry[0].isEmpty():
+                entry[0].setPos(entry[1])
+        for r, base_p in self._base_part_positions.get('ribs', []):
+            if r and not r.isEmpty():
+                r.setPos(base_p)
+        for s, base_p in self._base_part_positions.get('arms', []):
+            if s and not s.isEmpty():
+                s.setPos(base_p)
+        for h, base_p in self._base_part_positions.get('legs', []):
+            if h and not h.isEmpty():
+                h.setPos(base_p)
+
+    def apply_disassemble_scatter(self, scatter):
+        if not self._base_part_positions:
+            return
+        entry = self._base_part_positions.get('pelvis')
+        if entry and entry[0] and not entry[0].isEmpty():
+            entry[0].setPos(entry[1] + Vec3(0, -0.35, -0.25) * scatter)
+        entry = self._base_part_positions.get('spine')
+        if entry and entry[0] and not entry[0].isEmpty():
+            entry[0].setPos(entry[1] + Vec3(0.20 * scatter, 0, 0))
+        entry = self._base_part_positions.get('skull')
+        if entry and entry[0] and not entry[0].isEmpty():
+            entry[0].setPos(entry[1] + Vec3(0, 0, 0.45) * scatter)
+        for idx, (r, base_p) in enumerate(self._base_part_positions.get('ribs', [])):
+            if r and not r.isEmpty():
+                offset = (0.28 if idx % 2 == 0 else -0.28) * scatter
+                r.setPos(base_p + Vec3(offset, 0, 0))
+        for idx, (s, base_p) in enumerate(self._base_part_positions.get('arms', [])):
+            if s and not s.isEmpty():
+                offset = (-0.45 if idx == 0 else 0.45) * scatter
+                s.setPos(base_p + Vec3(offset, 0, 0.15 * scatter))
+        for idx, (h, base_p) in enumerate(self._base_part_positions.get('legs', [])):
+            if h and not h.isEmpty():
+                offset = (-0.30 if idx == 0 else 0.30) * scatter
+                h.setPos(base_p + Vec3(offset, -0.15 * scatter, -0.15 * scatter))
+
+    def trigger_skeleton_evade(self):
+        if self.hp <= 0 or self.is_corpse or getattr(self, 'stun_timer', 0.0) > 0.0 or getattr(self, 'is_dodging', False):
+            return False
+        self._cache_base_part_positions()
+        self.is_dodging = True
+        self.reaction_timer = 0.45
+        self.reaction_cooldown = 5.0
+        return True
+
+    def update_reactions(self, dt, game=None, px=0, py=0, pz=0):
+        self.reaction_cooldown = max(0.0, getattr(self, 'reaction_cooldown', 0.0) - dt)
+        if getattr(self, 'is_dodging', False):
+            self.reaction_timer = getattr(self, 'reaction_timer', 0.0) - dt
+            if self.reaction_timer <= 0.0:
+                self.is_dodging = False
+                self.reaction_timer = 0.0
+                self.restore_base_part_positions()
+            else:
+                t = max(0.0, min(1.0, 1.0 - (self.reaction_timer / 0.45)))
+                self.apply_disassemble_scatter(math.sin(t * math.pi))
+
     def turn_into_corpse(self, audio_mgr=None):
         """사망 시 산산조각 폭발 파편화: 거대 두개골, 갈비뼈, 척추, 사지 장골 및 시안빛 안광 파편이 사방으로 비산"""
         self.is_corpse = True
+        self.restore_base_part_positions()
+        self.is_dodging = False
         self.hp = 0
         self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
@@ -1232,6 +1467,8 @@ class TallSkeletonMonster(ElementalMonsterMixin):
 
     def destroy(self):
         """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        self.restore_base_part_positions()
+        self.is_dodging = False
         self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
@@ -1346,6 +1583,11 @@ class TallSkeletonMonster(ElementalMonsterMixin):
             if self.stun_timer <= 0.0 and hasattr(self, 'aura_np') and self.aura_np:
                 self.aura_np.node().setColor((0.15, 0.45, 1.0, 1.0))
 
+        pose_dt = animation_dt(self, dt, is_attacking)
+        if pose_dt is None:
+            return
+        dt = pose_dt
+
         if is_attacking:
             # 한 팔로 지면을 지탱하고 다른 2.7m 팔을 크게 치켜들어 덮치는 점프스케어 공격
             self.arms[0]['upper'].setP(-75)
@@ -1408,6 +1650,7 @@ class TallSkeletonMonster(ElementalMonsterMixin):
 
 class AbominableMudOrc(ElementalMonsterMixin):
     col_radius = 0.45
+    reaction_role = 'golem'
     """
     1. 혐오스런 진흙 오크 (Abominable Mud Orc)
     - 진흙과 오물, 이끼로 뒤덮인 거대하고 육중한 야만 오크 괴물 (신장 약 2.6m, 폭 1.6m)
@@ -1437,6 +1680,14 @@ class AbominableMudOrc(ElementalMonsterMixin):
         self.max_hp = 280
         self.hp = self.max_hp
         self.col_radius = 0.45
+        self.reaction_role = 'golem'
+        self.reaction_cooldown = 0.0
+        self.reaction_timer = 0.0
+        self.is_guarding = False
+        self.counter_pending = False
+        self.counter_timer = 0.0
+        self.counter_telegraph_duration = 1.0
+        self.telegraph_np = None
         self.exp_value = 65
         self.attack_damage = 35
         self.speed = 7.6
@@ -1899,6 +2150,7 @@ class AbominableMudOrc(ElementalMonsterMixin):
         pl.setAttenuation((1.0, 0.18, 0.05))
         self.aura_np = self.node.attachNewNode(pl)
         self.aura_np.setPos(0, 0, 1.6)
+        optimize_monster_geometry(self)
 
     def stun(self, duration=0.18):
         """총격 적중 시 0.18초간 경직/스턴 발동 (오크 강인한 체형 반영)"""
@@ -1930,9 +2182,68 @@ class AbominableMudOrc(ElementalMonsterMixin):
 
         return self.hp <= 0
 
+    def trigger_guard(self, duration, cooldown, player=None):
+        """전방 120도 방어 성공 및 대지진 반격 예약"""
+        self.is_guarding = True
+        self.reaction_timer = duration
+        self.reaction_cooldown = cooldown
+        self.counter_pending = True
+        self.counter_timer = 0.0
+        self.counter_telegraph_duration = 1.0
+
+        parent = getattr(self.node, 'getParent', lambda: None)()
+        if not parent or (hasattr(parent, 'isEmpty') and parent.isEmpty()):
+            parent = getattr(self, 'parent_ref', None) or self.node
+        self.cleanup_telegraph()
+        self.telegraph_np = create_circle_telegraph(
+            parent, self.pos, radius=8.0, color=(1.0, 0.78, 0.25, 0.75)
+        )
+
+    def cleanup_telegraph(self):
+        if getattr(self, 'telegraph_np', None) and not self.telegraph_np.isEmpty():
+            self.telegraph_np.removeNode()
+            self.telegraph_np = None
+
+    def update_reactions(self, dt, game=None, px=0, py=0, pz=0):
+        self.reaction_cooldown = max(0.0, getattr(self, 'reaction_cooldown', 0.0) - dt)
+        if getattr(self, 'is_guarding', False):
+            self.reaction_timer = getattr(self, 'reaction_timer', 0.0) - dt
+            if self.reaction_timer <= 0.0:
+                self.is_guarding = False
+                self.reaction_timer = 0.0
+
+        if getattr(self, 'counter_pending', False):
+            self.counter_timer = getattr(self, 'counter_timer', 0.0) + dt
+            if self.counter_timer >= self.counter_telegraph_duration:
+                if game and getattr(game, 'player', None):
+                    p = game.player
+                    dist = math.hypot(px - self.pos.x, py - self.pos.y)
+                    if dist <= 8.0:
+                        cam_z = getattr(p.camera, 'getZ', lambda: 1.7)()
+                        floor_z = getattr(p, 'current_floor_z', 0.0)
+                        foot_height = (cam_z - 1.7) - floor_z
+                        is_jumping = (foot_height >= 0.75)
+                        if not is_jumping:
+                            chunks = getattr(game, 'chunks', {})
+                            to_p_dir = Vec3(px - self.pos.x, py - self.pos.y, 0).normalized()
+                            w_dist, _ = raycast_walls(chunks, Vec3(self.pos.x, self.pos.y, self.pos.z + 0.5), to_p_dir, max_dist=dist)
+                            if w_dist >= dist - 0.2:
+                                p.take_damage(24.0, source_pos=(self.pos.x, self.pos.y))
+                                if hasattr(p, 'trigger_quake_shake'):
+                                    p.trigger_quake_shake(intensity=2.6, duration=0.6)
+                if game and hasattr(game, 'shockwaves') and hasattr(game, 'render'):
+                    game.shockwaves.append(GroundShockwave(game.render, self.pos.x, self.pos.y))
+                if game and hasattr(game, 'audio_mgr') and game.audio_mgr:
+                    game.audio_mgr.play_orc_slam()
+                self.counter_pending = False
+                self.cleanup_telegraph()
+                self.slam_cooldown = max(getattr(self, 'slam_cooldown', 0.0), 1.0)
+
     def turn_into_corpse(self, audio_mgr=None):
         """사망 시 유혈 진흙 폭발 파편화: 오크 머리통, 엄니, 철갑주 파편, 거대한 근육질 팔/다리 살점 덩어리가 사방으로 폭발 분출"""
         self.is_corpse = True
+        self.counter_pending = False
+        self.cleanup_telegraph()
         self.hp = 0
         self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
@@ -1966,6 +2277,8 @@ class AbominableMudOrc(ElementalMonsterMixin):
 
     def destroy(self):
         """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        self.counter_pending = False
+        self.cleanup_telegraph()
         self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
@@ -2088,6 +2401,11 @@ class AbominableMudOrc(ElementalMonsterMixin):
         if self.is_slamming:
             return
 
+        pose_dt = animation_dt(self, dt, is_attacking)
+        if pose_dt is None:
+            return
+        dt = pose_dt
+
         if is_attacking:
             self.arm_r.setP(-75)
             self.arm_l.setP(-60)
@@ -2117,6 +2435,7 @@ class AbominableMudOrc(ElementalMonsterMixin):
 
 class AlluringAshWitch(ElementalMonsterMixin):
     col_radius = 0.38
+    reaction_role = 'witch'
     """
     2. 매혹의 잿더미 마녀 (Alluring Ash Witch)
     - 칠흑과 잿더미 로브를 휘감고 공중에 부유(Levitation)하는 날렵하고 매혹적인 마녀 괴물
@@ -2150,6 +2469,10 @@ class AlluringAshWitch(ElementalMonsterMixin):
         self.attack_damage = 25
         self.speed = 10.5
         self.col_radius = 0.38
+        self.reaction_role = 'witch'
+        self.reaction_cooldown = 0.0
+        self.reaction_timer = 0.0
+        self.is_dodging = False
         self.debris_list = []
         self.blast_light_np = None
         self.puddle_np = None
@@ -2321,12 +2644,79 @@ class AlluringAshWitch(ElementalMonsterMixin):
         pl.setAttenuation((1.0, 0.14, 0.035))
         self.aura_np = self.staff_node.attachNewNode(pl)
         self.aura_np.setPos(0, 0, 0.90)
+        optimize_monster_geometry(self)
 
     def stun(self, duration=0.20):
         """총격 적중 시 0.20초간 경직/스턴 발동"""
         self.stun_timer = duration
         if hasattr(self, 'aura_np') and self.aura_np:
             self.aura_np.node().setColor((2.4, 2.0, 0.6, 1.0))
+
+    def trigger_witch_evade(self, hit_dir, chunks, player_pos):
+        """2.5~4m 측면 공간으로 순간이동 회피 검증 및 실행"""
+        if self.hp <= 0 or self.is_corpse or getattr(self, 'stun_timer', 0.0) > 0.0 or getattr(self, 'is_dodging', False):
+            return False
+
+        perp_x = -hit_dir.y
+        perp_y = hit_dir.x
+        mag = math.hypot(perp_x, perp_y)
+        if mag < 0.01:
+            perp_x, perp_y = 1.0, 0.0
+        else:
+            perp_x /= mag
+            perp_y /= mag
+
+        candidates = []
+        for side in (-1.0, 1.0):
+            for dist in (3.0, 2.5, 3.8):
+                candidates.append((self.pos.x + perp_x * side * dist, self.pos.y + perp_y * side * dist))
+                rad = math.radians(18.0 * side)
+                dx = perp_x * math.cos(rad) - perp_y * math.sin(rad)
+                dy = perp_x * math.sin(rad) + perp_y * math.cos(rad)
+                candidates.append((self.pos.x + dx * dist, self.pos.y + dy * dist))
+
+        valid_cand = None
+        old_floor, _ = get_floor_height(self.pos.x, self.pos.y, self.pos.z)
+        for cx, cy in candidates:
+            from constants import CHUNK_SIZE
+            if (math.floor(cx / CHUNK_SIZE), math.floor(cy / CHUNK_SIZE)) not in chunks:
+                continue
+            p_dist = math.hypot(cx - player_pos.x, cy - player_pos.y)
+            if p_dist < 2.0:
+                continue
+            rx, ry = resolve_collision(chunks, cx, cy, 0, 0, radius=0.42)
+            if math.hypot(rx - cx, ry - cy) > 0.05:
+                continue
+            dist_move = math.hypot(cx - self.pos.x, cy - self.pos.y)
+            if dist_move > 0.1:
+                dir_move = Vec3((cx - self.pos.x) / dist_move, (cy - self.pos.y) / dist_move, 0)
+                w_dist, _ = raycast_walls(chunks, Vec3(self.pos.x, self.pos.y, self.pos.z), dir_move, max_dist=dist_move)
+                if w_dist < dist_move - 0.2:
+                    continue
+            floor_z, _ = get_floor_height(cx, cy, old_floor)
+            if abs(floor_z - old_floor) > 1.2:
+                continue
+            valid_cand = (cx, cy, floor_z)
+            break
+
+        if not valid_cand:
+            return False
+
+        self.pos = Vec3(valid_cand[0], valid_cand[1], valid_cand[2] + 0.85)
+        if hasattr(self, 'node') and not self.node.isEmpty():
+            self.node.setPos(self.pos)
+        self.reaction_cooldown = 4.5
+        self.reaction_timer = 0.25
+        self.is_dodging = True
+        return True
+
+    def update_reactions(self, dt, game=None, px=0, py=0, pz=0):
+        self.reaction_cooldown = max(0.0, getattr(self, 'reaction_cooldown', 0.0) - dt)
+        if getattr(self, 'is_dodging', False):
+            self.reaction_timer = getattr(self, 'reaction_timer', 0.0) - dt
+            if self.reaction_timer <= 0.0:
+                self.is_dodging = False
+                self.reaction_timer = 0.0
 
     def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None):
         """피해 적용 및 사망 여부 반환 (기본 넉백 확률 적용)"""
@@ -2388,6 +2778,7 @@ class AlluringAshWitch(ElementalMonsterMixin):
 
     def destroy(self):
         """씬그래프, 조명, 파편 및 혈흔 리소스 완전 해제"""
+        self.is_dodging = False
         self.cleanup_elemental()
         if getattr(self, 'aura_is_lit', False) and hasattr(self, 'aura_np') and not self.aura_np.isEmpty():
             if hasattr(self, 'parent_ref') and self.parent_ref and not self.parent_ref.isEmpty():
@@ -2499,6 +2890,11 @@ class AlluringAshWitch(ElementalMonsterMixin):
         if self.is_casting:
             return
 
+        pose_dt = animation_dt(self, dt, is_attacking)
+        if pose_dt is None:
+            return
+        dt = pose_dt
+
         self.anim_time += dt * 3.5
         t = self.anim_time
 
@@ -2528,6 +2924,7 @@ TallShadowMonster = TallSkeletonMonster
 
 class SkeletalDobermanHellhound(ElementalMonsterMixin):
     col_radius = 0.35
+    reaction_role = 'hound'
     """
     지옥의 파수견 (Skeletal Doberman Hellhound)
     - 뼈로만 이루어진 사나운 도베르만 골격 괴물
@@ -2565,6 +2962,9 @@ class SkeletalDobermanHellhound(ElementalMonsterMixin):
         self.dodge_timer = 0.0
         self.dodge_vel = Vec3(0, 0, 0)
         self.last_action_dodged = False
+        self.reaction_role = 'hound'
+        self.reaction_cooldown = 0.0
+        self.reaction_timer = 0.0
 
         # 전신 맥동 붉은 혈관 선 (Hellfire Vein Lines) 노드 목록
         self.hellfire_vein_nodes = []
@@ -2700,6 +3100,8 @@ class SkeletalDobermanHellhound(ElementalMonsterMixin):
         aura_light.setAttenuation((1.0, 0.08, 0.025))
         self.aura_np = self.node.attachNewNode(aura_light)
         self.aura_np.setPos(0, 0.1, 0.8)
+        self.hellfire_vein_nodes = group_shared_tint(self.hellfire_vein_nodes)
+        optimize_monster_geometry(self)
 
     def _add_vein(self, parent, sx, sy, sz, px, py, pz, rot_h=0, rot_p=0, rot_r=0):
         """몸체 부착용 맥동 붉은 지옥불 혈관/뼈선 생성 및 등록"""
@@ -2771,7 +3173,38 @@ class SkeletalDobermanHellhound(ElementalMonsterMixin):
 
         return {'hip': hip, 'femur': femur, 'knee': knee, 'paw': paw}
 
-    def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None):
+    def trigger_hound_evade(self, hit_dir=None):
+        """지옥의 파수견 횡방향 공중 도약 회피 실행"""
+        if self.hp <= 0 or self.is_corpse or getattr(self, 'stun_timer', 0.0) > 0.0:
+            return False
+        self.is_dodging = True
+        self.dodge_timer = 0.35
+        self.last_action_dodged = True
+
+        side = random.choice([-1.0, 1.0])
+        if hit_dir is not None and (hit_dir.x != 0 or hit_dir.y != 0):
+            dodge_x = -hit_dir.y * side
+            dodge_y = hit_dir.x * side
+        else:
+            h_rad = math.radians(self.node.getH() + 90.0 * side)
+            dodge_x = math.cos(h_rad)
+            dodge_y = math.sin(h_rad)
+
+        d_mag = math.hypot(dodge_x, dodge_y)
+        if d_mag > 0.01:
+            dodge_x /= d_mag
+            dodge_y /= d_mag
+
+        self.dodge_vel = Vec3(dodge_x * 9.5, dodge_y * 9.5, 3.8)
+        if hasattr(self, 'node') and not self.node.isEmpty():
+            self.node.setR(side * 48.0)
+            self.node.setP(-14.0)
+        return True
+
+    def update_reactions(self, dt, game=None, px=0, py=0, pz=0):
+        self.reaction_cooldown = max(0.0, getattr(self, 'reaction_cooldown', 0.0) - dt)
+
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None, skip_dodge=False):
         """총격 대미지 판정: 35% 확률로 횡방향 공중 회피 도약(Evasive Dodge Leap) 발동"""
         if self.hp <= 0 or self.is_corpse:
             return True
@@ -2781,34 +3214,9 @@ class SkeletalDobermanHellhound(ElementalMonsterMixin):
             self.last_action_dodged = True
             return False
 
-        # [35% 확률 회피 발동 (지속 도트 피해는 회피 불가)]
-        if damage_type != 'dot' and random.random() < 0.35:
-            self.is_dodging = True
-            self.dodge_timer = 0.35
-            self.last_action_dodged = True
-
-            side = random.choice([-1.0, 1.0])
-            if hit_dir is not None and (hit_dir.x != 0 or hit_dir.y != 0):
-                # 총알 궤적과 수직인 횡방향으로 도약
-                dodge_x = -hit_dir.y * side
-                dodge_y = hit_dir.x * side
-            else:
-                h_rad = math.radians(self.node.getH() + 90.0 * side)
-                dodge_x = math.cos(h_rad)
-                dodge_y = math.sin(h_rad)
-
-            d_mag = math.hypot(dodge_x, dodge_y)
-            if d_mag > 0.01:
-                dodge_x /= d_mag
-                dodge_y /= d_mag
-
-            self.dodge_vel = Vec3(dodge_x * 9.5, dodge_y * 9.5, 3.8)
-            self.node.setR(side * 48.0)
-            self.node.setP(-14.0)
-
-            game_inst = getattr(self.node, 'game', None)
-            if not game_inst:
-                base = getattr(self.node, 'base', None)
+        # [35% 확률 회피 발동 (외부 판정 skip_dodge가 아닐 때만 내부 RNG 실행)]
+        if not skip_dodge and damage_type != 'dot' and random.random() < 0.35:
+            self.trigger_hound_evade(hit_dir)
             return False
 
         # 회피 실패: 정상 피해 적용
@@ -2999,6 +3407,11 @@ class SkeletalDobermanHellhound(ElementalMonsterMixin):
             return
 
         # 2. 이동/질주 애니메이션 (Canine Gallop Cycle)
+        pose_dt = animation_dt(self, dt, is_attacking)
+        if pose_dt is None:
+            return
+        dt = pose_dt
+
         if is_moving:
             self.anim_time += dt * 15.0
             t = self.anim_time
@@ -3063,9 +3476,7 @@ class SkeletalDobermanHellhound(ElementalMonsterMixin):
             g_glow = 0.10 + pulse * 0.32
             b_glow = 0.02 + pulse * 0.08
             alpha = 0.65 + pulse * 0.35
-            for vn in self.hellfire_vein_nodes:
-                if vn and not vn.isEmpty():
-                    vn.setColorScale(r_glow, g_glow, b_glow, alpha)
+            set_shared_tint(self, (r_glow, g_glow, b_glow, alpha))
 
 
 class CableOverlordBoss(ElementalMonsterMixin):
@@ -3124,6 +3535,8 @@ class CableOverlordBoss(ElementalMonsterMixin):
         self.lash_timer = 0.0
 
         # 신규 패턴 컨트롤러 활성화
+        self.is_protected = False
+        self._bone_shield_node = None
         self.use_new_patterns = True
         self.pattern_controller = BossPatternController(self)
 
@@ -3149,6 +3562,9 @@ class CableOverlordBoss(ElementalMonsterMixin):
 
         # 좌우 4개씩 총 8개의 관절 다리 생성
         self.spider_legs = []
+        self.leg_hit_nodes = []
+        self.leg_hp = [300.0] * 8
+        self.last_hit_part = None
         leg_configs = [
             # 좌측 4개 다리 (각도: 전방외측 -> 후방외측)
             (0, 52, 1), (1, 20, 1), (2, -20, 1), (3, -52, 1),
@@ -3186,6 +3602,7 @@ class CableOverlordBoss(ElementalMonsterMixin):
             # 뾰족한 발끝 뼈
             make_cube_to(tibia_node, 0.08, 0.08, 0.22, bone_dark, 0, 1.25, -1.70)
 
+            self.leg_hit_nodes.append((femur_bone, tibia_bone))
             self.spider_legs.append((leg_base, femur_node, knee_node, tibia_node, ang_deg, leg_idx))
 
         # ==================================================================
@@ -3311,6 +3728,7 @@ class CableOverlordBoss(ElementalMonsterMixin):
         # 구버전 코드 호환용 별칭 연결
         self.core_light = self.skull_light
         self.core_light_np = self.skull_light_np
+        optimize_monster_geometry(self)
 
     # ----------------------------------------------------------------------
     # 포즈 제어 헬퍼 (기믹 및 모션 연동)
@@ -3415,8 +3833,40 @@ class CableOverlordBoss(ElementalMonsterMixin):
         """용의 숨결 특성 지속 화염 피해 적용 및 원소 시각 효과 연동"""
         super().apply_burn(dps, duration)
 
-    def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None):
+    def set_bone_shield(self, active):
+        self.is_protected = bool(active)
+        if active:
+            if not hasattr(self, '_bone_shield_node') or self._bone_shield_node is None:
+                if hasattr(self, 'node') and self.node and not self.node.isEmpty():
+                    shield = make_sphere_to(self.node, 1.8, 1.8, 2.2, LColor(0.2, 0.7, 1.0, 0.35), 0, 0, 1.0)
+                    shield.setTransparency(TransparencyAttrib.MAlpha)
+                    shield.setLightOff()
+                    self._bone_shield_node = shield
+        else:
+            if hasattr(self, '_bone_shield_node') and self._bone_shield_node:
+                if not self._bone_shield_node.isEmpty():
+                    self._bone_shield_node.removeNode()
+                self._bone_shield_node = None
+
+    def take_damage(self, dmg, apply_knockback=None, hit_dir=None, damage_type=None, hit_part=None):
         """보스 피해 적용 및 UI 보스 체력바 갱신"""
+        if getattr(self, 'is_protected', False) or getattr(getattr(self, 'pattern_controller', None), 'is_protecting', False):
+            dmg *= 0.40
+        if hit_part == 'head' and self.pattern_controller.is_skull_exposed:
+            dmg *= 1.35
+        if isinstance(hit_part, int) and 0 <= hit_part < 8 and self.leg_hp[hit_part] > 0:
+            self.leg_hp[hit_part] = max(0, self.leg_hp[hit_part] - dmg)
+            leg = self.spider_legs[hit_part][0]
+            leg.setColorScale(1, .45, .25, 1)
+            if self.leg_hp[hit_part] == 0:
+                leg.hide()
+                self.pattern_controller.cleanup()
+                self.set_crouch_pose(False)
+                self.set_rib_flare_pose(False)
+                self.pos.z = get_floor_height(self.pos.x, self.pos.y, 0)[0]
+                self.node.setPos(self.pos)
+                self.stun_timer = 0
+                self.pattern_controller._enter_recovery(2.0)
         self.hp = max(0, self.hp - dmg)
         if damage_type == 'fire':
             self.apply_burn(dps=max(20.0, dmg * 0.4), duration=3.0)
@@ -3435,11 +3885,15 @@ class CableOverlordBoss(ElementalMonsterMixin):
     def is_hit_by_ray(self, ray_o, ray_d, max_dist=55.0):
         """Intersect the animated skull and body ellipsoids in their own spaces."""
         self.last_hit_was_head = False
-        targets = (
-            (self.cranium, Vec3(0), Vec3(.5), True),
-            (self.torso, Vec3(0, .12, .85), Vec3(.65, .60, .85), False),
-            (self.pelvis, Vec3(0), Vec3(.70, .60, .28), False),
-        )
+        self.last_hit_part = None
+        targets = [
+            (self.cranium, Vec3(0), Vec3(.5), 'head'),
+            (self.torso, Vec3(0, .12, .85), Vec3(.65, .60, .85), None),
+            (self.pelvis, Vec3(0), Vec3(.70, .60, .28), None),
+        ]
+        for index, bones in enumerate(self.leg_hit_nodes):
+            if self.leg_hp[index] > 0:
+                targets.extend((bone, Vec3(0), Vec3(.65, .5, .65), index) for bone in bones)
         nearest = max_dist
         hit_any = False
         for node, center, radius, is_head in targets:
@@ -3454,7 +3908,8 @@ class CableOverlordBoss(ElementalMonsterMixin):
             entry = (-bb - math.sqrt(discriminant)) / aa
             if .2 < entry < nearest:
                 nearest = entry
-                self.last_hit_was_head = is_head
+                self.last_hit_was_head = is_head == 'head'
+                self.last_hit_part = is_head
                 hit_any = True
         return (True, nearest) if hit_any else (False, 999.0)
 
@@ -3465,6 +3920,7 @@ class CableOverlordBoss(ElementalMonsterMixin):
         self.hp = 0
         self.cleanup_elemental()
 
+        self.set_bone_shield(False)
         if hasattr(self, 'pattern_controller') and self.pattern_controller:
             self.pattern_controller.cleanup()
 

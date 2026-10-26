@@ -8,7 +8,7 @@ Bullet-time effects (activated via set_bullet_time(strength 0..1)):
   • Desaturation of neutral surfaces (fire/tracer hues preserved)
   • Radial barrel distortion  (zooms inward, gives "through a scope" feel)
   • Chromatic aberration        (lateral RGB channel split at screen edges)
-  • Contrast + cold-blue tint  (cinematic freeze-frame look)
+  • Luminance-preserving cold-blue tint (keeps dark areas readable)
   • All effects are smoothly eased in/out via the strength envelope.
 """
 from panda3d.core import Shader
@@ -52,7 +52,7 @@ vec3 chromatic_aberration(vec2 uv, float strength) {
     float offs = strength * 0.008 * edge;
 
     vec2 uv_r = clamp(uv + vec2( offs,  0.0), scene_texel, vec2(1.0) - scene_texel);
-    vec2 uv_g = uv;
+    vec2 uv_g = clamp(uv, scene_texel, vec2(1.0) - scene_texel);
     vec2 uv_b = clamp(uv + vec2(-offs,  0.0), scene_texel, vec2(1.0) - scene_texel);
 
     float r = texture2D(tex, uv_r).r;
@@ -73,20 +73,13 @@ vec3 time_grade(vec3 color, vec2 uv) {
     float gray = dot(color, vec3(0.2126, 0.7152, 0.0722));
 
     // 2. Cold-blue tint  (slightly shift gray toward icy blue)
-    vec3 cold = vec3(gray * 0.88, gray * 0.96, gray * 1.10);
+    vec3 tint = vec3(0.88, 0.96, 1.10);
+    tint /= dot(tint, vec3(0.2126, 0.7152, 0.0722));
+    vec3 cold = gray * tint;
     color = mix(color, cold, desat_amt);
 
-    // 3. Contrast boost (pull darks down, raise brights slightly)
-    float contrast = 1.0 + s * 0.22;
-    color = (color - 0.5) * contrast + 0.5;
-    color = clamp(color, 0.0, 1.0);
-
-    // 4. Subtle vignette darkening from shader (UI adds the coloured ring)
-    vec2  dv = uv - 0.5;
-    float vd = dot(dv, dv);
-    float vgn = s * 0.28 * smoothstep(0.10, 0.55, vd);
-    color *= 1.0 - vgn;
-
+    // This runs before tone mapping: do not subtract a display-space black
+    // level, clamp HDR highlights, or multiply in another dark vignette.
     return color;
 }
 

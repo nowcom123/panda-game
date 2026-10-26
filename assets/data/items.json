@@ -1,0 +1,46 @@
+{
+  "catalog_version": 1,
+  "definitions": [
+    {
+      "definition_id": "weapon_pistol",
+      "name": ".50 매그넘 데저트 이글",
+      "kind": "weapon",
+      "weapon_key": "PISTOL",
+      "max_stack": 1
+    },
+    {
+      "definition_id": "weapon_dual_pistol",
+      "name": "9mm 듀얼 글록 (아킴보)",
+      "kind": "weapon",
+      "weapon_key": "DUAL_PISTOL",
+      "max_stack": 1
+    },
+    {
+      "definition_id": "weapon_ar",
+      "name": "5.56mm HK416 돌격소총",
+      "kind": "weapon",
+      "weapon_key": "AR",
+      "max_stack": 1
+    },
+    {
+      "definition_id": "weapon_shotgun",
+      "name": "12게이지 펌프액션 샷건",
+      "kind": "weapon",
+      "weapon_key": "SHOTGUN",
+      "max_stack": 1
+    },
+    {
+      "definition_id": "scrap_metal",
+      "name": "고철",
+      "kind": "material",
+      "max_stack": 999
+    },
+    {
+      "definition_id": "bone_fragment",
+      "name": "뼈 파편",
+      "kind": "material",
+      "max_stack": 999
+    }
+  ]
+}
+

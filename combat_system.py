@@ -18,86 +18,29 @@ from world_gen import cell_has_pillar
 from geometry import make_cube_to, make_sphere_to, make_cylinder_to, make_muzzle_flash_to
 from collision import raycast_walls
 from projectiles import ExplosionVisualEffect
-from perks import get_player_perk_stats
+from perks import get_player_perk_stats, get_perk_level
+from combat.reactions import REACTION_PROFILES, counter_stats, reaction_chance, guarded_damage
 from weapon_recoil import WeaponRecoil, RECOIL_PROFILES
 from casing_effects import CasingEffects
 
 
-WEAPON_CONFIGS = {
-    "PISTOL": {
-        "id": "PISTOL",
-        "name": ".50 매그넘 데저트 이글",
-        "max_ammo": 7,
-        "initial_reserve": 28,
-        "damage": 120.0,
-        "headshot_mult": 3.2,
-        "cooldown": 0.44,
-        "combo_cooldown": 0.32,
-        "pellets": 1,
-        "base_spread": 0.012,
-        "ads_spread": 0.0,
-        "recoil_time": 0.18,
-        "recoil_deg": 22.0,
-        "reload_time": 1.45,
-        "description": "7발 탄창. .50 Action Express 매그넘탄. 뼈를 부수는 파괴적인 단발 저지력과 관통력."
-    },
-    "DUAL_PISTOL": {
-        "id": "DUAL_PISTOL",
-        "name": "9mm 듀얼 글록 (아킴보)",
-        "max_ammo": 34,
-        "initial_reserve": 68,
-        "damage": 26.0,
-        "headshot_mult": 2.0,
-        "cooldown": 0.065,
-        "combo_cooldown": 0.048,
-        "pellets": 1,
-        "base_spread": 0.050,
-        "ads_spread": 0.020,
-        "recoil_time": 0.060,
-        "recoil_deg": 7.5,
-        "reload_time": 2.50,
-        "description": "34발 대용량(양손 17발x2). 9mm 파라블럼 탄을 사용하는 듀얼 글록. 빠른 단발 클릭으로 뿜어져 나오는 양손 속사 화력."
-    },
-    "AR": {
-        "id": "AR",
-        "name": "5.56mm HK416 돌격소총 (AR)",
-        "max_ammo": 30,
-        "initial_reserve": 90,
-        "damage": 38.0,
-        "headshot_mult": 2.4,
-        "cooldown": 0.082,
-        "combo_cooldown": 0.065,
-        "pellets": 1,
-        "base_spread": 0.030,
-        "ads_spread": 0.008,
-        "recoil_time": 0.075,
-        "recoil_deg": 14.0,
-        "reload_time": 3.20,
-        "description": "30발 탄창. 5.56x45mm NATO. 단행정 가스 피스톤 방식을 채용한 독일 H&K사의 하이엔드 돌격소총 HK416. 분당 730발 초고속 연사 화력(재장전 지연 3.2s)."
-    },
-    "SHOTGUN": {
-        "id": "SHOTGUN",
-        "name": "12게이지 펌프 샷건",
-        "max_ammo": 8,
-        "initial_reserve": 24,
-        "damage": 25.0,
-        "headshot_mult": 1.6,
-        "cooldown": 0.72,
-        "combo_cooldown": 0.58,
-        "pellets": 8,
-        "base_spread": 0.175,
-        "ads_spread": 0.110,
-        "recoil_time": 0.20,
-        "recoil_deg": 26.0,
-        "reload_time": 1.75,
-        "pump_time": 0.44,
-        "description": "8발 튜브 탄창. 1격발당 8발 대구경 벅샷 산탄과 펌프 액션 (초근접 광역 섬멸, 원거리 산탄 분산 및 위력 감쇄)."
-    }
-}
-WEAPON_ORDER = ["PISTOL", "DUAL_PISTOL", "AR", "SHOTGUN"]
+from combat.weapon_config import WEAPON_CONFIGS, WEAPON_ORDER
+from combat.tracer_effects import update_tracer_lines, update_tracers
 
 
 class CombatSystem:
+    # RPG 세션 기본값 (CombatSystem.__new__ 테스트 호환성 확보)
+    rpg_session = None
+    active_slot = "primary"
+    active_item_uid = None
+    item_states = {}
+    reserve_ammo_pools = {
+        "PISTOL": 28,
+        "DUAL_PISTOL": 68,
+        "AR": 90,
+        "SHOTGUN": 24,
+    }
+
     # 스테이지 전투 통계 기본값 (CombatSystem.__new__ 테스트 호환성 확보)
     stage_kills = 0
     stage_headshots = 0
@@ -115,6 +58,18 @@ class CombatSystem:
         self.world_root = world_root
         self.audio_mgr = audio_mgr
         self.ui_mgr = ui_mgr
+
+        # RPG 세션 및 슬롯 장비 연동 상태
+        self.rpg_session = None
+        self.active_slot = "primary"
+        self.active_item_uid = None
+        self.item_states = {}  # uid -> {"ammo": int, "slide_locked": bool}
+        self.reserve_ammo_pools = {
+            "PISTOL": 28,
+            "DUAL_PISTOL": 68,
+            "AR": 90,
+            "SHOTGUN": 24,
+        }
 
         # 무기 인벤토리 및 장착 상태
         self.current_weapon = "PISTOL"
@@ -268,13 +223,154 @@ class CombatSystem:
                             w_st["reserve_ammo"] += max(4, int(diff * 0.5))
                         else:
                             w_st["reserve_ammo"] += diff
+            if getattr(self, 'rpg_session', None):
+                self.reserve_ammo_pools.update({
+                    key: state['reserve_ammo'] for key, state in self.weapon_states.items()})
+
+    def get_current_weapon_config(self):
+        """현재 활성 장비의 effective config (옵션 반영본) 또는 기본 밸런스 반환"""
+        sess = getattr(self, 'rpg_session', None)
+        uid = getattr(self, 'active_item_uid', None)
+        if sess and uid:
+            item = sess.get_item(uid)
+            if item:
+                cfg = sess.get_effective_config_for_item(item)
+                if cfg:
+                    return cfg
+        cw = getattr(self, 'current_weapon', 'PISTOL')
+        return WEAPON_CONFIGS.get(cw, WEAPON_CONFIGS["PISTOL"])
 
     def get_weapon_display_name(self):
-        """현재 장착된 활성 무기 한글 명칭 반환"""
+        """현재 장착된 활성 무기 한글 명칭 및 등급 반환"""
+        if self.rpg_session and self.active_item_uid:
+            item = self.rpg_session.get_item(self.active_item_uid)
+            if item:
+                defn = self.rpg_session.catalog.get(item.definition_id)
+                name = defn.name if defn else WEAPON_CONFIGS.get(self.current_weapon, {}).get("name", "무기")
+                rarity_names = {
+                    "common": "일반",
+                    "uncommon": "고급",
+                    "rare": "희귀",
+                    "epic": "영웅",
+                    "legendary": "전설",
+                }
+                rarity_str = rarity_names.get(item.rarity, item.rarity)
+                return f"{name} ({rarity_str})"
         return WEAPON_CONFIGS.get(self.current_weapon, {}).get("name", "9mm 택티컬 권총")
+
+    def set_rpg_session(self, session):
+        """게임 세션의 RPGSession 주입"""
+        self.rpg_session = session
+        self.sync_with_rpg_session()
+
+    def sync_with_rpg_session(self):
+        """RPG 세션의 장착 상태와 무기 상태를 동기화"""
+        if not self.rpg_session or not self.rpg_session.profile:
+            return
+        eq = self.rpg_session.profile.equipment
+        p_uid = eq.get("primary")
+        s_uid = eq.get("secondary")
+
+        if self.active_slot == "primary" and not p_uid and s_uid:
+            self.active_slot = "secondary"
+        elif self.active_slot == "secondary" and not s_uid and p_uid:
+            self.active_slot = "primary"
+
+        active_uid = eq.get(self.active_slot)
+        if active_uid:
+            self.switch_to_slot(self.active_slot, force=True)
+
+    def switch_to_slot(self, slot, force=False):
+        """주/보조 슬롯 간 전환 ('primary' 또는 'secondary')"""
+        if not self.rpg_session or not self.rpg_session.profile:
+            return
+
+        if slot not in ("primary", "secondary"):
+            return
+
+        item = self.rpg_session.get_equipped_item(slot)
+        if not item:
+            return
+
+        if not force and self.active_slot == slot and self.active_item_uid == item.uid:
+            return
+
+        # 현재 무기 상태 캐싱
+        if getattr(self, 'item_states', None) is not None and self.active_item_uid:
+            self.item_states[self.active_item_uid] = {
+                "ammo": self.ammo,
+                "slide_locked": self.slide_locked,
+            }
+        if getattr(self, 'reserve_ammo_pools', None) is not None:
+            self.reserve_ammo_pools[self.current_weapon] = self._reserve_ammo
+        self.weapon_states[self.current_weapon]["ammo"] = self.ammo
+        self.weapon_states[self.current_weapon]["reserve_ammo"] = self._reserve_ammo
+        self.weapon_states[self.current_weapon]["slide_locked"] = self.slide_locked
+
+        # 재장전 중 무기 교체 시 재장전 즉시 안전 취소 (탄약 복제 방지)
+        if self.is_reloading:
+            self.is_reloading = False
+            self.reload_timer = 0.0
+
+        # 신규 슬롯 활성화
+        self.stop_aim()
+        self.active_slot = slot
+        self.active_item_uid = item.uid
+        defn = self.rpg_session.catalog[item.definition_id]
+        self.current_weapon = defn.weapon_key
+
+        cfg = self.get_current_weapon_config()
+        self.max_ammo = cfg["max_ammo"]
+
+        if item.uid not in self.item_states:
+            self.item_states[item.uid] = {
+                "ammo": cfg["max_ammo"],
+                "slide_locked": False,
+            }
+        item_st = self.item_states[item.uid]
+        self.ammo = item_st["ammo"]
+        self.slide_locked = item_st["slide_locked"]
+
+        if self.current_weapon not in self.reserve_ammo_pools:
+            self.reserve_ammo_pools[self.current_weapon] = WEAPON_CONFIGS[self.current_weapon]["initial_reserve"]
+        self._reserve_ammo = self.reserve_ammo_pools[self.current_weapon]
+
+        self.sg_pump_timer = 0.0
+        self.sg_pump_cycled = False
+        if self.audio_mgr:
+            self.audio_mgr.stop_weapon_actions()
+        self._reset_weapon_recoil()
+        self.shoot_cooldown = max(self.shoot_cooldown, 0.22)
+        self.switch_timer = 0.22
+
+        self._update_viewmodel_visibility()
+
+        if self.audio_mgr and hasattr(self.audio_mgr, 'play_weapon_switch'):
+            self.audio_mgr.play_weapon_switch()
+
+        self.ui_mgr.show_hit_marker(f"[ 무기 전환 : {self.get_weapon_display_name()} ]", (0.40, 0.95, 1.0, 1.0))
+        self.update_ammo_ui()
 
     def switch_weapon(self, target_weapon):
         """[Z, X, C] 또는 [Q/휠]을 통한 실시간 무기 스왑"""
+        sess = getattr(self, "rpg_session", None)
+        if sess and getattr(sess, "profile", None):
+            # RPG 세션 활성화 시 장착된 슬롯으로만 전환 (미장착 무기 차단)
+            eq = self.rpg_session.profile.equipment
+            target_slot = None
+            for s in ("primary", "secondary"):
+                u = eq.get(s)
+                if u:
+                    it = self.rpg_session.get_item(u)
+                    if it:
+                        d = self.rpg_session.catalog.get(it.definition_id)
+                        if d and d.weapon_key == target_weapon:
+                            target_slot = s
+                            break
+            if target_slot:
+                self.switch_to_slot(target_slot)
+            return
+
         if target_weapon not in WEAPON_CONFIGS:
             return
         if target_weapon == self.current_weapon:
@@ -317,12 +413,30 @@ class CombatSystem:
 
     def next_weapon(self):
         """[Q] 또는 [마우스 휠 다운] 다음 무기 순환 스왑"""
+        sess = getattr(self, "rpg_session", None)
+        if sess and getattr(sess, "profile", None):
+            eq = self.rpg_session.profile.equipment
+            slots = [s for s in ("primary", "secondary") if eq.get(s)]
+            if len(slots) >= 2:
+                next_slot = "secondary" if self.active_slot == "primary" else "primary"
+                self.switch_to_slot(next_slot)
+            return
+
         idx = WEAPON_ORDER.index(self.current_weapon)
         next_idx = (idx + 1) % len(WEAPON_ORDER)
         self.switch_weapon(WEAPON_ORDER[next_idx])
 
     def prev_weapon(self):
         """[마우스 휠 업] 이전 무기 순환 스왑"""
+        sess = getattr(self, "rpg_session", None)
+        if sess and getattr(sess, "profile", None):
+            eq = self.rpg_session.profile.equipment
+            slots = [s for s in ("primary", "secondary") if eq.get(s)]
+            if len(slots) >= 2:
+                prev_slot = "secondary" if self.active_slot == "primary" else "primary"
+                self.switch_to_slot(prev_slot)
+            return
+
         idx = WEAPON_ORDER.index(self.current_weapon)
         prev_idx = (idx - 1) % len(WEAPON_ORDER)
         self.switch_weapon(WEAPON_ORDER[prev_idx])
@@ -1077,6 +1191,117 @@ class CombatSystem:
             "fade_duration": 0.08
         })
 
+    def _is_frontal_hit(self, monster, ray_dir):
+        """방어 판정용 전방 120도(좌우 60도) 입사각 검증"""
+        node = getattr(monster, 'node', None)
+        if not node or (hasattr(node, 'isEmpty') and node.isEmpty()):
+            return True
+        try:
+            render_node = getattr(self, 'render', None)
+            if render_node is None and hasattr(node, 'getTop'):
+                render_node = node.getTop()
+            if render_node is not None:
+                m_fwd = node.getQuat(render_node).getForward()
+            else:
+                h_rad = math.radians(node.getH())
+                m_fwd = Vec3(-math.sin(h_rad), math.cos(h_rad), 0)
+            to_shooter_x = -ray_dir.x
+            to_shooter_y = -ray_dir.y
+            mag_s = math.hypot(to_shooter_x, to_shooter_y)
+            mag_f = math.hypot(m_fwd.x, m_fwd.y)
+            if mag_s < 1e-4 or mag_f < 1e-4:
+                return True
+            dot = (m_fwd.x * to_shooter_x + m_fwd.y * to_shooter_y) / (mag_s * mag_f)
+            return dot >= 0.5  # cos(60도) = 0.5
+        except Exception:
+            return True
+
+    def _resolve_monster_reaction(self, monster, ray_dir, player):
+        """단일 격발/대상당 1회 회피·방어 판정 및 상태 결정"""
+        if getattr(monster, 'is_boss', False) or getattr(monster, 'is_seal', False):
+            return None
+        if getattr(monster, 'hp', 0) <= 0 or getattr(monster, 'is_corpse', False):
+            return None
+        if getattr(monster, 'stun_timer', 0.0) > 0.0:
+            return None
+
+        role = getattr(monster, 'reaction_role', None)
+        if not role:
+            m_type = monster.__class__.__name__
+            if 'Hellhound' in m_type or 'Hound' in m_type:
+                role = 'hound'
+            elif 'Witch' in m_type:
+                role = 'witch'
+            elif 'Skeleton' in m_type:
+                role = 'skeleton'
+            elif 'Serpent' in m_type:
+                role = 'serpent'
+            elif 'Orc' in m_type:
+                role = 'golem'
+
+        if not role or role not in REACTION_PROFILES:
+            return None
+
+        p_prec = get_perk_level(player, 'precision_training')
+        p_gb = get_perk_level(player, 'guard_breaker')
+        stats = counter_stats(p_prec, p_gb)
+        profile = REACTION_PROFILES[role]
+
+        is_dodging = getattr(monster, 'is_dodging', False)
+        is_guarding = getattr(monster, 'is_guarding', False)
+        counter_pending = getattr(monster, 'counter_pending', False)
+        cooldown = getattr(monster, 'reaction_cooldown', 0.0)
+
+        if is_dodging:
+            return {'mode': 'evade', 'dodged': True, 'blocked': False, 'role': role}
+        if is_guarding:
+            if self._is_frontal_hit(monster, ray_dir):
+                return {'mode': 'guard', 'dodged': False, 'blocked': True, 'role': role,
+                        'reduction': profile.reduction, 'penetration': stats['guard_penetration']}
+            else:
+                return {'mode': 'none', 'dodged': False, 'blocked': False}
+
+        if counter_pending or cooldown > 0.0 or any(getattr(monster, flag, False) for flag in ('is_casting', 'is_slamming', 'is_striking', 'is_lashing')):
+            return {'mode': 'none', 'dodged': False, 'blocked': False}
+
+        if profile.mode == 'evade':
+            chance = reaction_chance(profile, stats['evasion_suppression'])
+            if random.random() < chance:
+                evade_ok = False
+                if role == 'witch' and hasattr(monster, 'trigger_witch_evade'):
+                    chunks = getattr(getattr(self, 'base', None), 'chunks', {})
+                    p_pos = player.camera.getPos() if (player and hasattr(player, 'camera')) else Vec3(0, 0, 0)
+                    evade_ok = monster.trigger_witch_evade(ray_dir, chunks, p_pos)
+                elif role == 'skeleton' and hasattr(monster, 'trigger_skeleton_evade'):
+                    evade_ok = monster.trigger_skeleton_evade()
+                elif role == 'hound':
+                    if hasattr(monster, 'trigger_hound_evade'):
+                        evade_ok = monster.trigger_hound_evade(ray_dir)
+                    else:
+                        monster.is_dodging = True
+                        monster.dodge_timer = 0.35
+                        monster.last_action_dodged = True
+                        evade_ok = True
+                if evade_ok:
+                    return {'mode': 'evade', 'dodged': True, 'blocked': False, 'role': role}
+            return {'mode': 'none', 'dodged': False, 'blocked': False}
+
+        elif profile.mode == 'guard':
+            if self._is_frontal_hit(monster, ray_dir):
+                chance = reaction_chance(profile, 0.0)
+                if random.random() < chance:
+                    if hasattr(monster, 'trigger_guard'):
+                        monster.trigger_guard(profile.duration, profile.cooldown, player)
+                    else:
+                        monster.is_guarding = True
+                        monster.reaction_timer = profile.duration
+                        monster.reaction_cooldown = profile.cooldown
+                    return {'mode': 'guard', 'dodged': False, 'blocked': True, 'role': role,
+                            'reduction': profile.reduction, 'penetration': stats['guard_penetration']}
+            return {'mode': 'none', 'dodged': False, 'blocked': False}
+
+        return {'mode': 'none', 'dodged': False, 'blocked': False}
+
     def _perform_raycast(self, ray_dir, muzzle_world, monsters, player, hazard_barrels, is_overcharge, cfg, p_idx=0):
         """단일 펠릿/탄환에 대한 레이캐스트, 적중 판정, 트레이서 생성 및 대미지 처리"""
         ray_origin = self.camera.getPos()
@@ -1085,6 +1310,7 @@ class CombatSystem:
 
         closest_monster = None
         closest_barrel = None
+        closest_seal = None
         min_hit_dist = wall_dist if wall_hit_pos is not None else 65.0
 
         if hazard_barrels:
@@ -1097,6 +1323,28 @@ class CombatSystem:
                     closest_barrel = b
 
         monster_list = monsters if isinstance(monsters, (list, tuple)) else [monsters]
+
+        target_seals = []
+        game_inst = getattr(self.base, 'game', None) or self.base
+        boss_obj = getattr(game_inst, 'boss', None)
+        bosses = [boss_obj] if boss_obj else []
+        for m in monster_list:
+            if getattr(m, 'is_boss', False) and m not in bosses:
+                bosses.append(m)
+        for b in bosses:
+            ctrl = getattr(b, 'pattern_controller', None)
+            seals = getattr(ctrl, 'active_seals', None)
+            if isinstance(seals, list):
+                target_seals.extend([s for s in seals if not getattr(s, 'is_destroyed', False) and getattr(s, 'hp', 0) > 0])
+
+        for s in target_seals:
+            is_hit, hit_dist = s.is_hit_by_ray(ray_origin, ray_dir)
+            if is_hit and hit_dist < min_hit_dist:
+                min_hit_dist = hit_dist
+                closest_seal = s
+                closest_monster = None
+                closest_barrel = None
+
         for m in monster_list:
             if getattr(m, 'hp', 1) <= 0:
                 continue
@@ -1105,6 +1353,7 @@ class CombatSystem:
                 min_hit_dist = hit_dist
                 closest_monster = m
                 closest_barrel = None
+                closest_seal = None
 
         is_crit = False
         is_dead = False
@@ -1118,6 +1367,31 @@ class CombatSystem:
             did_hit = True
             is_crit = True
             is_dead = True
+
+        elif closest_seal is not None:
+            tracer_dist = min_hit_dist
+            impact_world = ray_origin + ray_dir * tracer_dist
+            self.spawn_hit_particles(impact_world, is_blood=False)
+            did_hit = True
+            is_crit = False
+            blackout_active = getattr(self.base, 'blackout_active', False)
+            if player and hasattr(player, 'get_attack_power'):
+                base_atk = player.get_attack_power(blackout_active=blackout_active)
+            else:
+                base_atk = getattr(player, 'attack_power', 35.0) if player else 35.0
+            ratio = cfg["damage"] / 35.0
+            dmg = base_atk * ratio
+            if cfg.get("pellets", 1) > 1 and tracer_dist > 7.0:
+                falloff_factor = max(0.40, 1.0 - (tracer_dist - 7.0) / 25.0)
+                dmg *= falloff_factor
+            is_dead = closest_seal.take_damage(dmg, hit_dir=ray_dir)
+            if is_dead:
+                if p_idx == 0 and hasattr(self, 'ui_mgr') and self.ui_mgr:
+                    self.ui_mgr.show_hit_marker("<< [뼈 심장 봉인 파괴!] >>", (0.3, 1.0, 0.5, 1.0))
+            else:
+                if p_idx == 0 and hasattr(self, 'ui_mgr') and self.ui_mgr:
+                    self.ui_mgr.show_hit_marker(f"봉인 타격! [HP: {int(closest_seal.hp)}/{int(closest_seal.max_hp)}]", (0.4, 0.85, 1.0, 1.0))
+            self._spawn_tracer_effect(muzzle_world, impact_world, ray_dir, tracer_dist, is_overcharge=is_overcharge)
 
         elif closest_monster is not None:
             tracer_dist = min_hit_dist
@@ -1161,16 +1435,62 @@ class CombatSystem:
                 falloff_factor = max(0.40, 1.0 - (tracer_dist - 7.0) / 25.0)
                 dmg *= falloff_factor
 
+            # 격발(shot_id)·대상당 1회 반응 결과 조회 또는 생성
+            m_key = id(closest_monster)
+            reaction = None
+            if hasattr(self, '_discharge_reactions') and m_key in self._discharge_reactions:
+                reaction = self._discharge_reactions[m_key]
+            else:
+                reaction = self._resolve_monster_reaction(closest_monster, ray_dir, player)
+                if hasattr(self, '_discharge_reactions') and self._discharge_reactions is not None:
+                    self._discharge_reactions[m_key] = reaction
+
+            # 1. 회피 성공: 피해 0, 피격 효과/흡혈/스태거 전면 차단
+            if reaction and reaction.get('dodged'):
+                self.spawn_hit_particles(impact_world, is_blood=False)
+                if not reaction.get('marker_shown'):
+                    reaction['marker_shown'] = True
+                    r = reaction.get('role')
+                    if r == 'witch':
+                        self.ui_mgr.show_hit_marker("<< [마녀 순간이동 회피!] DODGE >>", (0.85, 0.45, 1.0, 1.0))
+                    elif r == 'skeleton':
+                        self.ui_mgr.show_hit_marker("<< [해골 뼈 분해 회피!] DODGE >>", (0.90, 0.90, 0.85, 1.0))
+                    else:
+                        self.ui_mgr.show_hit_marker("<< [파수견 도약 회피!] DODGE >>", (0.35, 0.95, 1.0, 1.0))
+                        if self.audio_mgr and hasattr(self.audio_mgr, 'play_hound_dodge'):
+                            self.audio_mgr.play_hound_dodge()
+                return False, False, False
+
+            # 2. 방어 성공: 관통율 적용된 방어 피해 감소
+            is_guarded = bool(reaction and reaction.get('blocked'))
+            if is_guarded:
+                dmg = guarded_damage(dmg, reaction['reduction'], reaction['penetration'])
+                if not reaction.get('marker_shown'):
+                    reaction['marker_shown'] = True
+                    r = reaction.get('role')
+                    pen_pct = int(round(reaction.get('penetration', 0.0) * 100))
+                    pen_info = f" (방어 관통 {pen_pct}%)" if pen_pct > 0 else ""
+                    if r == 'serpent':
+                        self.ui_mgr.show_hit_marker(f"<< [흑사 맹독 방어!]{pen_info} GUARD >>", (0.35, 1.0, 0.45, 1.0))
+                    elif r == 'golem':
+                        self.ui_mgr.show_hit_marker(f"<< [진흙 골렘 전방 방어!]{pen_info} GUARD >>", (1.0, 0.80, 0.25, 1.0))
+
             knockback_chance = 0.85 if is_crit else (0.50 if cfg["pellets"] > 1 else 0.28)
-            has_knockback = (random.random() < knockback_chance)
+            has_knockback = not is_guarded and (random.random() < knockback_chance)
 
             prev_m_hp = getattr(closest_monster, 'hp', 1)
             prev_max_hp = getattr(closest_monster, 'max_hp', 100)
 
-            is_dead = closest_monster.take_damage(dmg, apply_knockback=has_knockback, hit_dir=ray_dir)
+            hit_options = {}
+            if getattr(closest_monster, 'is_boss', False):
+                hit_options['hit_part'] = getattr(closest_monster, 'last_hit_part', None)
+            if getattr(closest_monster, 'reaction_role', None) == 'hound':
+                hit_options['skip_dodge'] = True
+                closest_monster.last_action_dodged = False
+            is_dead = closest_monster.take_damage(dmg, apply_knockback=has_knockback, hit_dir=ray_dir, **hit_options)
             m_name = getattr(closest_monster, 'name', '괴물')
 
-            # 몬스터 회피 성공 판정 (지옥의 파수견 등)
+            # 파수견 기존 플래그 호환 (mock / SimpleNamespace 호환)
             if getattr(closest_monster, 'last_action_dodged', False):
                 closest_monster.last_action_dodged = False
                 self.spawn_hit_particles(impact_world, is_blood=False)
@@ -1178,15 +1498,24 @@ class CombatSystem:
                     self.ui_mgr.show_hit_marker("<< [파수견 뼈 도약 회피!] DODGE >>", (0.35, 0.95, 1.0, 1.0))
                     if self.audio_mgr and hasattr(self.audio_mgr, 'play_hound_dodge'):
                         self.audio_mgr.play_hound_dodge()
-                return did_hit, False, False
+                return False, False, False
+
+            # 방어 성공 시 전방 펠릿은 샷건 3발 스턴 카운트에서 제외 (측후방 적중은 카운트)
+            if cfg.get('id') == 'SHOTGUN' and tracer_dist <= 7.0 and not is_dead and not is_guarded:
+                hits = getattr(self, '_shotgun_close_hits', None)
+                if hits is not None:
+                    key = id(closest_monster)
+                    hits[key] = hits.get(key, 0) + 1
+                    if hits[key] == 3 and hasattr(closest_monster, 'stun'):
+                        closest_monster.stun(0.55)
 
             self.spawn_hit_particles(impact_world, is_blood=True)
 
             # 전투 통계 누적 및 3D 플로팅 대미지 폰트 투영
-            actual_hit_dmg = min(prev_m_hp, dmg)
+            actual_hit_dmg = max(0.0, prev_m_hp - max(0.0, getattr(closest_monster, 'hp', prev_m_hp - dmg)))
             self.record_combat_hit(actual_hit_dmg, is_headshot=is_headshot)
             if hasattr(self.ui_mgr, 'spawn_floating_damage'):
-                self.ui_mgr.spawn_floating_damage(dmg, impact_world, is_crit=is_crit, is_headshot=is_headshot)
+                self.ui_mgr.spawn_floating_damage(actual_hit_dmg, impact_world, is_crit=is_crit, is_headshot=is_headshot)
 
             # 드래곤 브레스 퍽: 지속 화염 피해 상태이상 부여
             if player and hasattr(player, 'has_perk') and player.has_perk("dragons_breath"):
@@ -1493,10 +1822,10 @@ class CombatSystem:
 
     def shoot(self, monsters, player=None, game_state="PLAYING", hazard_barrels=None):
         """다양한 총기(권총, 아킴보 쌍권총, 12게이지 샷건) 사격 및 레이캐스트 적중 판정"""
-        if game_state != "PLAYING" or self.is_reloading or self.shoot_cooldown > 0.0:
+        if game_state != "PLAYING" or self.is_reloading or self.shoot_cooldown > 0.0 or getattr(self, '_suppress_fire_until_release', False):
             return
 
-        cfg = WEAPON_CONFIGS[self.current_weapon]
+        cfg = self.get_current_weapon_config()
 
         # 탄약이 차 있는데 슬라이드가 잠겨있는 불일치 상태 자동 해제
         if self.ammo > 0 and self.slide_locked:
@@ -1668,6 +1997,12 @@ class CombatSystem:
         self.weapon_states[self.current_weapon]["ammo"] = self.ammo
         self.weapon_states[self.current_weapon]["reserve_ammo"] = self._reserve_ammo
         self.weapon_states[self.current_weapon]["slide_locked"] = self.slide_locked
+        if self.active_item_uid:
+            self.item_states[self.active_item_uid] = {
+                "ammo": self.ammo,
+                "slide_locked": self.slide_locked,
+            }
+        self.reserve_ammo_pools[self.current_weapon] = self._reserve_ammo
         self.update_ammo_ui()
 
         # 2. 탄퍼짐 및 크로스헤어 킥
@@ -1713,8 +2048,11 @@ class CombatSystem:
         if hasattr(self.ui_mgr, 'trigger_hipfire_kick'):
             self.ui_mgr.trigger_hipfire_kick(kick_bloom=kick_bloom, shake_mag=shake_mag, shake_dur=0.18)
 
-        # 3. 펠릿별 레이캐스트 순회
+        # 3. 펠릿별 레이캐스트 순회 (한 발 발사당 대상별 1회 반응 판정 캐시)
         pellet_count = cfg["pellets"]
+        self._shotgun_close_hits = {}
+        self._discharge_reactions = {}
+        self._shot_id = getattr(self, '_shot_id', 0) + 1
         any_crit = False
         any_kill = False
         any_hit = False
@@ -1794,7 +2132,7 @@ class CombatSystem:
         if game_state != "PLAYING" or self.is_reloading:
             return
 
-        cfg = WEAPON_CONFIGS[self.current_weapon]
+        cfg = self.get_current_weapon_config()
         wstate = self.weapon_states[self.current_weapon]
 
         # 만약 슬라이드가 후퇴 고정된 상태인데 탄약이 이미 가득 차 있다면, 슬라이드 멈치만 즉시 전진 복구
@@ -1852,7 +2190,12 @@ class CombatSystem:
     @property
     def reload_duration(self):
         """현재 무기의 기본 재장전 시간 (스피드 데몬 퍽 적용 반영)"""
-        cfg = WEAPON_CONFIGS.get(self.current_weapon, {})
+        get_cfg = getattr(self, 'get_current_weapon_config', None)
+        if callable(get_cfg):
+            cfg = get_cfg()
+        else:
+            cw = getattr(self, 'current_weapon', 'PISTOL')
+            cfg = WEAPON_CONFIGS.get(cw, {})
         base_time = cfg.get("reload_time", 1.30)
         player = getattr(self.base, 'player', None)
         if player and hasattr(player, 'has_perk') and player.has_perk("speed_demon"):
@@ -1982,14 +2325,32 @@ class CombatSystem:
                 self.weapon_states[w_id]["max_ammo"] = cfg["max_ammo"]
                 self.weapon_states[w_id]["reserve_ammo"] = cfg["initial_reserve"]
                 self.weapon_states[w_id]["slide_locked"] = False
+            self.reserve_ammo_pools = {
+                w_id: cfg["initial_reserve"] for w_id, cfg in WEAPON_CONFIGS.items()
+            }
+            self._reserve_ammo = WEAPON_CONFIGS[self.current_weapon]['initial_reserve']
+            sess = getattr(self, "rpg_session", None)
+            if sess and getattr(sess, "profile", None):
+                for uid, item in self.rpg_session.profile.items.items():
+                    defn = self.rpg_session.catalog.get(item.definition_id)
+                    if defn and defn.kind == "weapon":
+                        self.item_states[uid] = {
+                            "ammo": WEAPON_CONFIGS[defn.weapon_key]["max_ammo"],
+                            "slide_locked": False,
+                        }
+                self.active_item_uid = None
             self.overcharge_rounds = 0
 
-        cur_st = self.weapon_states[self.current_weapon]
-        self.max_ammo = cur_st["max_ammo"]
-        self.ammo = cur_st["ammo"]
-        self._reserve_ammo = cur_st["reserve_ammo"]
-        self.slide_locked = (self.ammo <= 0)
-        cur_st["slide_locked"] = self.slide_locked
+        sess = getattr(self, "rpg_session", None)
+        if sess and getattr(sess, "profile", None):
+            self.sync_with_rpg_session()
+        else:
+            cur_st = self.weapon_states[self.current_weapon]
+            self.max_ammo = cur_st["max_ammo"]
+            self.ammo = cur_st["ammo"]
+            self._reserve_ammo = cur_st["reserve_ammo"]
+            self.slide_locked = (self.ammo <= 0)
+            cur_st["slide_locked"] = self.slide_locked
 
         self.is_reloading = False
         self.reload_timer = 0.0
@@ -2207,6 +2568,9 @@ class CombatSystem:
         offset = -0.09 * (progress / 0.5 if progress < 0.5 else (1.0 - progress) / 0.5)
         self.sg_pump_node.setPos(0, 0.28 + offset, -0.010)
 
+    def _update_tracer_lines(self, tr, tail, head):
+        return update_tracer_lines(self.world_root, tr, tail, head)
+
     def update(self, dt, px=0.0, py=0.0, is_moving=False, is_sprinting=False):
         """프레임별 트레이서, 탄피 물리, 화약 연기, 슬라이드 블로우백, 펌프액션, 반동/재장전, 밥빙, 탄약 습득 갱신"""
         game_inst = getattr(self.base, "game", None) or self.base
@@ -2215,7 +2579,10 @@ class CombatSystem:
         self.is_sprinting = is_sprinting
 
         # 풀오토 연사 지원 (AR 전용: 좌클릭 유지 시 연속 격발 / 권총 및 아킴보는 단발 클릭 격발)
-        if hasattr(self.base, 'mouseWatcherNode') and self.base.mouseWatcherNode and self.base.mouseWatcherNode.isButtonDown(MouseButton.one()):
+        fire_held = bool(getattr(self.base, 'mouseWatcherNode', None) and self.base.mouseWatcherNode.isButtonDown(MouseButton.one()))
+        if not fire_held:
+            self._suppress_fire_until_release = False
+        if fire_held:
             if self.current_weapon == "AR" and self.shoot_cooldown <= 0.0 and not self.is_reloading:
                 game_inst = getattr(self.base, 'game', None) or self.base
                 monsters = getattr(game_inst, 'monsters', [])
@@ -2231,131 +2598,9 @@ class CombatSystem:
             self.hipfire_bloom = max(0.0, self.hipfire_bloom - 0.12 * dt)
 
         # 실감나는 고시인성 비행 총알 궤적 물리 & 페이드 갱신
-        for tr in self.active_tracers[:]:
-            tr["life"] -= fx_dt
+        if self.active_tracers:
+            update_tracers(self.active_tracers, self.world_root, fx_dt)
 
-            # 착탄 섬광 타이머 처리
-            if tr.get("flash") and not tr["flash"].isEmpty():
-                tr["flash_timer"] = max(0.0, tr.get("flash_timer", 0.0) - fx_dt)
-                if tr["flash_timer"] <= 0.0:
-                    tr["flash"].removeNode()
-                    tr["flash"] = None
-                else:
-                    scale = max(0.1, tr["flash_timer"] / 0.09)
-                    tr["flash"].setScale(scale)
-
-            if tr.get("phase") == "fly":
-                move = tr["speed"] * fx_dt
-                tr["traveled"] += move
-                head_pos = tr["traveled"]
-                total_d = tr["total_dist"]
-
-                if head_pos >= total_d:
-                    # 착탄 도달 -> 착탄 섬광 및 빠른 페이드 아웃(Dissolve, 0.08s) 전환
-                    tr["phase"] = "fade"
-                    tr["fade_timer"] = 0.08
-                    tr["fade_duration"] = 0.08
-                    tr["life"] = max(tr["life"], 0.09)
-
-                    # 탄두 제거
-                    if tr.get("head_node") and not tr["head_node"].isEmpty():
-                        tr["head_node"].removeNode()
-                        tr["head_node"] = None
-
-                    # 착탄점 발광 섬광 생성
-                    flash_np = self.world_root.attachNewNode("impact_flash")
-                    flash_np.setPos(tr["end"])
-                    f_geom = make_cube_to(flash_np, 0.28, 0.28, 0.28, LColor(1.0, 0.95, 0.40, 0.95), 0, 0, 0, rot_h=45)
-                    f_geom.setLightOff()
-                    f_geom.setTransparency(TransparencyAttrib.MAlpha)
-                    f_geom.setDepthWrite(False)
-                    f_geom.setBin("transparent", 110)
-                    tr["flash"] = flash_np
-                    tr["flash_timer"] = 0.09
-
-                    trail_head = tr["end"]
-                    t_len = min(14.0, max(4.0, total_d * 0.85))
-                    trail_tail = tr["start"] + tr["dir"] * max(0.0, total_d - t_len)
-                else:
-                    trail_head = tr["start"] + tr["dir"] * head_pos
-                    t_len = min(14.0, max(3.5, head_pos * 0.85))
-                    tr["tracer_len"] = t_len
-                    trail_tail = tr["start"] + tr["dir"] * max(0.0, head_pos - t_len)
-
-                    # 3D 탄두 위치 및 방향 갱신
-                    if tr.get("head_node") and not tr["head_node"].isEmpty():
-                        tr["head_node"].setPos(trail_head)
-                        tr["head_node"].lookAt(trail_head + tr["dir"])
-
-                # 라인 갱신 (Core, Glow, Halo)
-                for key in ("core", "glow", "halo"):
-                    node = tr.get(key)
-                    if node and not node.isEmpty():
-                        node.removeNode()
-
-                th_c = tr.get("th_core", 4.5)
-                th_g = tr.get("th_glow", 9.5)
-                th_h = tr.get("th_halo", 18.0)
-                col_c = tr.get("c_core", (1.0, 1.0, 0.90, 0.98))
-                col_g = tr.get("c_glow", (1.0, 0.75, 0.15, 0.75))
-                col_h = tr.get("c_halo", (1.0, 0.35, 0.05, 0.35))
-
-                ls_c = LineSegs("tracer_core")
-                ls_c.setThickness(th_c)
-                ls_c.setColor(*col_c)
-                ls_c.moveTo(trail_tail)
-                ls_c.drawTo(trail_head)
-                tr["core"] = self.world_root.attachNewNode(ls_c.create())
-                tr["core"].setLightOff()
-                tr["core"].setTransparency(TransparencyAttrib.MAlpha)
-                tr["core"].setDepthWrite(False)
-                tr["core"].setBin("transparent", 102)
-                tr["np"] = tr["core"]
-
-                ls_g = LineSegs("tracer_glow")
-                ls_g.setThickness(th_g)
-                ls_g.setColor(*col_g)
-                mid_tail = trail_tail + (trail_head - trail_tail) * 0.15
-                ls_g.moveTo(mid_tail)
-                ls_g.drawTo(trail_head)
-                tr["glow"] = self.world_root.attachNewNode(ls_g.create())
-                tr["glow"].setLightOff()
-                tr["glow"].setTransparency(TransparencyAttrib.MAlpha)
-                tr["glow"].setDepthWrite(False)
-                tr["glow"].setBin("transparent", 101)
-
-                ls_h = LineSegs("tracer_halo")
-                ls_h.setThickness(th_h)
-                ls_h.setColor(*col_h)
-                mid_tail2 = trail_tail + (trail_head - trail_tail) * 0.35
-                ls_h.moveTo(mid_tail2)
-                ls_h.drawTo(trail_head)
-                tr["halo"] = self.world_root.attachNewNode(ls_h.create())
-                tr["halo"].setLightOff()
-                tr["halo"].setTransparency(TransparencyAttrib.MAlpha)
-                tr["halo"].setDepthWrite(False)
-                tr["halo"].setBin("transparent", 100)
-
-            elif tr.get("phase") == "fade":
-                tr["fade_timer"] = max(0.0, tr.get("fade_timer", 0.0) - fx_dt)
-                if tr["fade_timer"] <= 0.0:
-                    tr["life"] = 0.0
-                else:
-                    fade_alpha = max(0.0, min(1.0, tr["fade_timer"] / tr["fade_duration"]))
-                    # 지오메트리 파괴 및 재생성 없이 노드 컬러 스케일만 즉시 감쇠 (드로우콜 및 메모리 스파이크 방지)
-                    for key in ("core", "glow", "halo"):
-                        node = tr.get(key)
-                        if node and not node.isEmpty():
-                            node.setColorScale(1.0, 1.0, 1.0, fade_alpha)
-
-            if tr["life"] <= 0.0:
-                for key in ("core", "glow", "halo", "head_node", "flash", "np"):
-                    node = tr.get(key)
-                    if node and not node.isEmpty():
-                        node.removeNode()
-                self.active_tracers.remove(tr)
-
-        # 1. 피격 파티클 풀 갱신
         for p in self.hit_particle_pool:
             if not p["active"]:
                 continue
@@ -2487,7 +2732,7 @@ class CombatSystem:
             # 콤보 상태일 때 재장전 속도 1.35배 가속!
             reload_step = dt * 1.35 if self.combo_count >= 2 else dt
             self.reload_timer = max(0.0, self.reload_timer - reload_step)
-            cfg = WEAPON_CONFIGS[self.current_weapon]
+            cfg = self.get_current_weapon_config()
             total_dur = cfg.get("reload_time", 1.30)
             p = max(0.0, min(1.0, 1.0 - (self.reload_timer / total_dur)))
 
@@ -2601,14 +2846,23 @@ class CombatSystem:
                     self.sg_recoil_node.setR(0)
 
                 # 탄약 충전
+                cfg = self.get_current_weapon_config()
+                max_cap = cfg["max_ammo"]
                 wstate = self.weapon_states[self.current_weapon]
-                needed = wstate["max_ammo"] - wstate["ammo"]
-                transferred = min(needed, wstate["reserve_ammo"])
-                wstate["ammo"] += transferred
-                wstate["reserve_ammo"] -= transferred
+                needed = max_cap - self.ammo
+                current_reserve = self._reserve_ammo
+                transferred = min(needed, current_reserve)
+                self.ammo += transferred
+                self._reserve_ammo = current_reserve - transferred
+                wstate["ammo"] = self.ammo
+                wstate["reserve_ammo"] = self._reserve_ammo
                 wstate["slide_locked"] = False
-                self.ammo = wstate["ammo"]
-                self._reserve_ammo = wstate["reserve_ammo"]
+                self.reserve_ammo_pools[self.current_weapon] = self._reserve_ammo
+                if self.active_item_uid:
+                    self.item_states[self.active_item_uid] = {
+                        "ammo": self.ammo,
+                        "slide_locked": False,
+                    }
                 self.update_ammo_ui()
                 self.ui_mgr.show_hit_marker(f"재장전 완료! (+{transferred}발 장전됨)", (0.35, 1.0, 0.5, 1.0))
                 self.hit_marker_timer = 1.5

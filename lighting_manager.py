@@ -1,5 +1,5 @@
 import math
-from panda3d.core import Fog, AmbientLight
+from panda3d.core import Fog, AmbientLight, Mat4
 
 from constants import CHUNK_SIZE, FOG_COLOR
 
@@ -37,6 +37,7 @@ class LightingManager:
     def reset_cull_cache(self):
         """맵 재생성/초기화 시 컬링 캐시 초기화"""
         self.last_cull_pos = None
+        self._cull_signature = None
         self.last_light_cull_pos = None
         self.light_cull_timer = 0.0
         self.game.last_cull_pos = None
@@ -44,13 +45,20 @@ class LightingManager:
         self.game.light_cull_timer = 0.0
 
     def cull_chunks_to_view(self, force=False):
-        """이동 거리 임계치(2.0m) 기반 청크 가시거리 컬링 최적화 (안개 한계선 48m 정합)"""
+        """시야·렌즈·청크 변경 때만 청크 가시성을 다시 계산한다."""
         if getattr(self.game, 'is_test_mode', False):
             return
         px, py = self.game.camera.getX(), self.game.camera.getY()
-        if not force and self.last_cull_pos is not None:
-            if math.hypot(px - self.last_cull_pos[0], py - self.last_cull_pos[1]) < 2.0:
-                return
+        camera_matrix = self.game.cam.getMat(self.game.world_root)
+        projection = self.game.camLens.getProjectionMat()
+        signature = (Mat4(camera_matrix), Mat4(projection), px, py,
+                     tuple((key, id(chunk)) for key, chunk in self.game.chunks.items()))
+        if not force and signature == getattr(self, '_cull_signature', None):
+            return
+        # Camera frustum in the same parent space as the chunk bounds.
+        # Recheck each frame: rotation, ADS/FOV and window resize all change it.
+        frustum = self.game.camLens.makeBounds()
+        frustum.xform(camera_matrix)
 
         self.last_cull_pos = (px, py)
         self.game.last_cull_pos = (px, py)
@@ -63,13 +71,15 @@ class LightingManager:
             ccx = (cx + 0.5) * CHUNK_SIZE
             ccy = (cy + 0.5) * CHUNK_SIZE
             d_sq = (ccx - px) ** 2 + (ccy - py) ** 2
-            is_visible = (d_sq <= max_dist_sq)
+            is_visible = (d_sq <= max_dist_sq and
+                          bool(frustum.contains(chunk.node.getBounds())))
             chunk.set_visible(is_visible)
             if is_visible:
                 visible_count += 1
 
         self.game.rendered_chunk_count = visible_count
         self.game.total_chunk_count = len(self.game.chunks)
+        self._cull_signature = signature
 
     def update_dynamic_lights(self, px, py, dt):
         """

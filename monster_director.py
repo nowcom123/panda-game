@@ -12,9 +12,12 @@ import random
 from constants import CELL_SIZE, PLAYER_EYE_HEIGHT
 from world_gen import check_line_of_sight, cell_has_pillar
 from navigation import pursuit_target
+from enemy_approach import approach_goal
 from collision import get_nearby_colliders, resolve_collision
 from interactive_objects import maybe_drop_monster_loot
+from rpg.loot import roll_loot
 from projectiles import GroundShockwave
+from boss_scaling import boss_damage, movement_multiplier
 from elevation import get_pursuit_goal, get_floor_height
 from monster import (
     LongBlackSerpent, TallSkeletonMonster,
@@ -29,6 +32,7 @@ class MonsterDirector:
 
     def __init__(self, game):
         self.game = game
+        self._flank_side = 1
         self.gate_wave_mgr = GateWaveManager(game)
 
     def update_monsters(self, dt: float, px: float, py: float, raw_dt: float = None):
@@ -147,6 +151,17 @@ class MonsterDirector:
                         dp = maybe_drop_monster_loot(g.world_root, m.pos.x + ox, m.pos.y + oy, m, g.audio_mgr)
                         if dp:
                             g.item_drops.append(dp)
+                    if (
+                        not getattr(g, 'is_test_mode', False)
+                        and getattr(g, 'loot_world', None)
+                        and not getattr(m, '_rpg_loot_dropped', False)
+                    ):
+                        m._rpg_loot_dropped = True
+                        cat = getattr(getattr(g, 'rpg_session', None), 'catalog', None) or getattr(g, 'rpg_catalog', None)
+                        if cat:
+                            stg = getattr(g, 'current_stage', 1)
+                            for r_item in roll_loot(cat, enemy_tier="boss", stage=stg):
+                                g.loot_world.spawn_loot((m.pos.x, m.pos.y, get_floor_height(m.pos.x, m.pos.y, m.pos.z)[0] + .3), r_item)
 
                 # 사망한 몬스터: 시체로 전환하고 활성 몬스터 목록에서 제외
                 if not getattr(m, 'is_corpse', False) and hasattr(m, 'turn_into_corpse'):
@@ -159,6 +174,19 @@ class MonsterDirector:
                         drop = maybe_drop_monster_loot(g.world_root, m.pos.x, m.pos.y, m, g.audio_mgr)
                         if drop:
                             g.item_drops.append(drop)
+                        if (
+                            not getattr(g, 'is_test_mode', False)
+                            and getattr(g, 'loot_world', None)
+                            and not getattr(m, '_rpg_loot_dropped', False)
+                        ):
+                            m._rpg_loot_dropped = True
+                            cat = getattr(getattr(g, 'rpg_session', None), 'catalog', None) or getattr(g, 'rpg_catalog', None)
+                            if cat:
+                                is_elite = getattr(m, 'is_elite', False)
+                                tier = "elite" if is_elite else "normal"
+                                stg = getattr(g, 'current_stage', 1)
+                                for r_item in roll_loot(cat, enemy_tier=tier, stage=stg):
+                                    g.loot_world.spawn_loot((m.pos.x, m.pos.y, get_floor_height(m.pos.x, m.pos.y, m.pos.z)[0] + .3), r_item)
                 g.monsters.remove(m)
                 g.corpses.append(m)
                 continue
@@ -174,13 +202,24 @@ class MonsterDirector:
                 m._tick_id = id(m) % 6
                 m._accum_dt = 0.0
 
-            # CPU 몬스터 틱 인터리빙 (거리 기반 갱신 주기 분산 - 화염/전기 원소 효과 발동 중에는 100% 실시간 갱신)
+            # 새 타이머/독/반격은 애니메이션 LOD와 분리하여 매 논리 틱 world_dt로 갱신
+            if hasattr(m, 'update_reactions'):
+                m.update_reactions(dt, g, px, py, pz)
+                if g.player.hp <= 0:
+                    g.trigger_game_over(killer=m, reason='killed')
+                    return True, closest_dist
+
+            # CPU 몬스터 틱 인터리빙 (거리 기반 갱신 주기 분산 - 화염/전기 원소/반응 발동 중에는 100% 실시간 갱신)
             is_critical = (
                 dist <= 14.0 or isinstance(m, CableOverlordBoss) or
                 getattr(m, 'is_casting', False) or getattr(m, 'is_slamming', False) or
                 getattr(m, 'is_striking', False) or getattr(m, 'is_lashing', False) or
+                getattr(m, 'is_guarding', False) or getattr(m, 'counter_pending', False) or getattr(m, 'is_dodging', False) or
                 getattr(m, 'stun_timer', 0.0) > 0.0 or getattr(m, 'burn_timer', 0.0) > 0.0 or getattr(m, 'shock_timer', 0.0) > 0.0
             )
+            # Pose-only LOD is independent of the existing AI tick schedule.
+            m._animation_interval = (0.0 if is_critical or dist <= 26.0
+                                     else .05 if dist <= 40.0 else .10)
             if not is_critical:
                 skip_frame = False
                 if dist <= 26.0:
@@ -197,9 +236,15 @@ class MonsterDirector:
             eff_dt = dt + getattr(m, '_accum_dt', 0.0)
             m._accum_dt = 0.0
 
-            # 0. 파수견 회피 기동 중 벽체 충돌 해결
+            # 0. 회피 및 방어/반격 중인 몬스터: 일반 공격/캐스팅 중첩 차단 및 모션 갱신
             if getattr(m, 'is_dodging', False):
-                m.update(eff_dt, is_moving=False, chunks=g.chunks)
+                if isinstance(m, SkeletalDobermanHellhound):
+                    m.update(eff_dt, is_moving=False, chunks=g.chunks)
+                else:
+                    m.update(eff_dt, is_moving=False)
+                continue
+            if getattr(m, 'is_guarding', False) or getattr(m, 'counter_pending', False):
+                m.update(eff_dt, is_moving=False)
                 continue
 
             # 1. 일반 근접 공격 판정 (해골, 오크, 파수견) - 3D 수직 거리(dist_z <= 2.2m) 확인
@@ -286,7 +331,7 @@ class MonsterDirector:
                     # 구버전 모의 객체 단위 테스트 호환용 레거시 분기
                     if m.hp <= m.max_hp * 0.5 and m.phase == 1:
                         m.phase = 2
-                        m.speed = 6.2
+                        m.speed = 6.2 * getattr(m, 'movement_scale', 1.0)
                         if hasattr(g.ui_mgr, 'show_stage_banner'):
                             g.ui_mgr.show_stage_banner(
                                 "[ ! 경고: 심연의 지배자 2페이즈 폭주 돌입 ! ]\n심연의 코어가 적색으로 과부하되며 이동 속도 및 공격 빈도가 급증합니다!",
@@ -303,7 +348,7 @@ class MonsterDirector:
                         m.is_lashing = True
                         m.lash_timer = 0.65
                         m.cable_lash_cooldown = 1.6 if m.phase == 2 else 2.5
-                        is_dead = g.player.take_damage(38 if m.phase == 2 else 28, source_pos=(mx, my))
+                        is_dead = g.player.take_damage(boss_damage(m, 38 if m.phase == 2 else 28), source_pos=(mx, my))
                         if hasattr(g, 'audio_mgr') and g.audio_mgr:
                             g.audio_mgr.play_monster_3d("serp_slither", m.node, volume_scale=1.4)
                         if hasattr(g.ui_mgr, 'show_hit_marker'):
@@ -322,7 +367,7 @@ class MonsterDirector:
                         if dist <= 11.0:
                             player_floor, _ = get_floor_height(px, py, pz - PLAYER_EYE_HEIGHT)
                             if player_floor < 1.2:
-                                is_dead = g.player.take_damage(20, source_pos=(mx, my))
+                                is_dead = g.player.take_damage(boss_damage(m, 20), source_pos=(mx, my))
                                 if is_dead:
                                     g.trigger_game_over(killer=m, reason="killed")
                                     return True, closest_dist
@@ -339,7 +384,7 @@ class MonsterDirector:
                         for spread_deg in (-14, 0, 14):
                             base_rad = math.atan2(py - my, px - mx) + math.radians(spread_deg)
                             target_p = (mx + math.cos(base_rad) * 22.0, my + math.sin(base_rad) * 22.0, pz)
-                            g.spawn_fireball(start_pos, target_p)
+                            g.spawn_fireball(start_pos, target_p, damage_scale=getattr(m, 'damage_scale', 1.0))
                         if hasattr(g.ui_mgr, 'show_hit_marker'):
                             g.ui_mgr.show_hit_marker("보스 고압 와이어 다트 사격!", (0.3, 0.9, 1.0, 1.0))
 
@@ -389,6 +434,22 @@ class MonsterDirector:
             stuck_timer = getattr(m, '_stuck_timer', 0.0)
             interval = 0.25 if dist_gate <= 35.0 else 0.40
             goal_x, goal_y = get_pursuit_goal(m.pos, g.camera.getPos())
+            role = ('ranged' if isinstance(m, AlluringAshWitch) else
+                    'flanker' if isinstance(m, SkeletalDobermanHellhound) else 'pressure')
+            if role == 'flanker' and not hasattr(m, '_approach_side'):
+                m._approach_side = self._flank_side
+                self._flank_side *= -1
+            if role != 'pressure':
+                (goal_x, goal_y), holding = approach_goal(
+                    m, role, g.chunks, (goal_x, goal_y), eff_dt, has_los)
+                if getattr(m, '_approach_warning', False):
+                    m._approach_warning = False
+                    if getattr(g, 'audio_mgr', None):
+                        g.audio_mgr.play_hound_growl(m.node)
+                if holding:
+                    m.node.setH(math.degrees(math.atan2(-(px-mx), py-my)))
+                    m.update(eff_dt, is_moving=False)
+                    continue
             tx, ty = pursuit_target(m, g.chunks, (goal_x, goal_y), eff_dt, interval)
 
             dx = tx - mx
@@ -396,7 +457,7 @@ class MonsterDirector:
             d = math.hypot(dx, dy)
             if d > 0.01:
                 ndx, ndy = dx / d, dy / d
-                speed = getattr(m, 'speed', 8.5) * stage_mult
+                speed = getattr(m, 'speed', 8.5) * movement_multiplier(m, stage_mult)
                 col_radius = getattr(m, 'col_radius', 0.40)
                 step_dist = min(d, speed * eff_dt)
 

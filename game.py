@@ -73,11 +73,19 @@ from test_range import TestRangeManager
 from monster_director import MonsterDirector
 from escape_portal import EscapePortalManager
 from lighting_manager import LightingManager
+from rpg import load_catalog, SaveStore, get_default_save_path, RPGSession, CharacterManager
+from rpg.quick_use import QuickUseManager
 
 
 class LiminalInfiniteLoop(ShowBase):
     def __init__(self, **kwargs):
+        # Extract RPG kwargs before ShowBase.__init__ to prevent passing them to Panda3D ShowBase
+        save_path = kwargs.pop("save_path", None)
+        save_store = kwargs.pop("save_store", None)
         super().__init__(**kwargs)
+
+        self._init_save_path = save_path
+        self._init_save_store = save_store
 
         # PBR 렌더링 최적화
         if hasattr(self, 'win') and self.win is not None:
@@ -168,9 +176,60 @@ class LiminalInfiniteLoop(ShowBase):
         )
         self.player.world_root = self.world_root
         self.player.on_level_up = self._on_player_level_up
+
+        # RPG 영구 프로필 및 저장소 초기화
+        self.character_mgr = None
+        self.single_character_mode = False
+        try:
+            catalog = load_catalog()
+            self.rpg_catalog = catalog
+            if getattr(self, "_init_save_store", None) is not None:
+                store = self._init_save_store
+                self.single_character_mode = True
+            elif getattr(self, "_init_save_path", None) is not None:
+                store = SaveStore(self._init_save_path, catalog)
+                self.single_character_mode = True
+            else:
+                root_dir = get_default_save_path().parent
+                self.character_mgr = CharacterManager(root_dir, catalog)
+                char_list = self.character_mgr.load_character_list()
+                if char_list.active_character_id:
+                    store = self.character_mgr.get_active_save_store()
+                else:
+                    store = None
+
+            if store is not None:
+                self.rpg_session = RPGSession(store, catalog)
+                self.rpg_session.initialize(grant_starters=False)
+                if self.rpg_session.is_valid:
+                    self.combat.set_rpg_session(self.rpg_session)
+                    if hasattr(self.ui_mgr, "equipment_ui") and self.ui_mgr.equipment_ui:
+                        self.ui_mgr.equipment_ui.session = self.rpg_session
+                        self.ui_mgr.equipment_ui.combat = self.combat
+            else:
+                self.rpg_session = None
+        except Exception as err:
+            self.rpg_session = None
+            self.rpg_init_error = str(err)
+
+        # RPG Run Loot & World Loot Manager 초기화
+        from rpg.run_loot import RunLootBag
+        from rpg.loot_world import LootWorldManager
+        self.rpg_catalog = getattr(self.rpg_session, 'catalog', None) or load_catalog()
+        self.run_loot_bag = RunLootBag()
+        self.loot_world = LootWorldManager(
+            getattr(self, 'render', None),
+            getattr(self, 'world_root', None),
+            self.rpg_catalog,
+            self.run_loot_bag,
+        )
+        if hasattr(self, 'ui_mgr') and hasattr(self.ui_mgr, "set_run_loot_bag"):
+            self.ui_mgr.set_run_loot_bag(self.run_loot_bag)
+
         self.test_range = TestRangeManager(self)
         self.monster_director = MonsterDirector(self)
         self.portal_mgr = EscapePortalManager(self)
+        self.quick_use_mgr = QuickUseManager(self)
         self.player.setup_input(
             on_shoot=self.shoot_pistol,
             on_reload=self.reload_pistol,
@@ -181,11 +240,13 @@ class LiminalInfiniteLoop(ShowBase):
             on_quick_use=self.use_quick_slot,
             on_escape=self.handle_escape,
             on_interact=self.handle_interaction,
-            on_weapon_next=self.combat.next_weapon,
-            on_weapon_prev=self.combat.prev_weapon,
+            on_weapon_next=self.handle_weapon_next,
+            on_weapon_prev=self.handle_weapon_prev,
             on_weapon_select=self.combat.switch_weapon,
             on_perk_modal=self.open_perk_modal,
-            on_tab=self.on_tab_pressed
+            on_tab=self.on_tab_pressed,
+            on_quick_select_down=self.quick_use_mgr.on_key_down,
+            on_quick_select_up=self.quick_use_mgr.on_key_up
         )
 
         # 7. 게임 상태 및 5분(300초) 타이머 설정
@@ -267,11 +328,13 @@ class LiminalInfiniteLoop(ShowBase):
         return self.lighting_mgr.setup_lighting()
 
     def load_assets(self):
+        # Retained for the Chunk constructor's compatibility argument;
+        # indoor chunks do not use a sky texture.
+        self.sky_tex = None
         try:
             self.wall_tex = self.loader.loadTexture("wall.jpg")
             self.floor_tex = self.loader.loadTexture("floor.jpg")
-            self.sky_tex = self.loader.loadTexture("sky.jpg")
-            for t in (self.wall_tex, self.floor_tex, self.sky_tex):
+            for t in (self.wall_tex, self.floor_tex):
                 if t:
                     t.setMagfilter(SamplerState.FT_linear_mipmap_linear)
                     t.setMinfilter(SamplerState.FT_linear_mipmap_linear)
@@ -290,6 +353,20 @@ class LiminalInfiniteLoop(ShowBase):
             self.audio_mgr.play_bullet_time(is_start=True)
         if hasattr(self, 'ui_mgr') and self.ui_mgr:
             self.ui_mgr.set_bullet_time_hud(True, self.bullet_time_timer)
+
+    def handle_weapon_next(self):
+        """마우스 휠 / Q 무기 교체 (QUICK_USE 상태에서는 소모품 선택 순환)"""
+        if self.game_state == "QUICK_USE" or (hasattr(self, 'quick_use_mgr') and self.quick_use_mgr.is_open):
+            self.quick_use_mgr.select_next()
+        else:
+            self.combat.next_weapon()
+
+    def handle_weapon_prev(self):
+        """마우스 휠 위로 무기 교체 (QUICK_USE 상태에서는 소모품 선택 역순환)"""
+        if self.game_state == "QUICK_USE" or (hasattr(self, 'quick_use_mgr') and self.quick_use_mgr.is_open):
+            self.quick_use_mgr.select_prev()
+        else:
+            self.combat.prev_weapon()
 
     def shoot_pistol(self):
         self.combat.shoot(self.monsters, self.player, self.game_state, hazard_barrels=self.hazard_barrels)
@@ -420,6 +497,15 @@ class LiminalInfiniteLoop(ShowBase):
             self._on_player_level_up()
 
     def handle_escape(self):
+        if self.game_state == "QUICK_USE" or (hasattr(self, 'quick_use_mgr') and self.quick_use_mgr.is_open):
+            self.quick_use_mgr.cancel()
+            return
+        if getattr(self, '_extraction_pending', False):
+            return
+        if self.game_state == 'INTRO':
+            if getattr(self, 'ui_mgr', None) and getattr(self.ui_mgr, 'is_char_delete_modal_open', lambda: False)() is True:
+                self.ui_mgr.hide_character_delete_modal()
+            return
         """[ESC] 키 입력 처리: 인벤토리/퍽 모달 열려있으면 닫기, 일시정지/설정 메뉴 토글, 테스트 모드면 인트로 복귀"""
         if self.game_state == "INVENTORY":
             self.close_inventory()
@@ -507,6 +593,16 @@ class LiminalInfiniteLoop(ShowBase):
 
         if self.game_state != "PLAYING":
             return
+
+        # RPG 세션 활성화 시 1번/2번 키는 주/보조 무기 슬롯 전환으로 동작
+        if getattr(self, "rpg_session", None) and self.rpg_session.is_valid and not self.is_test_mode:
+            if slot_num == 1:
+                self.combat.switch_to_slot("primary")
+                return
+            elif slot_num == 2:
+                self.combat.switch_to_slot("secondary")
+                return
+
         success, msg = self.player.use_quick_slot(slot_num, self.combat, self)
         if success:
             self.audio_mgr.play_item_use()
@@ -524,16 +620,16 @@ class LiminalInfiniteLoop(ShowBase):
         sys.exit(0)
 
 
-    def spawn_fireball(self, start_pos, target_pos):
+    def spawn_fireball(self, start_pos, target_pos, damage_scale=1.0):
         """파이어볼 오브젝트 풀에서 가용 인스턴스 활성화 (동적 할당 0%)"""
         for fb in self.fireball_pool:
             if not fb.is_active:
-                fb.activate(start_pos, target_pos)
+                fb.activate(start_pos, target_pos, damage_scale=damage_scale)
                 if fb not in self.fireballs:
                     self.fireballs.append(fb)
                 return fb
         fb = self.fireball_pool[0]
-        fb.activate(start_pos, target_pos)
+        fb.activate(start_pos, target_pos, damage_scale=damage_scale)
         if fb not in self.fireballs:
             self.fireballs.append(fb)
         return fb
@@ -558,6 +654,12 @@ class LiminalInfiniteLoop(ShowBase):
             self.pbr_pipeline.set_bullet_time(0.0)
         self.audio_mgr.stop_bullet_time()
         self.ui_mgr.hide_blackout_warning()
+        if hasattr(self, 'quick_use_mgr') and self.quick_use_mgr:
+            self.quick_use_mgr.cancel()
+        if hasattr(self.player, 'poison_timer'):
+            self.player.poison_timer = 0.0
+        if hasattr(self, 'ui_mgr') and self.ui_mgr:
+            self.ui_mgr.update_poison_hud(0.0)
         if hasattr(self.ui_mgr, 'set_bullet_time_hud'):
             self.ui_mgr.set_bullet_time_hud(False)
 
@@ -587,10 +689,141 @@ class LiminalInfiniteLoop(ShowBase):
         self.ui_mgr.show_intro()
         self.audio_mgr.set_bgm_mode("INTRO")
 
+    def switch_to_character(self, char_id: str) -> bool:
+        """Switch active character in TITLE state only."""
+        if self.game_state != "INTRO":
+            return False
+        if getattr(self, '_extraction_pending', False):
+            return False
+        if not self.character_mgr:
+            return False
+        try:
+            store = self.character_mgr.get_existing_character_store(char_id)
+            candidate = RPGSession(store, self.rpg_catalog)
+            if not candidate.initialize(grant_starters=False):
+                self.character_error = candidate.load_error
+                return False
+            self.character_mgr.select_character(char_id)
+            self.rpg_session = candidate
+            self.combat.rpg_session = candidate
+            self.combat.item_states.clear()
+            self.combat.active_item_uid = None
+            self.combat.active_slot = "primary"
+            self.combat.reset_state(current_stage=1, keep_ammo=False)
+            self.combat.set_rpg_session(candidate)
+            if hasattr(self.ui_mgr, "equipment_ui") and self.ui_mgr.equipment_ui:
+                panel = self.ui_mgr.equipment_ui
+                panel.session = candidate
+                panel.combat = self.combat
+                panel.selected_uid = None
+                panel.current_page = 0
+            self.character_error = None
+            self.rpg_init_error = None
+            if hasattr(self.ui_mgr, "update_active_explorer_display"):
+                self.ui_mgr.update_active_explorer_display()
+            return True
+        except Exception as err:
+            self.character_error = str(err)
+            return False
+
+    def create_and_switch_character(self, name: str) -> bool:
+        """Create new character and select it in TITLE state."""
+        if self.game_state != "INTRO":
+            return False
+        if getattr(self, '_extraction_pending', False):
+            return False
+        if not self.character_mgr:
+            return False
+        try:
+            summary = self.character_mgr.create_character(name)
+            return self.switch_to_character(summary.id)
+        except Exception as err:
+            self.character_error = str(err)
+            return False
+
+    def delete_character(self, char_id: str, confirmation_name: str) -> bool:
+        """Delete only from the title screen, and detach an active deleted profile."""
+        if (self.game_state != 'INTRO' or getattr(self, '_extraction_pending', False)
+                or getattr(self, 'is_test_mode', False) or not self.character_mgr):
+            self.character_error = '캐릭터 삭제는 타이틀 화면에서만 가능합니다.'
+            return False
+        try:
+            was_active = self.character_mgr.delete_character(
+                char_id, confirmation_name=confirmation_name)
+        except Exception as err:
+            self.character_error = str(err)
+            return False
+        if was_active:
+            self.rpg_session = None
+            self._saved_rpg_session = None
+            self.combat.rpg_session = None
+            self.combat.active_item_uid = None
+            self.combat.item_states.clear()
+            panel = getattr(self.ui_mgr, 'equipment_ui', None)
+            if panel:
+                panel.session = None
+                panel.selected_uid = None
+                panel.current_page = 0
+            ws_panel = getattr(self.ui_mgr, 'workshop_ui', None)
+            if ws_panel:
+                ws_panel.session = None
+                ws_panel.selected_uid = None
+                ws_panel.current_page = 0
+            self.rpg_init_error = None
+        self.character_error = None
+        if hasattr(self.ui_mgr, 'update_active_explorer_display'):
+            self.ui_mgr.update_active_explorer_display()
+        return True
+
+    def upgrade_weapon(self, quote):
+        """Workshop entry point: paused inventory, secured profile, normal mode."""
+        if (self.game_state != 'INVENTORY' or getattr(self, 'is_test_mode', False)
+                or getattr(self, '_extraction_pending', False)):
+            return False, '일반 탐험의 인벤토리에서만 강화할 수 있습니다.'
+        session = getattr(self, 'rpg_session', None)
+        if session is None or self.combat.rpg_session is not session:
+            return False, '활성 캐릭터 장비를 불러올 수 없습니다.'
+        return session.upgrade_weapon(quote)
+
     def start_game(self):
+        if getattr(self, '_extraction_pending', False):
+            return
+        # If character manager is active, prompt selection if no character exists
+        if getattr(self, 'character_mgr', None) and not getattr(self, 'single_character_mode', False):
+            if not self.character_mgr.character_list or not self.character_mgr.character_list.active_character_id:
+                if hasattr(self.ui_mgr, 'show_character_select_modal'):
+                    self.ui_mgr.show_character_select_modal()
+                return
+            if not self.rpg_session:
+                store = self.character_mgr.get_active_save_store()
+                if store:
+                    self.rpg_session = RPGSession(store, self.rpg_catalog)
+                    self.rpg_session.initialize(grant_starters=True)
+                    self.combat.set_rpg_session(self.rpg_session)
         """START 버튼 클릭 시 1인칭 던전 크롤러 게임플레이 시작"""
+        if getattr(self, 'rpg_init_error', None):
+            self.ui_mgr.show_hit_marker("저장 시스템 초기화 실패. 게임을 다시 실행해 주세요.", (1, .3, .3, 1))
+            return
+        session = getattr(self, 'rpg_session', None)
+        if session and session.is_valid and session._should_grant_starter_loadout():
+            session.initialize()
+        if getattr(self, 'rpg_session', None) and self.rpg_session.is_valid:
+            self.combat.rpg_session = self.rpg_session
         if getattr(self, 'is_test_mode', False):
             self.test_range.cleanup_test_room()
+
+        # RPG 저장 상태 무결성 검증 (손상 또는 미지원 버전 시 일반 게임 시작 차단)
+        if getattr(self, "rpg_session", None) is not None:
+            if not self.rpg_session.is_valid:
+                err_msg = self.rpg_session.load_error or "저장 파일 손상"
+                if hasattr(self, 'ui_mgr') and self.ui_mgr:
+                    self.ui_mgr.show_hit_marker(f"[시작 불가] {err_msg}", (1.0, 0.3, 0.3, 1.0))
+                return
+            if self.rpg_session.load_warnings:
+                for w in self.rpg_session.load_warnings:
+                    if hasattr(self, 'ui_mgr') and self.ui_mgr:
+                        self.ui_mgr.show_hit_marker(f"[복구 알림] {w}", (1.0, 0.85, 0.2, 1.0))
+            self.combat.sync_with_rpg_session()
 
         self.game_state = "PLAYING"
         self.restart_game()
@@ -602,7 +835,13 @@ class LiminalInfiniteLoop(ShowBase):
         self.audio_mgr.set_bgm_mode("PLAYING")
 
     def start_test_mode(self):
+        if getattr(self, '_extraction_pending', False):
+            return
         """테스트 모드: 넓은 대형 시험장 룸, 5종 전 몬스터가 정지 상태로 대기 (자유 관찰 및 사격 테스트)"""
+        # 테스트 모드는 프로필을 수정하지 않고 기존 4종 무기를 자유롭게 시험
+        if hasattr(self, 'combat') and self.combat:
+            self._saved_rpg_session = getattr(self.combat, 'rpg_session', None)
+            self.combat.rpg_session = None
         if hasattr(self, 'monster_director') and hasattr(self.monster_director, 'gate_wave_mgr'):
             self.monster_director.gate_wave_mgr.reset()
         if hasattr(self, 'ui_mgr') and self.ui_mgr and hasattr(self.ui_mgr, 'update_gate_wave_status'):
@@ -645,6 +884,8 @@ class LiminalInfiniteLoop(ShowBase):
             y = ey + 4.0
 
         self.boss = CableOverlordBoss(self.world_root, x, y)
+        from boss_scaling import apply_boss_scaling
+        apply_boss_scaling(self.boss, getattr(self, 'current_stage', 3))
         self.monsters.append(self.boss)
         self.boss_spawned = True
         self.boss_defeat_handled = False
@@ -663,6 +904,15 @@ class LiminalInfiniteLoop(ShowBase):
         return self.boss
 
     def return_to_intro(self):
+        if getattr(self, '_extraction_pending', False):
+            return
+        bag = getattr(self, 'run_loot_bag', None)
+        if bag and not bag.is_extracted:
+            bag.abandon()
+        if hasattr(self, '_saved_rpg_session') and self._saved_rpg_session:
+            if hasattr(self, 'combat') and self.combat:
+                self.combat.rpg_session = self._saved_rpg_session
+            self._saved_rpg_session = None
         self.show_intro_scene()
 
     def get_gate_corridor_candidates(self, min_dist=6.0, max_dist=32.0):
@@ -682,10 +932,26 @@ class LiminalInfiniteLoop(ShowBase):
 
 
     def handle_interaction(self):
-        """[E] 키 상호작용: 접근한 전술 보급 상자 개봉 또는 드랍 아이템 습득"""
+        """[E] 키 상호작용: 최단거리 대상(RPG 전리품 / 전술 상자 / 소모품 드랍) 단 1개만 처리"""
         if self.game_state != "PLAYING" or self.game_over or self.game_won:
             return
-        if self.nearby_crate and not self.nearby_crate.is_opened:
+
+        if getattr(self, 'nearby_rpg_loot', None) and not self.nearby_rpg_loot.is_collected:
+            loot_item = self.nearby_rpg_loot
+            success, msg = self.loot_world.try_pickup(loot_item, session=self.rpg_session)
+            if success:
+                if self.audio_mgr and hasattr(self.audio_mgr, 'play_ammo_pickup'):
+                    self.audio_mgr.play_ammo_pickup()
+                self.ui_mgr.show_hit_marker(f"[ 전리품 획득 ] {loot_item.display_name}", (1.0, 0.9, 0.3, 1.0))
+                if hasattr(self.ui_mgr, "update_run_loot_hud"):
+                    self.ui_mgr.update_run_loot_hud(self.run_loot_bag.count, self.run_loot_bag.capacity)
+                if hasattr(self.ui_mgr, "run_loot_ui"):
+                    self.ui_mgr.run_loot_ui.refresh()
+            else:
+                self.ui_mgr.show_hit_marker(f"[ 획득 불가 ] {msg}", (1.0, 0.3, 0.3, 1.0))
+            self.ui_mgr.hide_interact_prompt()
+            self.nearby_rpg_loot = None
+        elif self.nearby_crate and not self.nearby_crate.is_opened:
             self.nearby_crate.open(self.player, self.combat, self.ui_mgr)
             self.ui_mgr.hide_interact_prompt()
             self.nearby_crate = None
@@ -720,16 +986,31 @@ class LiminalInfiniteLoop(ShowBase):
             drop.destroy()
         self.item_drops.clear()
         self.nearby_item_drop = None
+        if hasattr(self, 'loot_world') and self.loot_world:
+            self.loot_world.clear_world_drops()
+        self.nearby_rpg_loot = None
         for exp in self.explosions:
             exp.destroy()
         self.explosions.clear()
 
     def restart_game(self):
+        if getattr(self, '_extraction_pending', False):
+            return
         """던전 게임 초기화 (체력, 몬스터 군단, 5분 타이머, 탈출구)"""
         if getattr(self, 'is_test_mode', False):
             if hasattr(self, 'test_range') and self.test_range:
                 self.test_range.cleanup_test_room()
             self.is_test_mode = False
+        from rpg.run_loot import RunLootBag
+        self.run_loot_bag = RunLootBag()
+        if hasattr(self, 'loot_world') and self.loot_world:
+            self.loot_world.run_loot_bag = self.run_loot_bag
+            self.loot_world.clear_world_drops()
+        if hasattr(self, 'ui_mgr') and self.ui_mgr:
+            if hasattr(self.ui_mgr, "set_run_loot_bag"):
+                self.ui_mgr.set_run_loot_bag(self.run_loot_bag)
+            if hasattr(self.ui_mgr, "update_run_loot_hud"):
+                self.ui_mgr.update_run_loot_hud(0, self.run_loot_bag.capacity)
         self.clear_projectiles()
         gc.collect(1) # 유휴 타이밍에 메모리 수거로 인게임 프레임 드랍 차단
         self.game_over = False
@@ -747,6 +1028,12 @@ class LiminalInfiniteLoop(ShowBase):
         self.audio_mgr.stop_bullet_time()
         if hasattr(self.ui_mgr, 'set_bullet_time_hud'):
             self.ui_mgr.set_bullet_time_hud(False)
+        if hasattr(self, 'quick_use_mgr') and self.quick_use_mgr:
+            self.quick_use_mgr.cancel()
+        if hasattr(self.player, 'poison_timer'):
+            self.player.poison_timer = 0.0
+        if hasattr(self, 'ui_mgr') and self.ui_mgr:
+            self.ui_mgr.update_poison_hud(0.0)
 
         # 플레이어 위치 및 스탯 초기화
         spawn_x = 1.5 * CELL_SIZE
@@ -822,6 +1109,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.ui_mgr.update_hp_exp(self.player.hp, self.player.max_hp, self.player.exp, self.player.exp_to_next, self.player.level)
 
     def advance_to_next_stage(self):
+        if getattr(self, '_extraction_pending', False):
+            return
         """특성 획득 후 다음 스테이지로 진입"""
         self.clear_projectiles()
         gc.collect(1) # 스테이지 전환 시 가비지 수거로 전투 중 무스터터링 보장
@@ -844,6 +1133,13 @@ class LiminalInfiniteLoop(ShowBase):
         self.blackout_triggered_this_stage = False
         self.ui_mgr.hide_blackout_warning()
 
+        if hasattr(self, 'quick_use_mgr') and self.quick_use_mgr:
+            self.quick_use_mgr.cancel()
+        if hasattr(self.player, 'poison_timer'):
+            self.player.poison_timer = 0.0
+        if hasattr(self, 'ui_mgr') and self.ui_mgr:
+            self.ui_mgr.update_poison_hud(0.0)
+
         spawn_x = 1.5 * CELL_SIZE
         spawn_y = 1.5 * CELL_SIZE
         self.player.reset_position(spawn_x, spawn_y)
@@ -859,6 +1155,8 @@ class LiminalInfiniteLoop(ShowBase):
 
         # 새 탈출구 생성 (관문 위치 확정 및 관문 충돌체 등록)
         self.setup_escape_portal()
+        if hasattr(self, 'ui_mgr') and hasattr(self.ui_mgr, "update_run_loot_hud"):
+            self.ui_mgr.update_run_loot_hud(self.run_loot_bag.count, self.run_loot_bag.capacity)
 
         # 관문 접근 경보 및 증원 상태 리셋
         if hasattr(self, 'monster_director') and hasattr(self.monster_director, 'gate_wave_mgr'):
@@ -1015,10 +1313,44 @@ class LiminalInfiniteLoop(ShowBase):
         else:
             self.ui_mgr.show_hit_marker("[F8] 드래곤 브레스(화염) & 테슬라 아크(전기) 특성 장착 완료!", (1.0, 0.85, 0.2, 1.0))
 
+    def _abandon_run_and_exit(self):
+        """저장 실패 시 전리품을 명시적으로 포기하고 인트로로 복귀"""
+        if hasattr(self, 'run_loot_bag') and self.run_loot_bag:
+            self.run_loot_bag.abandon()
+        self._extraction_pending = False
+        self.ui_mgr.update_run_loot_hud(0, self.run_loot_bag.capacity)
+        self.show_intro_scene()
+
     def trigger_victory(self):
-        """탈출구 방어 성공 시 승리"""
+        """탈출구 방어 성공 시 승리 및 전리품 영구 저장 트랜잭션"""
         if self.game_over or self.game_won:
             return
+
+        extracted_count = 0
+        if (
+            not getattr(self, 'is_test_mode', False)
+            and hasattr(self, 'run_loot_bag')
+            and self.run_loot_bag
+            and not self.run_loot_bag.is_extracted
+        ):
+            extracted_count = self.run_loot_bag.count
+            success, msg = self.run_loot_bag.extract(self.rpg_session)
+            if not success:
+                self._extraction_pending = True
+                self.game_state = 'EXTRACTION_FAILED'
+                self.player.lock_mouse(False)
+                # 저장 실패! 승리 확정 및 랭킹 저장을 차단하고 재시도 모달 오픈
+                if hasattr(self.ui_mgr, 'show_extraction_error_dialog'):
+                    self.ui_mgr.show_extraction_error_dialog(
+                        error_msg=msg,
+                        on_retry=self.trigger_victory,
+                        on_abandon=self._abandon_run_and_exit,
+                    )
+                return
+
+        self._extraction_pending = False
+        if getattr(self, 'run_loot_bag', None):
+            self.ui_mgr.update_run_loot_hud(self.run_loot_bag.count, self.run_loot_bag.capacity)
         self.game_won = True
         self.game_state = "VICTORY"
 
@@ -1033,19 +1365,34 @@ class LiminalInfiniteLoop(ShowBase):
 
         elapsed = self.time_limit - self.time_left
         remaining = max(0.0, self.time_left)
-        self.ui_mgr.show_victory(f"비상 탈출구를 열고 악몽의 미궁을 탈출했습니다!\n[소요 시간: {elapsed:.1f}초  |  남은 탄약: {self.combat.ammo}/12발]")
+        victory_msg = f"비상 탈출구를 열고 악몽의 미궁을 탈출했습니다!\n[소요 시간: {elapsed:.1f}초  |  남은 탄약: {self.combat.ammo}/12발]"
+        if extracted_count > 0:
+            victory_msg += f"\n\n[ ★ 전리품 {extracted_count}개 영구 확보 완료! ★ ]\n(영구 무기/장비 보관함으로 안전하게 이관되었습니다)"
+        self.ui_mgr.show_victory(victory_msg)
         self.player.lock_mouse(False)
 
         if not getattr(self, 'is_test_mode', False):
             self.ui_mgr.save_rank_record("탈출 성공", True, elapsed, remaining, self.combat.ammo, self.current_stage, self.combat.reserve_ammo)
 
     def trigger_game_over(self, killer=None, reason="killed"):
+        if getattr(self, '_extraction_pending', False):
+            return
         """사망 또는 시간 초과 시 게임 오버"""
         if self.game_over or self.game_won:
             return
         self.game_over = True
         self.game_state = "GAME_OVER"
+        if getattr(self, 'quick_use_mgr', None):
+            self.quick_use_mgr.cancel()
+        self.player.poison_timer = 0.0
         self.killer_monster = killer
+
+        lost_count = 0
+        if hasattr(self, 'run_loot_bag') and self.run_loot_bag:
+            lost_count = self.run_loot_bag.count
+            self.run_loot_bag.clear_on_death()
+            if hasattr(self.ui_mgr, "update_run_loot_hud"):
+                self.ui_mgr.update_run_loot_hud(0, self.run_loot_bag.capacity)
 
         elapsed = self.time_limit - self.time_left
         remaining = max(0.0, self.time_left)
@@ -1083,6 +1430,11 @@ class LiminalInfiniteLoop(ShowBase):
 
         if self.audio_mgr.bgm:
             self.audio_mgr.bgm.setVolume(0.20)
+
+        if lost_count > 0:
+            desc += f"\n\n[ ! 미확보 전리품 {lost_count}개 소실 ! ]\n(기존 영구 보유 장비 및 통화는 안전하게 보존되었습니다)"
+        else:
+            desc += "\n\n(기존 영구 보유 장비 및 통화는 안전하게 보존되었습니다)"
 
         self.ui_mgr.show_game_over(desc)
         self.player.lock_mouse(False)
@@ -1272,6 +1624,8 @@ class LiminalInfiniteLoop(ShowBase):
 
     # --- 메인 틱 루프 (Main Update Loop) ---
     def update(self, task):
+        if getattr(self, '_extraction_pending', False):
+            return task.cont if task is not None else 1
         raw_dt = min(0.1, globalClock.getDt())
         cont = task.cont if task is not None else 1
 
@@ -1295,10 +1649,12 @@ class LiminalInfiniteLoop(ShowBase):
             self.update_chunks()
             return cont
 
-        # 2. 상점, 인벤토리, 일시정지, 결과보고서 모달 상태 시 월드 엔티티 정지 (불릿타임 잔여시간 보존)
-        if self.game_state in ("SHOP", "INVENTORY", "PAUSED", "AAR"):
+        # 2. 상점, 인벤토리, 일시정지, 결과보고서, 빠른 사용 모달 상태 시 월드 엔티티 정지 (불릿타임 잔여시간 보존)
+        if self.game_state in ("SHOP", "INVENTORY", "PAUSED", "AAR", "QUICK_USE"):
             if hasattr(self, 'ui_mgr') and self.ui_mgr and hasattr(self.ui_mgr, 'update_gate_wave_status'):
                 self.ui_mgr.update_gate_wave_status(show=False)
+            if self.game_state == "QUICK_USE" and hasattr(self, 'quick_use_mgr') and self.quick_use_mgr:
+                self.quick_use_mgr.update(dt)
             self.ui_mgr.update(dt)
             return cont
 
@@ -1323,6 +1679,21 @@ class LiminalInfiniteLoop(ShowBase):
 
         if self.audio_mgr:
             self.audio_mgr.update_bullet_time(raw_dt)
+
+        # 플레이어 맹독 상태이상 처리 (world_dt로 진행, 슬로모션/일시정지에 맞춤)
+        if getattr(self.player, 'poison_timer', 0.0) > 0.0:
+            poison_dt = min(world_dt, self.player.poison_timer)
+            self.player.poison_timer = max(0.0, self.player.poison_timer - world_dt)
+            p_dmg = getattr(self.player, 'poison_dps', 4.0) * poison_dt
+            is_dead = self.player.take_damage(p_dmg, damage_type='dot')
+            if hasattr(self, 'ui_mgr') and self.ui_mgr:
+                self.ui_mgr.update_poison_hud(self.player.poison_timer, dps=getattr(self.player, 'poison_dps', 4.0))
+            if is_dead:
+                killer = next((m for m in self.monsters if getattr(m, 'reaction_role', None) == 'serpent'), None)
+                self.trigger_game_over(killer=killer, reason="poison")
+                return cont
+        elif hasattr(self, 'ui_mgr') and self.ui_mgr:
+            self.ui_mgr.update_poison_hud(0.0)
 
         # 3. 승리 및 게임 오버 상태 처리
         if self.game_won or self.game_state == "VICTORY":
@@ -1371,13 +1742,12 @@ class LiminalInfiniteLoop(ShowBase):
         if not getattr(self, 'is_test_mode', False):
             self._update_dynamic_lights(px, py, dt)
 
-        # 8. 안개 가시거리 컬링 (임계치 2.0m 이동 또는 신규 청크 마운트 시만 실행)
-        if not getattr(self, 'is_test_mode', False):
-            if chunk_created or is_moving:
-                self.cull_chunks_to_view(force=chunk_created)
-
         # 9. 전투 및 뷰모델 갱신 (반동, 재장전, 탄약 습득, 밥빙)
         self.combat.update(dt, px, py, is_moving, is_sprinting)
+        # Evaluate after combat updates the ADS/bullet-time lens FOV.
+        if not getattr(self, 'is_test_mode', False):
+            self.cull_chunks_to_view()
+
 
         # 10. 배너 타이머
         if self.stage_banner_timer > 0.0:
@@ -1457,6 +1827,7 @@ class LiminalInfiniteLoop(ShowBase):
 
         # 드랍된 전술 아이템 애니메이션 및 자동 수거(Auto-pickup) 판정
         closest_interact_drop = None
+        min_drop_dist = float('inf')
         floor_pz = self.camera.getZ() - PLAYER_EYE_HEIGHT
         for drop in self.item_drops[:]:
             status = drop.update(dt, px, py, floor_pz)
@@ -1467,28 +1838,61 @@ class LiminalInfiniteLoop(ShowBase):
                 if hasattr(self.player, 'inventory') and hasattr(self.ui_mgr, 'update_quickslots_hud'):
                     self.ui_mgr.update_quickslots_hud(self.player.inventory)
             elif status == "CAN_INTERACT":
-                if closest_interact_drop is None:
+                d = math.hypot(px - drop.pos.x, py - drop.pos.y)
+                if d < min_drop_dist:
+                    min_drop_dist = d
                     closest_interact_drop = drop
             elif status == "DESTROYED":
                 if drop in self.item_drops:
                     self.item_drops.remove(drop)
 
-        # 필드 전술 보급 상자 또는 드랍 아이템 [E] 상호작용 프롬프트 검사
+        # RPG 월드 전리품 애니메이션 및 최단거리 탐색
+        closest_rpg_loot = None
+        min_rpg_dist = float('inf')
+        if hasattr(self, 'loot_world') and self.loot_world:
+            self.loot_world.update(dt)
+            closest_rpg_loot, min_rpg_dist = self.loot_world.get_nearest_loot(px, py, floor_pz, self.chunks)
+
+        # 필드 전술 보급 상자 최단거리 탐색
         closest_crate = None
+        min_crate_dist = float('inf')
         for cr in self.supply_crates:
             if cr.can_interact(px, py, floor_pz):
-                closest_crate = cr
-                break
-        self.nearby_crate = closest_crate
+                d = math.hypot(px - cr.pos.x, py - cr.pos.y)
+                if d < min_crate_dist:
+                    min_crate_dist = d
+                    closest_crate = cr
 
+        # [E] 상호작용 최단거리 1개 단일 타겟팅
+        candidates = []
         if closest_crate:
-            self.ui_mgr.show_interact_prompt("[ E ] 전술 보급 상자 개봉")
-            self.nearby_item_drop = None
-        elif closest_interact_drop:
-            self.nearby_item_drop = closest_interact_drop
-            self.ui_mgr.show_interact_prompt(f"[ E ] {closest_interact_drop.name} 획득")
+            candidates.append(("crate", min_crate_dist, closest_crate))
+        if closest_interact_drop:
+            candidates.append(("tactical_drop", min_drop_dist, closest_interact_drop))
+        if closest_rpg_loot:
+            candidates.append(("rpg_loot", min_rpg_dist, closest_rpg_loot))
+
+        if candidates:
+            target_type, _, target_obj = min(candidates, key=lambda c: c[1])
+            if target_type == "crate":
+                self.nearby_crate = target_obj
+                self.nearby_item_drop = None
+                self.nearby_rpg_loot = None
+                self.ui_mgr.show_interact_prompt("[ E ] 전술 보급 상자 개봉")
+            elif target_type == "tactical_drop":
+                self.nearby_crate = None
+                self.nearby_item_drop = target_obj
+                self.nearby_rpg_loot = None
+                self.ui_mgr.show_interact_prompt(f"[ E ] {target_obj.name} 획득")
+            else:
+                self.nearby_crate = None
+                self.nearby_item_drop = None
+                self.nearby_rpg_loot = target_obj
+                self.ui_mgr.show_interact_prompt(f"[ E ] {target_obj.display_name} 획득")
         else:
+            self.nearby_crate = None
             self.nearby_item_drop = None
+            self.nearby_rpg_loot = None
             self.ui_mgr.hide_interact_prompt()
 
         slide_ready = getattr(self.player, 'slide_cooldown', 0.0) <= 0.0
@@ -1498,6 +1902,15 @@ class LiminalInfiniteLoop(ShowBase):
         return cont
 
     def destroy(self):
+        if getattr(self, '_game_destroyed', False):
+            return
+        self._game_destroyed = True
+        # Finish detached scene construction before releasing Panda resources.
+        # cancel_futures only cancels queued work, not running chunk builders.
+        if hasattr(self, 'chunk_executor'):
+            self.chunk_executor.shutdown(wait=True, cancel_futures=True)
+        if hasattr(self, 'active_chunk_futures'):
+            self.active_chunk_futures.clear()
         combat = getattr(self, 'combat', None)
         if combat is not None and hasattr(combat, 'casing_effects'):
             combat.casing_effects.destroy()
@@ -1506,8 +1919,8 @@ class LiminalInfiniteLoop(ShowBase):
         self.fireball_pool = []
         if hasattr(self, 'beacon_light_np') and self.beacon_light_np and not self.beacon_light_np.isEmpty():
             self.render.clearLight(self.beacon_light_np)
-        if hasattr(self, 'chunk_executor'):
-            self.chunk_executor.shutdown(wait=False, cancel_futures=True)
+        if hasattr(self, 'quick_use_mgr') and self.quick_use_mgr:
+            self.quick_use_mgr.destroy()
         super().destroy()
 
 
